@@ -1,7 +1,8 @@
 #!/bin/bash
 # Rebuilds the content-script bundles (tools/build.py), runs every tests/*.test.js with macOS
 # JavaScriptCore (offline, synthetic fixtures only; tests/bundle.test.js loads the bundles),
-# then validates manifest.json and the DNR rulesets. Exits non-zero on any failure.
+# then runs tests/test_rules.py (filter converter + every generated DNR rule against the schema)
+# and validates manifest.json and the DNR rulesets. Exits non-zero on any failure.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 JSC="${JSC:-/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc}"
@@ -22,6 +23,16 @@ for t in tests/*.test.js; do
     n=$(printf '%s\n' "$out" | sed -n 's/^RESULT OK \([0-9]*\) passed$/\1/p'); total=$((total + n))
   fi
 done
+
+echo "== tests/test_rules.py"
+files=$((files + 1))
+out="$(python3 -I tests/test_rules.py 2>&1)"; code=$?
+printf '%s\n' "$out" | tail -n 3
+if [ $code -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^RESULT OK'; then
+  printf '%s\n' "$out"; fail=1; echo "!! tests/test_rules.py failed (exit $code)"
+else
+  n=$(printf '%s\n' "$out" | sed -n 's/^RESULT OK \([0-9]*\) passed$/\1/p'); total=$((total + n))
+fi
 
 echo "== tests/validate_manifest.py"
 python3 -I tests/validate_manifest.py || fail=1

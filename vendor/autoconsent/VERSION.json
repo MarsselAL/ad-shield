@@ -1,0 +1,14 @@
+{
+  "integrity": "sha512-16K0g9pLMIyMkK+vkzSlZROAtD6SgelRd7ZI6wo7y0PaKDM11F3DmOogDvXESHKAm9/z9gTizDXXgTazxZU0pw==",
+  "licence": "MPL-2.0",
+  "modified": false,
+  "package": "@duckduckgo/autoconsent",
+  "sha256": {
+    "LICENSE": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+    "autoconsent.cjs.js": "89db88253c3fe4b9c4b4755dcb0a9a522c35890ef98c6633fca4c150172f51af",
+    "compact-rules.json": "ac79a3bbc0cca912533fb16757f4927d3acc503da1409c0fd70b1d700032aa9f",
+    "content.bundle.js": "362e8f3670b41ffd07b0fe8ab580c8e2db4854132c0f7a836fb843f2aba39303"
+  },
+  "tarball": "https://registry.npmjs.org/@duckduckgo/autoconsent/-/autoconsent-17.2.0.tgz",
+  "version": "17.2.0"
+}

@@ -1,0 +1,116 @@
+{
+  "cookieStrip": {
+    "candidates": 3791,
+    "cap": 10000,
+    "domains": 3791
+  },
+  "cosmetic": {
+    "ads": {
+      "generic": 13635,
+      "siteHosts": 7781,
+      "siteSelectors": 16492
+    },
+    "cookies": {
+      "generic": 15272,
+      "siteHosts": 17228,
+      "siteSelectors": 18736
+    },
+    "elemhide": 0,
+    "exceptionHosts": 1355,
+    "genericExceptionHosts": 1227,
+    "generichide": 155
+  },
+  "lists": {
+    "easylist": {
+      "cosmeticConverted": 24334,
+      "duplicates": 0,
+      "filters": 77788,
+      "licence": "https://easylist.to/pages/licence.html",
+      "mergedDomains": 45692,
+      "networkConverted": 49298,
+      "skipped": {
+        "bad-selector": 40,
+        "cosmetic-exception-pattern": 14,
+        "document-block": 572,
+        "option:csp": 4,
+        "option:rewrite": 7,
+        "pipe-in-pattern": 3,
+        "popup": 2969,
+        "procedural-or-scriptlet": 295,
+        "regex": 12,
+        "regex-cap": 0,
+        "wildcard-domain": 240
+      },
+      "skippedTotal": 4156,
+      "url": "https://easylist.to/easylist/easylist.txt",
+      "version": "202611132325"
+    },
+    "easylist-cookie": {
+      "cosmeticConverted": 23192,
+      "duplicates": 0,
+      "filters": 25382,
+      "licence": "http://creativecommons.org/licenses/by/3.0/",
+      "mergedDomains": 362,
+      "networkConverted": 2111,
+      "skipped": {
+        "procedural-or-scriptlet": 60,
+        "regex-cap": 0,
+        "wildcard-domain": 19
+      },
+      "skippedTotal": 79,
+      "url": "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt",
+      "version": "2026-11-12 20:50 UTC"
+    },
+    "easyprivacy": {
+      "cosmeticConverted": 0,
+      "duplicates": 2,
+      "filters": 56631,
+      "licence": "https://easylist.to/pages/licence.html",
+      "mergedDomains": 47547,
+      "networkConverted": 56556,
+      "skipped": {
+        "bad-domain": 2,
+        "cosmetic-in-network-list": 2,
+        "option:csp": 2,
+        "option:method": 1,
+        "option:redirect": 29,
+        "option:redirect-rule": 1,
+        "option:rewrite": 1,
+        "procedural-or-scriptlet": 35,
+        "regex": 1,
+        "regex-cap": 0,
+        "too-broad": 1
+      },
+      "skippedTotal": 75,
+      "url": "https://easylist.to/easylist/easyprivacy.txt",
+      "version": "202611132325"
+    }
+  },
+  "rulesets": {
+    "ads_1": {
+      "allow": 516,
+      "block": 3268,
+      "regex": 7,
+      "rules": 3784
+    },
+    "cookie_strip": {
+      "allow": 0,
+      "block": 4,
+      "regex": 0,
+      "rules": 4
+    },
+    "cookies_1": {
+      "allow": 427,
+      "block": 1367,
+      "regex": 1,
+      "rules": 1794
+    },
+    "privacy_1": {
+      "allow": 842,
+      "block": 8397,
+      "regex": 6,
+      "rules": 9239
+    }
+  },
+  "totalStaticRules": 14821
+}
