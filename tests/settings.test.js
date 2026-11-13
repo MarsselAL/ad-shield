@@ -1,0 +1,163 @@
+/* Settings defaults, normalisation and playerType validation; GQL helpers; frame rules; stats. */
+loadSrc('src/config.js', 'src/shared/settings.js', 'src/core/gql.js', 'src/shared/frame.js', 'src/shared/stats.js');
+var ns = __TAS__;
+var cfg = ns.config;
+var S = ns.settings;
+var G = ns.gql;
+
+// ------------------------------------------------------------------ settings
+test('defaults: playerTypes come from config, autoplay last', function () {
+  var d = S.defaults();
+  assert.deepEqual(d.playerTypes, ['site', 'popout', 'mobile_web', 'embed', 'autoplay']);
+  assert.equal(d.enabled, true);
+  assert.equal(d.blockTrackers, false);
+  d.playerTypes.push('x');
+  assert.equal(S.defaults().playerTypes.length, 5, 'defaults are a fresh copy');
+});
+test('config is frozen', function () {
+  assert.ok(Object.isFrozen(cfg));
+  assert.ok(Object.isFrozen(cfg.backupPlayerTypes));
+  assert.ok(Object.isFrozen(cfg.gql));
+});
+test('validatePlayerTypes accepts a valid custom order', function () {
+  var v = S.validatePlayerTypes(['popout', 'site', 'autoplay']);
+  assert.ok(v.ok);
+  assert.deepEqual(v.value, ['popout', 'site', 'autoplay']);
+});
+test('validatePlayerTypes rejects empty, unknown, duplicates, autoplay not last, too many', function () {
+  assert.notOk(S.validatePlayerTypes([]).ok);
+  var u = S.validatePlayerTypes(['site', 'bogus']);
+  assert.notOk(u.ok);
+  assert.includes(u.errors.join(' '), 'Unknown playerType "bogus"');
+  assert.includes(S.validatePlayerTypes(['site', 'site']).errors.join(' '), 'Duplicate');
+  assert.includes(S.validatePlayerTypes(['autoplay', 'site']).errors.join(' '), 'must be last');
+  assert.notOk(S.validatePlayerTypes(['site', 'popout', 'mobile_web', 'embed', 'frontpage', 'picture-by-picture', 'site', 'popout', 'autoplay']).ok);
+  assert.notOk(S.validatePlayerTypes('site').ok);
+  assert.notOk(S.validatePlayerTypes([5]).ok);
+});
+test('parsePlayerTypeText splits on newlines, commas and spaces', function () {
+  assert.deepEqual(S.parsePlayerTypeText('site\npopout, mobile_web  embed\n\n'), ['site', 'popout', 'mobile_web', 'embed']);
+  assert.deepEqual(S.parsePlayerTypeText(null), []);
+});
+test('normalize: partial / corrupt stored settings fall back per field', function () {
+  var n = S.normalize({ enabled: false, debug: 'yes', playerTypes: ['bogus'], extra: 1 });
+  assert.equal(n.enabled, false);
+  assert.equal(n.debug, false);
+  assert.deepEqual(n.playerTypes, cfg.backupPlayerTypes.slice());
+  assert.equal(n.extra, undefined);
+  assert.deepEqual(S.normalize(null), S.defaults());
+  assert.deepEqual(S.normalize('garbage'), S.defaults());
+});
+test('validate: whole settings object', function () {
+  assert.ok(S.validate(S.defaults()).ok);
+  assert.notOk(S.validate(Object.assign(S.defaults(), { debug: 'on' })).ok);
+  assert.notOk(S.validate(Object.assign(S.defaults(), { playerTypes: [] })).ok);
+  assert.notOk(S.validate(null).ok);
+});
+
+// ------------------------------------------------------------------ gql
+test('buildTokenBody: persisted query, web platform; autoplay uses android', function () {
+  var b = G.buildTokenBody(cfg, 'somechannel', 'popout');
+  assert.equal(b.operationName, 'PlaybackAccessToken');
+  assert.equal(b.variables.login, 'somechannel');
+  assert.equal(b.variables.playerType, 'popout');
+  assert.equal(b.variables.platform, 'web');
+  assert.equal(b.variables.isLive, true);
+  assert.equal(b.extensions.persistedQuery.sha256Hash, cfg.gql.persistedQueryHash);
+  assert.equal(G.buildTokenBody(cfg, 'c', 'autoplay').variables.platform, 'android');
+});
+test('buildTokenHeaders: captured values used, fallbacks otherwise', function () {
+  var h = G.buildTokenHeaders(cfg, { 'client-id': 'cid', 'x-device-id': 'dev', authorization: 'OAuth abc', 'client-integrity': 'ci', 'client-version': 'cv', 'client-session-id': 'cs' }, 'fallback');
+  assert.equal(h['Client-ID'], 'cid');
+  assert.equal(h['Device-ID'], 'dev');
+  assert.equal(h.Authorization, 'OAuth abc');
+  assert.equal(h['Client-Integrity'], 'ci');
+  assert.equal(h['Client-Version'], 'cv');
+  assert.equal(h['Client-Session-Id'], 'cs');
+  var a = G.buildTokenHeaders(cfg, {}, 'fallback');
+  assert.equal(a['Client-ID'], cfg.gql.clientId);
+  assert.equal(a['Device-ID'], 'fallback');
+  assert.equal(a.Authorization, 'undefined');
+  assert.equal(a['Client-Integrity'], undefined);
+});
+test('extractHeaders from object, array and Headers-like', function () {
+  assert.deepEqual(G.extractHeaders(cfg, { 'Client-ID': 'a', Authorization: 'OAuth x', 'X-Other': 'no' }), { 'client-id': 'a', authorization: 'OAuth x' });
+  assert.deepEqual(G.extractHeaders(cfg, [['Device-ID', 'd'], ['Accept', '*/*']]), { 'device-id': 'd' });
+  var fake = { forEach: function (cb) { cb('v1', 'client-version'); cb('x', 'content-type'); } };
+  assert.deepEqual(G.extractHeaders(cfg, fake), { 'client-version': 'v1' });
+  assert.deepEqual(G.extractHeaders(cfg, null), {});
+});
+test('parseTokenResponse: object, batched array, missing', function () {
+  var tok = { data: { streamPlaybackAccessToken: { value: 'v', signature: 's' } } };
+  assert.deepEqual(G.parseTokenResponse(tok), { value: 'v', signature: 's' });
+  assert.deepEqual(G.parseTokenResponse([{ data: {} }, tok]), { value: 'v', signature: 's' });
+  assert.equal(G.parseTokenResponse({ errors: [{ message: 'PersistedQueryNotFound' }] }), null);
+  assert.equal(G.parseTokenResponse(null), null);
+});
+test('rewritePlayerType: site live token -> popout (single and batched); others untouched', function () {
+  var one = JSON.stringify({ operationName: 'PlaybackAccessToken', variables: { isLive: true, isVod: false, login: 'c', playerType: 'site' } });
+  var r = G.rewritePlayerType(one, cfg);
+  assert.ok(r.changed);
+  assert.equal(JSON.parse(r.body).variables.playerType, 'popout');
+  var batch = JSON.stringify([{ operationName: 'Other', variables: { playerType: 'site' } }, { operationName: 'PlaybackAccessToken', variables: { isLive: true, isVod: false, playerType: 'site' } }]);
+  var rb = JSON.parse(G.rewritePlayerType(batch, cfg).body);
+  assert.equal(rb[0].variables.playerType, 'site');
+  assert.equal(rb[1].variables.playerType, 'popout');
+  var embed = JSON.stringify({ operationName: 'PlaybackAccessToken', variables: { isLive: true, isVod: false, playerType: 'embed' } });
+  assert.notOk(G.rewritePlayerType(embed, cfg).changed);
+  var vod = JSON.stringify({ operationName: 'PlaybackAccessToken', variables: { isLive: false, isVod: true, playerType: 'site' } });
+  assert.notOk(G.rewritePlayerType(vod, cfg).changed);
+  assert.equal(G.rewritePlayerType('{not json PlaybackAccessToken', cfg).changed, false);
+  assert.equal(G.rewritePlayerType(undefined, cfg).changed, false);
+});
+test('randomDeviceId: 32 chars [a-z0-9]', function () {
+  assert.ok(/^[a-z0-9]{32}$/.test(G.randomDeviceId()));
+});
+
+// ------------------------------------------------------------------ frames
+test('shouldRunInFrame: top frame yes, clips and clip pages no, player sub-frames only', function () {
+  var F = ns.frame;
+  assert.ok(F.shouldRunInFrame('www.twitch.tv', '/somechannel', true));
+  assert.notOk(F.shouldRunInFrame('clips.twitch.tv', '/Slug', true));
+  assert.notOk(F.shouldRunInFrame('www.twitch.tv', '/somechannel/clip/SomeSlug', true));
+  assert.ok(F.shouldRunInFrame('player.twitch.tv', '/', false));
+  assert.ok(F.shouldRunInFrame('www.twitch.tv', '/embed/somechannel/chat', false));
+  assert.notOk(F.shouldRunInFrame('www.twitch.tv', '/somechannel', false));
+  assert.notOk(F.shouldRunInFrame('passport.twitch.tv', '/', false));
+});
+
+// ------------------------------------------------------------------ stats / popup status
+test('stats: applyEvent counts once per event type, badge sums blocked', function () {
+  var St = ns.stats;
+  var s = St.empty();
+  ['ad-detected', 'ad-blocked-backup', 'ad-detected', 'ad-stripped', 'failure', 'ad-unremovable', 'standalone-ad-hidden', 'ad-end', 'unknown'].forEach(function (n) { s = St.applyEvent(s, n); });
+  assert.deepEqual(s, { detected: 2, backup: 1, stripped: 1, failures: 2, standalone: 1, reloads: 0 });
+  assert.equal(St.badgeText(s), '3');
+  assert.equal(St.badgeText(St.empty()), '');
+  assert.equal(St.badgeText({ backup: 5000 }), '999+');
+  assert.deepEqual(St.normalize({ detected: -1, backup: 'x' }), St.empty());
+});
+test('stats: describeEvent and toast texts', function () {
+  var St = ns.stats;
+  assert.includes(St.describeEvent('ad-blocked-backup', { playerType: 'popout', channel: 'c', midroll: true }), 'Midroll ad blocked using backup stream "popout" (c)');
+  assert.equal(St.describeEvent('nope', {}), null);
+  assert.includes(St.toastText('ad-blocked-backup'), 'using backup stream');
+  assert.equal(St.toastText('ad-detected'), null);
+});
+test('popupStatus covers every state', function () {
+  var P = ns.stats.popupStatus;
+  assert.equal(P({ url: 'https://example.com/', enabled: true }).key, 'not-twitch');
+  assert.equal(P({ url: undefined, enabled: true }).key, 'not-twitch');
+  assert.equal(P({ url: 'https://clips.twitch.tv/x', enabled: true }).text, 'Not active on clips');
+  assert.equal(P({ url: 'https://www.twitch.tv/c', enabled: false, hooked: false }).key, 'disabled');
+  var d = P({ url: 'https://www.twitch.tv/c', enabled: false, hooked: true });
+  assert.equal(d.key, 'disabled');
+  assert.ok(d.reload);
+  var r = P({ url: 'https://www.twitch.tv/c', enabled: true, hooked: false });
+  assert.equal(r.key, 'reload');
+  assert.ok(r.reload);
+  assert.equal(P({ url: 'https://www.twitch.tv/c', enabled: true, hooked: true, degraded: true }).key, 'degraded');
+  assert.equal(P({ url: 'https://www.twitch.tv/c', enabled: true, hooked: true }).key, 'active');
+  assert.equal(P({ url: 'https://twitch.tv/c', enabled: true, hooked: true }).key, 'active');
+  assert.equal(P({ url: 'https://evil-twitch.tv/c', enabled: true, hooked: true }).key, 'not-twitch');
+});

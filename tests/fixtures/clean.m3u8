@@ -1,0 +1,24 @@
+#EXTM3U
+# SYNTHETIC test fixture (Twitch Ad Shield): clean live media playlist. Not real Twitch data.
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:5000
+#EXT-X-TWITCH-LIVE-SEQUENCE:5000
+#EXT-X-TWITCH-ELAPSED-SECS:10000.000
+#EXT-X-TWITCH-TOTAL-SECS:10020.000
+#EXT-X-DATERANGE:ID="playlist-creation-1762891200",CLASS="timestamp",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-SERVER-TIME="1762891200.00"
+#EXT-X-DATERANGE:ID="playlist-session-1762891200",CLASS="twitch-session",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-SESSIONID="aaaaaaaaaaaaaaaa"
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5000.ts
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:02.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5001.ts
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:04.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5002.ts
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:06.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5003.ts
+#EXT-X-TWITCH-PREFETCH:https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5004.ts
+#EXT-X-TWITCH-PREFETCH:https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-5005.ts

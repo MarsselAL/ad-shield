@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Twitch Ad Shield</title>
+  <link rel="stylesheet" href="../ui/common.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="row">
+    <div class="brand"><img src="../../icons/icon32.png" alt="" width="20" height="20"><h1>Twitch Ad Shield</h1></div>
+    <label class="switch" title="Turn the extension on or off">
+      <input type="checkbox" id="enabled" aria-label="Extension enabled">
+      <span class="track"></span>
+    </label>
+  </header>
+
+  <section class="card status" id="status-card">
+    <div class="row">
+      <span class="dot" id="status-dot"></span>
+      <strong id="status-text">Checking…</strong>
+    </div>
+    <p class="muted small" id="status-detail"></p>
+    <button id="reload" class="primary" hidden>Reload tab</button>
+  </section>
+
+  <section class="stats">
+    <table>
+      <thead><tr><th></th><th>This tab</th><th>Lifetime</th></tr></thead>
+      <tbody>
+        <tr><td>Ads detected</td><td id="t-detected">–</td><td id="l-detected">–</td></tr>
+        <tr><td>Blocked via backup</td><td id="t-backup">–</td><td id="l-backup">–</td></tr>
+        <tr><td>Blocked by stripping</td><td id="t-stripped">–</td><td id="l-stripped">–</td></tr>
+        <tr><td>Standalone ads hidden</td><td id="t-standalone">–</td><td id="l-standalone">–</td></tr>
+        <tr><td>Not removed / errors</td><td id="t-failures">–</td><td id="l-failures">–</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <p class="last muted small" id="last-event">No events yet.</p>
+
+  <footer class="row">
+    <a href="#" id="open-options">Settings</a>
+    <span class="muted small" id="version"></span>
+  </footer>
+
+  <script src="../config.js"></script>
+  <script src="../shared/settings.js"></script>
+  <script src="../shared/stats.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

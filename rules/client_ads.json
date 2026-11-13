@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||edge.ads.twitch.tv^",
+      "initiatorDomains": ["twitch.tv"],
+      "resourceTypes": ["xmlhttprequest", "media", "script", "image", "ping", "other"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||amazon-adsystem.com/aax2/apstag.js",
+      "initiatorDomains": ["twitch.tv"],
+      "resourceTypes": ["script"]
+    }
+  }
+]

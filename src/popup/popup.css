@@ -1,0 +1,15 @@
+body { width: 320px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 8px; }
+.small { font-size: 12px; margin: 4px 0 0; }
+.status .row { justify-content: flex-start; }
+.status button { margin-top: 8px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: right; font-weight: 600; color: var(--muted); font-size: 12px; padding: 2px 0; }
+td { padding: 3px 0; border-top: 1px solid var(--border); }
+td + td { text-align: right; font-variant-numeric: tabular-nums; width: 64px; }
+.last { margin: 0; min-height: 1.4em; }
+footer { padding-top: 2px; }

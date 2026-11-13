@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twitch Ad Shield – Settings</title>
+  <link rel="stylesheet" href="../ui/common.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header class="row">
+      <div class="brand"><img src="../../icons/icon48.png" alt="" width="28" height="28"><h1>Twitch Ad Shield settings</h1></div>
+      <span class="muted" id="version"></span>
+    </header>
+
+    <section class="card">
+      <h2>General</h2>
+      <div class="opt row">
+        <div><strong>Enabled</strong><p class="muted">Master switch. Off removes the page scripts and network rules; open Twitch tabs need a reload.</p></div>
+        <label class="switch"><input type="checkbox" data-key="enabled" aria-label="Enabled"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Block client-side ad requests</strong><p class="muted">Blocks edge.ads.twitch.tv and the Amazon ad script on Twitch (network rules).</p></div>
+        <label class="switch"><input type="checkbox" data-key="blockClientAds" aria-label="Block client-side ad requests"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Block ad tracking paths</strong><p class="muted">Blocks twitch.tv/r/s/ and /r/c/ requests. Off by default; untested on live Twitch.</p></div>
+        <label class="switch"><input type="checkbox" data-key="blockTrackers" aria-label="Block ad tracking paths"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Hide standalone video ads</strong><p class="muted">Hides, mutes and pauses separate ad videos beside the player or in chat.</p></div>
+        <label class="switch"><input type="checkbox" data-key="hideStandaloneAds" aria-label="Hide standalone video ads"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Prefer AVC (H.264) streams</strong><p class="muted">Removes HEVC/AV1 variants when an H.264 one exists, which avoids player errors when switching streams during ads. Turn off to keep 1440p/4K "enhanced" qualities.</p></div>
+        <label class="switch"><input type="checkbox" data-key="preferAvc" aria-label="Prefer AVC"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Show a notice when an ad is blocked</strong><p class="muted">A small "Ad blocked – using backup stream" note in the player.</p></div>
+        <label class="switch"><input type="checkbox" data-key="noticeOnAd" aria-label="Show a notice"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Debug logging</strong><p class="muted">Logs details with the prefix [TAS] in the page and extension consoles.</p></div>
+        <label class="switch"><input type="checkbox" data-key="debug" aria-label="Debug logging"><span class="track"></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Backup stream order</h2>
+      <p class="muted">When a stream has an ad, these player types are asked for an ad-free copy, in this order. One per line. Known types: <span id="known"></span>. "autoplay" (360p) must be last.</p>
+      <textarea id="playerTypes" rows="6" spellcheck="false" aria-label="Backup player types, one per line"></textarea>
+      <ul class="errors" id="pt-errors" aria-live="polite"></ul>
+      <div class="row left">
+        <button class="primary" id="pt-save">Save order</button>
+        <button id="pt-default">Restore default</button>
+        <span class="muted" id="pt-saved" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Statistics</h2>
+      <div class="row left">
+        <button id="reset-stats">Reset statistics</button>
+        <span class="muted" id="reset-done" aria-live="polite"></span>
+      </div>
+    </section>
+  </main>
+
+  <script src="../config.js"></script>
+  <script src="../shared/settings.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

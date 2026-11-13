@@ -1,0 +1,69 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1b1b1f;
+  --muted: #5f6068;
+  --card: #f4f4f6;
+  --border: #dedee3;
+  --accent: #2f7d5b;
+  --accent-fg: #ffffff;
+  --warn: #9a5b00;
+  --bad: #b3261e;
+  --ok: #2f7d5b;
+  --focus: #3b6fd8;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b;
+    --fg: #ececf1;
+    --muted: #a1a1aa;
+    --card: #232328;
+    --border: #34343b;
+    --accent: #3fa57a;
+    --accent-fg: #0e1411;
+    --warn: #e0a24a;
+    --bad: #f2867e;
+    --ok: #5cc596;
+    --focus: #7aa2f7;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+h1 { font-size: 15px; margin: 0; font-weight: 600; }
+h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+button {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+a { color: var(--focus); }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.muted { color: var(--muted); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* Switch */
+.switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 22px; transition: background 0.15s; }
+.switch .track::after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { transform: translateX(16px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--focus); outline-offset: 2px; }

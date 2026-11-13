@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https://([a-z0-9-]+\\.)*twitch\\.tv/r/s/",
+      "initiatorDomains": ["twitch.tv"],
+      "resourceTypes": ["script"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "regexFilter": "^https://([a-z0-9-]+\\.)*twitch\\.tv/r/c/",
+      "initiatorDomains": ["twitch.tv"],
+      "resourceTypes": ["image"]
+    }
+  }
+]

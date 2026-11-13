@@ -1,0 +1,16 @@
+#EXTM3U
+# SYNTHETIC test fixture (Twitch Ad Shield): only DATERANGE classes that are NOT ads (docs/research-technique.md §2.1). Not real Twitch data.
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:900
+#EXT-X-DATERANGE:ID="playlist-session-1762891200",CLASS="twitch-session",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-SESSIONID="aaaaaaaaaaaaaaaa"
+#EXT-X-DATERANGE:ID="source-1762891200",CLASS="twitch-stream-source",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE="live"
+#EXT-X-DATERANGE:ID="assignment-1762891200",CLASS="twitch-assignment",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-SERVING-ID="bbbbbbbb"
+#EXT-X-DATERANGE:ID="quartile-stitched-ad-old",CLASS="twitch-ad-quartile",START-DATE="2025-11-11T19:59:00.000Z",DURATION=0.000,X-TV-TWITCH-AD-QUARTILE-URLS="https://example.invalid/q"
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-900.ts
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:02.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-901.ts
+#EXT-X-TWITCH-PREFETCH:https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-902.ts

@@ -1,0 +1,13 @@
+#EXTM3U
+# SYNTHETIC test fixture (Twitch Ad Shield): client-side ad marker twitch-maf-ad over live segments (research-github.md item 3). Not real Twitch data.
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:300
+#EXT-X-DATERANGE:ID="maf-ad-1762891200",CLASS="twitch-maf-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=30.000,X-TV-TWITCH-AD-ROLL-TYPE="MIDROLL",X-TV-TWITCH-AD-POD-LENGTH="1"
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-300.ts
+#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:02.000Z
+#EXTINF:2.000,live
+https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-301.ts
+#EXT-X-TWITCH-PREFETCH:https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-302.ts
