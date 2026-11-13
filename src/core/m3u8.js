@@ -166,7 +166,8 @@
      *  - #EXT-X-DISCONTINUITY-SEQUENCE is raised by the discontinuities dropped with leading
      *    removed segments; a single #EXT-X-DISCONTINUITY is put before a kept segment that
      *    follows removed ones (timestamps jump there). HLS cannot express gaps, so numbering
-     *    after a middle gap is best-effort.
+     *    after a middle gap is only right within this one playlist: live playlists the player
+     *    sees go through resequence(), which keeps numbers stable across polls.
      */
     function stripAds(text, cfg) {
       var src = String(text || '');
@@ -259,6 +260,184 @@
         removedUrls: removedUrls,
         prefetchRemoved: prefetchRemoved
       };
+    }
+
+    function parseIntTag(line) {
+      var n = parseInt(tagValue(line), 10);
+      return isNaN(n) ? null : n;
+    }
+
+    /**
+     * Parse a media playlist into { header, segs, tail, mediaSeq, discSeq, liveSeq, targetDuration,
+     * endlist }. header: tags before the first segment, without the numbering tags and
+     * TARGETDURATION. segs: { url, tags (without DISCONTINUITY), disc, pdt (ms|null), dur (s),
+     * live (live number|null) }. tail: tags after the last URI (prefetch etc.).
+     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first segment; the following
+     * ones count up until the first DISCONTINUITY after it (past that, unknown).
+     */
+    function parseMedia(text) {
+      var lines = splitLines(text || '');
+      var r = { header: [], segs: [], tail: [], mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
+      var pending = [];
+      var started = false;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line === '') continue;
+        if (line.charAt(0) === '#') {
+          if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) { r.mediaSeq = parseIntTag(line) || 0; continue; }
+          if (line.indexOf('#EXT-X-DISCONTINUITY-SEQUENCE:') === 0) { r.discSeq = parseIntTag(line) || 0; continue; }
+          if (line.indexOf('#EXT-X-TWITCH-LIVE-SEQUENCE:') === 0) { r.liveSeq = parseIntTag(line); continue; }
+          if (line.indexOf('#EXT-X-TARGETDURATION:') === 0) { r.targetDuration = parseFloat(tagValue(line)) || 0; continue; }
+          if (line.indexOf('#EXT-X-ENDLIST') === 0) { r.endlist = true; continue; }
+          if (isSegmentTag(line)) { started = true; pending.push(line); continue; }
+          if (!started) r.header.push(line); else pending.push(line);
+          continue;
+        }
+        var seg = { url: line, tags: [], disc: false, pdt: null, dur: 0, live: null };
+        for (var p = 0; p < pending.length; p++) {
+          var t = pending[p];
+          if (t === '#EXT-X-DISCONTINUITY') { seg.disc = true; continue; }
+          if (t.indexOf('#EXTINF') === 0) seg.dur = parseFloat(tagValue(t)) || 0;
+          if (t.indexOf('#EXT-X-PROGRAM-DATE-TIME:') === 0) {
+            var ms = Date.parse(tagValue(t));
+            if (!isNaN(ms)) seg.pdt = ms;
+          }
+          seg.tags.push(t);
+        }
+        r.segs.push(seg);
+        pending = [];
+        started = true;
+      }
+      for (var q = 0; q < pending.length; q++) {
+        if (pending[q].indexOf('#EXTINF') !== 0 && pending[q] !== '#EXT-X-DISCONTINUITY') r.tail.push(pending[q]);
+      }
+      if (r.liveSeq !== null) {
+        for (var k = 0; k < r.segs.length; k++) {
+          if (k > 0 && r.segs[k].disc) break;
+          r.segs[k].live = r.liveSeq + k;
+        }
+      }
+      return r;
+    }
+
+    /** Per player-facing playlist state for resequence(). */
+    function newSequenceState() {
+      return {
+        active: false, win: [], seen: new Map(), next: 0, baseDn: 0,
+        lastEnd: null, lastLive: null, lastSource: null, lastHeader: null, lastTarget: 0, lastLiveSeq: null, lastCount: 0,
+        passthrough: null
+      };
+    }
+
+    function segKey(s) { return s.live !== null && s.live !== undefined ? 'L' + s.live : 'U' + s.url; }
+
+    /**
+     * Give the player a continuous, stable view of a live media playlist across polls and
+     * sources (native, stripped native, backup). docs/research-2026-11-13.md C1/C3.
+     *  - A segment keeps the number it was first given. It is identified by its live number
+     *    where known (same live segment = same identity in native and backup playlists), else by
+     *    URL. A segment whose live number is not past the newest one given, or (no live numbers)
+     *    which ends before what was given, is a segment the player already has: it is not listed
+     *    again under a new number.
+     *  - New segments get the next number, so MEDIA-SEQUENCE never jumps or goes back.
+     *  - #EXT-X-DISCONTINUITY before the first new segment after a source change, a live-number
+     *    gap, a date-time gap, or where the source had one; DISCONTINUITY-SEQUENCE counts the
+     *    ones that slid out, so it is monotonic too.
+     *  - The output lists the newest max(source segments, minSegments) segments given (so an
+     *    all-stripped poll repeats the newest known ones instead of an empty playlist).
+     * state.passthrough: the last playlist served untouched before the first rewrite; its
+     * numbering seeds the state. text null = no new source this poll (hold).
+     * Returns { text, appended, repeat } (repeat: an appended segment overlaps what was given).
+     */
+    function resequence(st, text, sourceKey, opts) {
+      var o = opts || {};
+      var maxWindow = o.maxWindow || 30, minSegments = o.minSegments || 3, maxSeen = o.maxSeen || 400;
+      var overlapTol = o.overlapToleranceMs === undefined ? 250 : o.overlapToleranceMs;
+      var gapTol = o.gapToleranceMs === undefined ? 1500 : o.gapToleranceMs;
+      var repeatTol = o.repeatToleranceMs === undefined ? 500 : o.repeatToleranceMs;
+      var p = text === null || text === undefined ? null : parseMedia(text);
+
+      function remember(s, seq, dn, src) {
+        var e = { seq: seq, url: s.url, tags: s.tags, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
+        st.win.push(e);
+        st.seen.set(segKey(s), seq);
+        st.seen.set('U' + s.url, seq);
+        st.lastLive = s.live !== null && s.live !== undefined ? s.live : null;
+        if (s.pdt !== null) st.lastEnd = s.pdt + s.dur * 1000;
+        else if (st.lastEnd !== null) st.lastEnd += s.dur * 1000;
+        st.lastSource = src;
+      }
+
+      if (!st.active) {
+        st.active = true;
+        var seed = st.passthrough ? parseMedia(st.passthrough) : null;
+        st.passthrough = null;
+        if (seed && seed.segs.length) {
+          var dn0 = seed.discSeq;
+          for (var a = 0; a < seed.segs.length; a++) {
+            if (a > 0 && seed.segs[a].disc) dn0++;
+            remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
+          }
+          st.next = seed.mediaSeq + seed.segs.length;
+          st.lastHeader = seed.header; st.lastTarget = seed.targetDuration; st.lastLiveSeq = seed.liveSeq;
+        } else if (p) {
+          st.next = p.mediaSeq;
+          st.baseDn = p.discSeq;
+        }
+      }
+      if (p) { st.lastHeader = p.header; st.lastTarget = p.targetDuration; st.lastLiveSeq = p.liveSeq; }
+
+      var segs = p ? p.segs : [];
+      var appended = 0, repeat = false;
+      for (var i = 0; i < segs.length; i++) {
+        var s = segs[i];
+        if (st.seen.has(segKey(s)) || st.seen.has('U' + s.url)) continue;
+        var hasLive = s.live !== null && st.lastLive !== null;
+        if (hasLive) {
+          if (s.live <= st.lastLive) continue; // the player already has this live segment
+        } else if (s.pdt !== null && st.lastEnd !== null && s.pdt + s.dur * 1000 <= st.lastEnd + overlapTol) {
+          continue;
+        }
+        if (!hasLive && s.pdt !== null && st.lastEnd !== null && st.lastEnd - s.pdt > repeatTol) repeat = true;
+        var last = st.win.length ? st.win[st.win.length - 1] : null;
+        var disc = !!last && (s.disc || sourceKey !== st.lastSource ||
+          (hasLive && s.live > st.lastLive + 1) ||
+          (s.pdt !== null && st.lastEnd !== null && s.pdt - st.lastEnd > gapTol));
+        var dn = last ? last.dn + (disc ? 1 : 0) : st.baseDn;
+        remember(s, st.next++, dn, sourceKey);
+        appended++;
+      }
+      while (st.win.length > maxWindow) st.win.shift();
+      while (st.seen.size > maxSeen) st.seen.delete(st.seen.keys().next().value);
+
+      // Hold (no source): list what was listed last time.
+      var out = st.win.slice(-Math.max(p ? segs.length : (st.lastCount || 0), minSegments));
+      st.lastCount = out.length;
+      var header = (p ? p.header : st.lastHeader) || [];
+      var lines = [];
+      var td = p ? p.targetDuration : st.lastTarget;
+      for (var d = 0; d < out.length; d++) td = Math.max(td, Math.ceil(out[d].dur));
+      var rest = header.filter(function (l) { return l.indexOf('#EXTM3U') !== 0; });
+      var vi = -1;
+      for (var h = 0; h < rest.length; h++) if (rest[h].indexOf('#EXT-X-VERSION') === 0) { vi = h; break; }
+      lines.push('#EXTM3U');
+      var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
+      numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
+      numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
+      var liveSeq = out.length && out[0].live !== null ? out[0].live : st.lastLiveSeq;
+      if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
+      rest.splice(vi + 1, 0, numbering.join('\n'));
+      lines.push(rest.join('\n'));
+      for (var j = 0; j < out.length; j++) {
+        if (j > 0 && out[j].dn !== out[j - 1].dn) lines.push('#EXT-X-DISCONTINUITY');
+        for (var t = 0; t < out[j].tags.length; t++) lines.push(out[j].tags[t]);
+        lines.push(out[j].url);
+      }
+      // Prefetch hints belong to the source's newest segment: only when that is our newest too.
+      if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+        for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
+      }
+      return { text: lines.filter(function (l) { return l !== ''; }).join('\n') + '\n', appended: appended, repeat: repeat };
     }
 
     /** Count media segments (URI lines) in a media playlist. */
@@ -354,7 +533,9 @@
         var area = Math.abs(v.width * v.height - tArea);
         var fps = Math.abs((v.frameRate || 0) - tFps);
         var fam = codecFamily(v.codecs, cfg) === tFam ? 0 : 1;
-        return [exact, exact ? area : 0, fps, fam, -(v.bandwidth || 0)];
+        // Same CODECS string (profile/level and audio codec) avoids a decoder reconfiguration.
+        var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
+        return [exact, exact ? area : 0, fps, fam, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
       for (var i = 0; i < video.length; i++) {
@@ -482,6 +663,9 @@
       isAdSegmentUrl: isAdSegmentUrl,
       isLivePlaylist: isLivePlaylist,
       stripAds: stripAds,
+      parseMedia: parseMedia,
+      newSequenceState: newSequenceState,
+      resequence: resequence,
       countSegments: countSegments,
       codecFamily: codecFamily,
       parseMaster: parseMaster,

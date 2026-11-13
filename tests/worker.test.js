@@ -16,6 +16,7 @@ var PREROLL = fixture('preroll.m3u8');
 var CLEAN = fixture('clean.m3u8');
 var NATIVE_720 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-720p60.m3u8';
 var POPOUT_CLEAN = CLEAN.replace(/SYNTH-live/g, 'SYNTH-popout-live');
+function segUrls(text) { return String(text).split('\n').filter(function (l) { return l && l.charAt(0) !== '#'; }); }
 
 // ---- minimal Response stand-in (jsc has no fetch API)
 function FakeResponse(body, init) {
@@ -138,7 +139,7 @@ test('media with ads: token via page message, clean popout backup served, event 
   return scope.fetch(MASTER_URL).then(function () {
     return scope.fetch(NATIVE_720);
   }).then(function (r) { return r.text(); }).then(function (t) {
-    assert.equal(t, POPOUT_CLEAN);
+    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN));
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
     assert.deepEqual(tokenReqs, ['site', 'popout']);
@@ -162,6 +163,8 @@ test('all backups have ads: stripped playlist served; ad segment fetch answered 
     .then(function (t) {
       assert.notIncludes(t, ',Amazon|');
       assert.includes(t, 'SYNTH-live-104.ts');
+      assert.equal(segUrls(t).filter(function (u) { return u.indexOf('SYNTH-ad-') !== -1; }).length, 0, 'no ad segment listed');
+      assert.notIncludes(t, '#EXT-X-TWITCH-PREFETCH', 'no prefetch hint into the ad');
       var before = scope.realCalls.length;
       return scope.fetch(adSeg).then(function (r) {
         assert.equal(scope.realCalls.length, before, 'no network request for the ad segment');
@@ -260,7 +263,7 @@ test('switched off after playlists are tracked: media and ad segments go to the 
   return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); }).then(function (r) {
     return r.text();
   }).then(function (t) {
-    assert.equal(t, POPOUT_CLEAN, 'enabled: backup served (playlist now tracked)');
+    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN), 'enabled: backup served (playlist now tracked)');
     scope.dispatch(offMessage());
     var calls = scope.realCalls.length;
     var tokens = ourMessages(scope, 'token-request').length;

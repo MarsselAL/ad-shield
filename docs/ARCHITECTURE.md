@@ -15,12 +15,12 @@ almost untouched.
 | `src/shared/logger.js` | all, inlined in worker | `[TAS]` logger; debug/info only when debug is on. |
 | `src/shared/frame.js` | MAIN, ISOLATED | Run in top frame and Twitch player sub-frames only; skip clips. |
 | `src/shared/stats.js` | background, bridge, popup | Event → counter mapping, badge text, event and toast texts, popup status logic. |
-| `src/core/m3u8.js` | MAIN, inlined in worker, tests | Pure HLS functions: `hasAds`, `isMidroll`, `classifyDateranges`, `stripAds`, `parseMaster`, `pickVariant`, `filterMasterCodecs`, `buildUsherUrl`, `matchUsher`, `isAdSegmentUrl`. No DOM, no `URL`, no `chrome.*`. |
+| `src/core/m3u8.js` | MAIN, inlined in worker, tests | Pure HLS functions: `hasAds`, `isMidroll`, `classifyDateranges`, `stripAds`, `parseMedia`, `resequence`, `parseMaster`, `pickVariant`, `filterMasterCodecs`, `buildUsherUrl`, `matchUsher`, `isAdSegmentUrl`. No DOM, no `URL`, no `chrome.*`. |
 | `src/core/gql.js` | MAIN, tests | PlaybackAccessToken body/headers, header capture, playerType rewrite, token parsing. |
-| `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`. |
+| `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`, `setTimeout`: poll deadline, single-flight search, ordered answers, renumbering. |
 | `src/worker/worker-main.js` | inlined in worker | Replaces the worker's `fetch`, talks to the page, serves blank ad-segment answers. |
 | `src/core/worker-source.js` | MAIN, tests | Builds the replacement worker source from the factories' `toString()` plus JSON data plus Twitch's original source. |
-| `src/page/recovery.js` | MAIN | Stall monitor, soft kick, React-fiber player reload, reload rate limit, localStorage preservation. |
+| `src/page/recovery.js` | MAIN | Stall watch (user-intent tracking, play/seek/nudge, muted-play retry), React-fiber player reload, reload rate limit, localStorage preservation. |
 | `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements. |
@@ -98,19 +98,59 @@ config values:
 - **Never break the player**: every hook is in `try/catch`; on an internal exception the original
   request/response passes through untouched (`failure` event). The Worker hook falls back to the
   original URL; the worker prelude is wrapped so Twitch's code still runs if our install fails.
-- **Stalls after switching** (`playlist-switch` or `ad-end`): watch the main (`blob:`) video for
-  20 s with a 1 s timer that only exists while watching. Stalled 4 s while not paused:
-  pause/play. Still stalled 4 s later: one hard reload via `setSrc({isNewMediaPlayerInstance:
-  true, refreshAccessToken: true})`, with `video-quality`, `video-muted`, `volume`,
-  `lowLatencyModeEnabled` pinned for 5 s (temporary `Storage.prototype.getItem` wrapper scoped
-  to `localStorage`, then values written back). Then the watch ends: no loops.
+- **Stalls after switching** (`recovery.js`, numbers in `config.recovery`; thresholds from
+  research-2026-11-13.md F6/F9): a watch is armed by `playlist-switch` / `ad-end`, and, while a
+  backup or stripped playlist is served and for 30 s after native returns, by the video's
+  `waiting`/`stalled` events and by pauses nobody asked for. A pause is the viewer's only if it
+  follows a click/key on the player within 1.5 s (capturing listeners on the document); the
+  player pausing itself during a switch is a stall. Once a second, only while the tab is
+  visible: paused (not by the viewer) 2 s -> `play()`; playhead stuck 3 s, `readyState < 3` and
+  a hole in `buffered` -> seek to the next range + 0.05 s; stuck with < 0.5 s buffered ahead ->
+  pause/play. At most 2 soft actions per watch, 8 s apart, 6 per 2 min. Still stuck 15 s after
+  the first one -> one hard reload via `setSrc({isNewMediaPlayerInstance: true,
+  refreshAccessToken: true})` (not within 15 s of the previous one; `video-quality`,
+  `video-muted`, `volume`, `lowLatencyModeEnabled` pinned for 5 s), skipped for a watch armed
+  only by a break that stripped nothing or used a backup of native quality. Then 60 s of no
+  automatic actions: no loops. Re-arming extends a watch but never resets its counters.
+  `play()` rejected with `NotAllowedError`: one muted retry; sound restored at the next
+  gesture unless someone unmuted meanwhile; a video the viewer muted is never touched.
+  `segment-repeat` from the worker: one pause/play, at most every 20 s.
 - **Reload cap**: 3 hard reloads per channel per 5 minutes. The 4th stall sets the channel to
   strip-only (`degrade` to every worker; future workers get it in `boot`) for the page session,
   reports `degraded`, and shows it in the popup. No more reloads on that channel.
 - **Backup lockouts**: a player type that fails or has its own ad is skipped for 5 s; at most 5
-  types per poll; backup masters cached 60 s per type; the last working non-`autoplay` type is
-  tried first.
-- **Empty after stripping**: the last clean playlist is served for up to 20 s.
+  types per search; backup masters cached 60 s per type (the type being served keeps its master
+  while its media fetch works, so a steady-state backup poll is one fetch); the last working
+  non-`autoplay` type is tried first. Among equal resolutions the backup variant with the
+  native `CODECS` string wins.
+- **Poll deadline** (`backupPollDeadlineMs`, 1.8 s): a media poll waits at most this long for the
+  backup search, then gets the stripped playlist; the search goes on in the background, one
+  per channel (later polls join it). While a backup is being served, one missed poll is
+  answered with what the player already has (hold, up to 4 s) instead of flipping sources.
+  Leaving a backup needs 2 clean native polls in a row.
+- **Order**: per channel, answers leave in request order and their state changes (switch
+  events, numbering) happen in that order, so a slow older answer never overtakes a newer one.
+- **Numbering** (`m3u8.resequence`, research-2026-11-13.md C1/F1/F2): once a live playlist has
+  been rewritten, every answer for it is renumbered from per-playlist state. A segment is
+  identified by its live number (`#EXT-X-TWITCH-LIVE-SEQUENCE` + index, up to the first
+  discontinuity) where known, else by URL, and keeps the number it was first given; a segment
+  the player already has (same live number, or ending before what was given) is never listed
+  again under a new number, so native <-> backup switches do not make the player download a
+  segment twice (the cause of the ~2 s/midroll audio drift). New segments get the next number:
+  `MEDIA-SEQUENCE` and `DISCONTINUITY-SEQUENCE` are continuous and monotonic. A
+  `#EXT-X-DISCONTINUITY` goes before the first new segment after a source change (native,
+  `backup:<type>:<resolution>:<fps>:<codecs>`), a live-number or date-time gap, or where the
+  source had one. If an appended segment still overlaps what was given (no live numbers, dates
+  off by more than 0.5 s), the worker posts `segment-repeat` (once per 20 s per channel).
+  Playlists never rewritten pass through untouched. Known limit: numbering is per variant URL;
+  after an ABR switch mid-break, two variants may number the same time differently.
+- **Empty after stripping**: the newest known segments are listed again with their numbers; the
+  last clean playlist is used only while at most 6 s old.
+- **Ad segment answers**: ad segments never appear in served playlists. A leftover request for
+  a remembered ad URL is answered locally with one MPEG-TS null packet (or an MP4 `ftyp`),
+  i.e. no media. Chosen over an empty 204 (cannot be tested against Twitch's player here) and
+  over a generated silent/black segment (it would have to match the stream's codecs and
+  timestamps; a mismatch is a decode error, worse than a hole the recovery watch seeks over).
 - **Off switch while a tab is open**: the worker and fetch hooks see `enabled: false` and become
   passive at once; the scripts disappear on the next reload.
 

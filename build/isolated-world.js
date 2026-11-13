@@ -157,15 +157,56 @@
     maxBackupTypesPerPoll: 5,        // max playerTypes tried for one playlist poll
     playerTypeLockoutMs: 5000,       // a failed type is skipped for this long (R: 5 s, §4.1)
     backupMasterTtlMs: 60000,        // cached backup master per type
-    lastCleanMaxAgeMs: 20000,        // last clean playlist may be served this long when stripping empties it
+    lastCleanMaxAgeMs: 6000,         // last clean playlist may be served this long when stripping empties it
+                                     // (was 20 s: the player saw no new segments for that long)
+    // One media-playlist poll waits at most this long for the backup search; then the stripped
+    // playlist is served and the search goes on in the background (one per channel). The
+    // player's buffer must not drain while we wait. Our choice (Twitch polls about every 2 s).
+    backupPollDeadlineMs: 1800,
+    // Clean native polls in a row needed before leaving a backup (debounces native<->backup flapping).
+    nativeSwitchBackPolls: 2,
+    // While a backup is being served and one poll's backup search fails or times out, keep
+    // serving what the player already has (no new segments) this long before falling back to
+    // the stripped native playlist, so one slow poll does not flip the source twice.
+    backupHoldMs: 4000,
+    // At most one 'segment-repeat' event per channel per this interval (repeat detector).
+    repeatEventMinIntervalMs: 20000,
+    // Player-facing numbering of rewritten live media playlists (m3u8.resequence). Segments
+    // are identified by their live number (#EXT-X-TWITCH-LIVE-SEQUENCE + index, docs/
+    // research-2026-11-13.md C1/F1) where known, else by URL, and keep the number they were
+    // first given; new segments get the next number, so MEDIA-SEQUENCE / DISCONTINUITY-SEQUENCE
+    // stay continuous and monotonic across native, stripped and backup playlists.
+    sequencer: {
+      maxWindow: 30,                 // segments remembered for re-serving
+      minSegments: 3,                // a served playlist lists at least this many (if known)
+      maxSeen: 400,                  // segment identities remembered
+      overlapToleranceMs: 250,       // no live number: a new segment ending this close to what was given is a repeat (skipped)
+      gapToleranceMs: 1500,          // a date-time jump bigger than this gets a DISCONTINUITY
+      repeatToleranceMs: 500         // an appended segment starting this far before the given end = repeat (event)
+    },
     adSegmentCacheTtlMs: 120000,     // ad segment URLs remembered (P/R: 120 s, §2.3)
     maxTrackedPlaylists: 200,        // memory bound for playlist/variant maps
 
     // Recovery (page). research-technique.md §5.
     recovery: {
-      watchWindowMs: 20000,          // after a playlist switch, watch the video this long
+      watchWindowMs: 20000,          // after a playlist switch, watch the video this long (extended by re-arms)
       checkIntervalMs: 1000,         // sample interval while watching (no timer otherwise)
-      stallThresholdMs: 4000,        // currentTime not advancing this long = stalled
+      stallThresholdMs: 3000,        // playhead not advancing for 3 ticks = stalled (research-2026-11-13 F9)
+      pausedStallMs: 2000,           // paused, not by the user, this long = stalled -> play()
+      userGestureWindowMs: 1500,     // a pause this soon after a click/key on the player is the user's
+      minKickIntervalMs: 8000,       // at least this long between two soft actions (research-2026-11-13 F6)
+      maxSoftKicks: 2,               // soft actions per watch (research-2026-11-13 §4 item 4: max 2 per break)
+      maxKicksPerWindow: 6,          // soft actions overall ...
+      kickWindowMs: 120000,          // ... per 2 minutes
+      drainingBufferSec: 0.5,        // frozen with less than this buffered ahead -> pause/play nudge (F6)
+      gapToleranceSec: 0.25,         // buffered ranges closer than this count as continuous
+      gapSeekOffsetSec: 0.05,        // seek to the start of the next range + this (F9)
+      hardReloadAfterMs: 15000,      // a stall must last this long after the first soft action before a hard reload
+      reloadCooldownMs: 15000,       // no hard reload within this long of the previous one
+      giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
+      healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
+      rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
+      repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
       maxReloadsPerWindow: 3,        // hard reloads per channel ...
       reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only
       preserveWindowMs: 5000,        // localStorage values are pinned this long around a reload
@@ -181,6 +222,11 @@
 
     // Tiny valid responses served for ad segment fetches (research-technique.md §3 item 4(a)).
     // .ts: one MPEG-TS null packet (188 bytes, PID 0x1FFF). Other: a 40-byte MP4 'ftyp' box.
+    // Only a fallback: ad segments never appear in playlists we serve, so the player should not
+    // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
+    // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
+    // demuxers drop null packets and the recovery watch seeks over the resulting hole. See
+    // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',
 

@@ -237,3 +237,139 @@ test('removeQueryParams and isM3u8Url', function () {
   assert.ok(M.isM3u8Url('https://a.invalid/x.m3u8?a=1'));
   assert.notOk(M.isM3u8Url('https://a.invalid/x.ts?m3u8'));
 });
+
+// ------------------------------------------------------------------ resequence (player-facing numbering)
+var SEG_BASE = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/';
+var T0 = Date.parse('2025-11-11T20:00:00.000Z');
+/** Synthetic live playlist. segs: [{id, ad?, disc?}]; a segment's time is id*2 s (+ skewMs). */
+function pl(o) {
+  var lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', '#EXT-X-MEDIA-SEQUENCE:' + o.seq];
+  if (o.dseq !== undefined) lines.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + o.dseq);
+  if (o.live !== undefined) lines.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + o.live);
+  if (o.segs.some(function (s) { return s.ad; })) {
+    lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=4.000,X-TV-TWITCH-AD-ROLL-TYPE="MIDROLL"');
+  }
+  o.segs.forEach(function (s) {
+    if (s.disc) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + s.id * 2000 + (o.skewMs || 0)).toISOString());
+    lines.push('#EXTINF:2.000,' + (s.ad ? 'Amazon|1' : 'live'));
+    lines.push(SEG_BASE + (s.ad ? 'ad-' : (o.prefix || 'native-')) + s.id + '.ts');
+  });
+  return lines.join('\n') + '\n';
+}
+function ids(from, to, extra) {
+  var a = [];
+  for (var i = from; i <= to; i++) a.push(Object.assign({ id: i }, extra || {}));
+  return a;
+}
+/** url -> number as the player sees it; checks numbers are consecutive within the playlist. */
+function numbering(text) {
+  var p = M.parseMedia(text);
+  var map = {};
+  p.segs.forEach(function (s, i) { map[s.url] = p.mediaSeq + i; });
+  return { map: map, seq: p.mediaSeq, dseq: p.discSeq, urls: p.segs.map(function (s) { return s.url; }), segs: p.segs };
+}
+function short(u) { return u.replace(SEG_BASE, ''); }
+
+test('resequence: a segment keeps its number across polls around a mid-playlist gap, numbering stays continuous', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 100, live: 100, segs: ids(100, 102) });
+  var polls = [
+    pl({ seq: 100, live: 100, segs: ids(100, 102).concat([{ id: 103, ad: true }, { id: 104, ad: true }, { id: 105, disc: true }, { id: 106 }]) }),
+    pl({ seq: 102, live: 102, segs: [{ id: 102 }, { id: 103, ad: true }, { id: 104, ad: true }, { id: 105, disc: true }].concat(ids(106, 107)) }),
+    pl({ seq: 105, live: 105, segs: ids(105, 108) })
+  ];
+  var given = {};
+  given[SEG_BASE + 'native-100.ts'] = 100; given[SEG_BASE + 'native-101.ts'] = 101; given[SEG_BASE + 'native-102.ts'] = 102;
+  var lastSeq = 100, lastDseq = 0;
+  polls.forEach(function (raw, n) {
+    var src = M.hasAds(raw, cfg) ? M.stripAds(raw, cfg).text : raw;
+    var r = M.resequence(st, src, 'native', cfg.sequencer);
+    var num = numbering(r.text);
+    assert.ok(num.seq >= lastSeq, 'MEDIA-SEQUENCE never goes back (poll ' + n + ')');
+    assert.ok(num.dseq >= lastDseq, 'DISCONTINUITY-SEQUENCE never goes back (poll ' + n + ')');
+    lastSeq = num.seq; lastDseq = num.dseq;
+    num.urls.forEach(function (u) {
+      assert.notIncludes(u, '/ad-', 'no ad segment listed');
+      if (given[u] !== undefined) assert.equal(num.map[u], given[u], short(u) + ' keeps its number (poll ' + n + ')');
+      else given[u] = num.map[u];
+    });
+    assert.notOk(r.repeat);
+  });
+  assert.deepEqual([105, 106, 107, 108].map(function (i) { return given[SEG_BASE + 'native-' + i + '.ts']; }), [103, 104, 105, 106],
+    'live segments after the removed ads continue the numbering without a jump');
+  var last = numbering(M.resequence(st, polls[2], 'native', cfg.sequencer).text);
+  assert.equal(last.dseq, 1, 'the DISCONTINUITY before 105 slid out and is counted');
+});
+
+test('resequence: DISCONTINUITY only where timestamps jump, never on the first listed segment', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 10, live: 10, segs: ids(10, 12) });
+  var r = M.resequence(st, M.stripAds(pl({ seq: 11, live: 11, segs: ids(11, 12).concat([{ id: 13, ad: true }, { id: 14, disc: true }]) }), cfg).text, 'native', cfg.sequencer);
+  var lines = r.text.split('\n');
+  var i14 = lines.indexOf(SEG_BASE + 'native-14.ts');
+  assert.equal(lines.slice(lines.indexOf(SEG_BASE + 'native-12.ts') + 1, i14).filter(function (l) { return l === '#EXT-X-DISCONTINUITY'; }).length, 1);
+  var first = lines.findIndex(function (l) { return l.indexOf('#EXTINF') === 0 || l === '#EXT-X-DISCONTINUITY'; });
+  assert.ok(lines[first] !== '#EXT-X-DISCONTINUITY' || first > lines.indexOf(SEG_BASE + 'native-10.ts'));
+});
+
+test('resequence (F-27): backup numbered by live sequence, not its own MEDIA-SEQUENCE; no segment handed twice at switch-in and break end', function () {
+  var st = M.newSequenceState();
+  // The page's playlist is numbered 100 ahead of the live sequence (earlier stitched breaks).
+  st.passthrough = pl({ seq: 500, live: 400, segs: ids(400, 403) });
+  // Backup: own numbering (9001...), dated 1.6 s later than the page's playlist.
+  var backup = pl({ seq: 9001, live: 401, prefix: 'popout-', skewMs: 1600, segs: ids(401, 405) });
+  var r = M.resequence(st, backup, 'backup:popout:1280x720:60', cfg.sequencer);
+  var num = numbering(r.text);
+  assert.deepEqual(num.urls.map(short), ['native-401.ts', 'native-402.ts', 'native-403.ts', 'popout-404.ts', 'popout-405.ts'],
+    'backup copies of 401-403 (already given) are not listed again');
+  assert.equal(num.map[SEG_BASE + 'popout-404.ts'], 504, 'continues the page numbering');
+  assert.equal(num.segs[3].disc, true, 'DISCONTINUITY before the first backup segment');
+  assert.equal(num.segs[4].disc, false);
+  assert.notOk(r.repeat);
+  // Break end: the page's playlist comes back numbered 4 further ahead (B-054).
+  var back = pl({ seq: 508, live: 404, segs: ids(404, 407) });
+  var r2 = M.resequence(st, back, 'native', cfg.sequencer);
+  var num2 = numbering(r2.text);
+  assert.deepEqual(num2.urls.map(short), ['popout-404.ts', 'popout-405.ts', 'native-406.ts', 'native-407.ts']);
+  assert.equal(num2.seq, 504);
+  assert.equal(num2.map[SEG_BASE + 'native-406.ts'], 506, 'no jump, no repeat');
+  assert.equal(num2.segs[2].disc, true, 'DISCONTINUITY at the switch back');
+  assert.equal(num2.dseq, num.dseq + 1, 'the DISCONTINUITY before 404 is now before the first listed segment: counted');
+  assert.notOk(r2.repeat);
+});
+
+test('resequence (F-28): repeat detected when a switched-to playlist without live numbers overlaps what was given', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 0, segs: ids(0, 3) });
+  // No live sequence; the backup dates its segments 1.6 s earlier, so its segment 4 overlaps native 3.
+  var r = M.resequence(st, pl({ seq: 70, prefix: 'popout-', skewMs: -1600, segs: ids(1, 5) }), 'backup:popout', cfg.sequencer);
+  assert.ok(r.repeat, 'repeat flagged');
+  var num = numbering(r.text);
+  assert.equal(num.urls.indexOf(SEG_BASE + 'popout-3.ts'), -1, 'fully covered segment skipped');
+  assert.equal(num.map[SEG_BASE + 'popout-4.ts'], 4);
+  // Same source, next poll: nothing new overlaps, no repeat.
+  var r2 = M.resequence(st, pl({ seq: 71, prefix: 'popout-', skewMs: -1600, segs: ids(2, 6) }), 'backup:popout', cfg.sequencer);
+  assert.notOk(r2.repeat);
+});
+
+test('resequence: an all-stripped poll lists the newest known segments again (same numbers), hold keeps them too', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 20, live: 20, segs: ids(20, 23) });
+  var empty = M.stripAds(pl({ seq: 24, live: 24, segs: [{ id: 24, ad: true }, { id: 25, ad: true }] }), cfg).text;
+  var n1 = numbering(M.resequence(st, empty, 'native', cfg.sequencer).text);
+  assert.deepEqual(n1.urls.map(short), ['native-21.ts', 'native-22.ts', 'native-23.ts']);
+  assert.equal(n1.seq, 21);
+  var n2 = numbering(M.resequence(st, null, 'native', cfg.sequencer).text);
+  assert.deepEqual(n2.urls, n1.urls);
+  assert.equal(n2.seq, 21);
+});
+
+test('pickVariant prefers the exact CODECS string among equal resolutions', function () {
+  var vs = [
+    { url: 'a', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F,mp4a.40.2', bandwidth: 9 },
+    { url: 'b', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2', bandwidth: 1 }
+  ];
+  var t = { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2' };
+  assert.equal(M.pickVariant(vs, t, cfg, { preferAvc: true }).url, 'b');
+});

@@ -1,16 +1,27 @@
 /*
- * Player recovery / health (MAIN world). docs/research-technique.md §5.
+ * Player recovery / health (MAIN world). docs/research-technique.md §5 and
+ * docs/research-2026-11-13.md §2 (F2, F6, F9) / §4 items 2, 4, 5.
  *
- * After every playlist switch (native <-> backup <-> stripped) and every ad end, watch the main
- * <video> for cfg.recovery.watchWindowMs. If currentTime does not advance for
- * stallThresholdMs while it should be playing:
- *   step 1: pause/play ("soft kick")
- *   step 2: hard player reload through the React fiber setSrc approach, keeping the
- *           localStorage quality/volume/muted/lowLatency values across the reload
- *   then give up for this switch (no loops).
- * Hard reloads are rate-limited per channel (maxReloadsPerWindow per reloadWindowMs). Over
- * the limit, the channel is switched to strip-only mode for the rest of the page session
- * (onDegrade) and no further reloads happen there.
+ * A watch is armed after every playlist switch (native <-> backup <-> stripped), every ad end,
+ * and (while a backup/stripped playlist is served, and for rearmAfterNativeMs after returning
+ * to native) on the main <video>'s waiting/stalled events and on pauses nobody asked for.
+ * While armed, once per checkIntervalMs, and only while the tab is visible:
+ *   - paused, and the pause did not follow a click/key on the player  -> play()
+ *   - playhead stuck stallThresholdMs (3 ticks), not enough data (readyState < 3) and a hole
+ *     in the buffered ranges ahead                                     -> seek over the hole
+ *   - playhead stuck and less than drainingBufferSec buffered ahead   -> pause/play nudge
+ *   at most maxSoftKicks per watch, minKickIntervalMs apart, maxKicksPerWindow overall;
+ *   - still stuck hardReloadAfterMs after the first soft action       -> one hard player reload
+ *     (React fiber setSrc, localStorage quality/volume/muted/lowLatency kept), not within
+ *     reloadCooldownMs of the previous one, and not for a watch armed only by a break that
+ *     stripped nothing / used a backup of the native quality (soft recovery only);
+ *   - then the watch ends with giveUpCooldownMs of no automatic actions (no loops).
+ * play() rejected with NotAllowedError (no sound allowed): retried once muted, and the sound is
+ * restored at the next click/key unless someone unmuted or the viewer had muted already.
+ * 'segment-repeat' from the worker (the player was handed a segment it already had): one
+ * pause/play, at most once per repeatRestartMinIntervalMs.
+ * Hard reloads are rate-limited per channel (maxReloadsPerWindow per reloadWindowMs). Over the
+ * limit, the channel is switched to strip-only mode for the page session (onDegrade).
  * There is no timer unless a watch is active. Every step is wrapped in try/catch.
  * opts.isEnabled() false (extension switched off): events are ignored and a running watch is
  * dropped on its next tick, so nothing touches the player.
@@ -98,6 +109,21 @@
     var degraded = {};
     var watch = null;
     var timer = null;
+    var lastGestureAt = -Infinity;
+    var ownPauseAt = -Infinity;
+    var pauses = typeof WeakMap === 'function' ? new WeakMap() : null; // video -> { user }
+    var serving = 'native';
+    var nativeSince = -Infinity;
+    var lastChannel = '';
+    var kickTimes = [];
+    var cooldownUntil = -Infinity;
+    var lastReloadAt = -Infinity;
+    var lastRepeatKickAt = -Infinity;
+    var mutedByUs = null; // { video, volume }: we muted to get play() allowed
+
+    function isMainVideo(v) {
+      return !!v && v.nodeName === 'VIDEO' && String(v.currentSrc || v.src || '').indexOf('blob:') === 0;
+    }
 
     function findVideo() {
       var vids = doc.querySelectorAll(cfg.player.videoSelector);
@@ -111,20 +137,115 @@
       return fallback;
     }
 
+    function visible() {
+      return !doc || doc.visibilityState === undefined || doc.visibilityState === 'visible';
+    }
+
+    /** A pause counts as the viewer's when it follows a click/key on the player (or is unknown). */
+    function userPaused(v) {
+      if (!v || !v.paused) return false;
+      var info = pauses ? pauses.get(v) : null;
+      return !info || info.user;
+    }
+
+    /** Waiting/stalled/unexpected pauses matter while a backup/stripped playlist is served and a bit after. */
+    function sensitive() {
+      return serving !== 'native' || now() - nativeSince < rc.rearmAfterNativeMs;
+    }
+
+    function onPlayer(e) {
+      var t = e && e.target;
+      if (e.type === 'keydown') {
+        if (!t) return true;
+        var tag = String(t.nodeName || '').toUpperCase();
+        return !(tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable); // typing in chat is not a player key
+      }
+      if (t && typeof t.closest === 'function') {
+        try { return !!t.closest(cfg.player.playerContainerSelector + ',video'); } catch (err) { return true; }
+      }
+      return true;
+    }
+
+    function restoreSound() {
+      if (!mutedByUs) return;
+      var m = mutedByUs;
+      mutedByUs = null;
+      try {
+        if (m.video.muted) {
+          m.video.muted = false;
+          if (typeof m.volume === 'number') m.video.volume = m.volume;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function onGesture(e) {
+      try {
+        if (!isEnabled() || (e && e.isTrusted === false)) return;
+        restoreSound(); // any real gesture allows sound again
+        if (onPlayer(e)) lastGestureAt = now();
+      } catch (err) { /* ignore */ }
+    }
+
+    function onMediaEvent(e) {
+      try {
+        var v = e && e.target;
+        if (!isEnabled() || !isMainVideo(v)) return;
+        var t = now();
+        if (e.type === 'pause') {
+          var own = t - ownPauseAt < 1000;
+          var user = !own && t - lastGestureAt <= rc.userGestureWindowMs;
+          if (pauses) pauses.set(v, { user: user });
+          if (!user && !own && sensitive()) arm(lastChannel, { hard: true });
+        } else if (e.type === 'play' || e.type === 'playing') {
+          if (pauses) pauses.delete(v);
+        } else if (e.type === 'waiting' || e.type === 'stalled') {
+          if (sensitive()) arm(lastChannel, { hard: true });
+        } else if (e.type === 'volumechange') {
+          if (mutedByUs && mutedByUs.video === v && !v.muted) mutedByUs = null; // unmuted by someone: done
+        }
+      } catch (err) { /* ignore */ }
+    }
+
+    if (doc && typeof doc.addEventListener === 'function') {
+      ['pointerdown', 'mousedown', 'keydown', 'touchstart'].forEach(function (type) {
+        doc.addEventListener(type, onGesture, true);
+      });
+      // Media events do not bubble, but a capturing listener on the document sees them.
+      ['pause', 'play', 'playing', 'waiting', 'stalled', 'volumechange'].forEach(function (type) {
+        doc.addEventListener(type, onMediaEvent, true);
+      });
+    }
+
     function disarm() {
       watch = null;
       if (timer !== null) { clearIv(timer); timer = null; }
     }
 
-    function arm(channel) {
+    /** Start a watch, or extend the running one (its counters are kept: no reset by re-arming). */
+    function arm(channel, o) {
       try {
+        var t = now();
+        if (t < cooldownUntil) return;
+        var hard = !o || o.hard !== false;
+        if (watch) {
+          watch.until = Math.max(watch.until, t + rc.watchWindowMs);
+          if (hard) watch.hard = true;
+          if (channel) watch.channel = channel;
+          return;
+        }
         var v = findVideo();
         watch = {
-          channel: channel || '',
-          until: now() + rc.watchWindowMs,
+          channel: channel || lastChannel || '',
+          until: t + rc.watchWindowMs,
           lastTime: v ? v.currentTime : -1,
-          lastAdvanceAt: now(),
-          step: 0
+          lastAdvanceAt: t,
+          healthySince: t,
+          stallSince: null,
+          firstSoftAt: null,
+          kicks: 0,
+          lastKickAt: -Infinity,
+          reloaded: false,
+          hard: hard
         };
         if (timer === null) timer = setIv(tick, rc.checkIntervalMs);
       } catch (e) {
@@ -132,12 +253,75 @@
       }
     }
 
-    function softKick(v) {
-      try {
-        v.pause();
-        var p = v.play();
-        if (p && typeof p.catch === 'function') p.catch(function () {});
-      } catch (e) { /* ignore */ }
+    function kicksAllowed(t) {
+      kickTimes = kickTimes.filter(function (x) { return t - x < rc.kickWindowMs; });
+      return kickTimes.length < rc.maxKicksPerWindow;
+    }
+
+    /** play() that copes with a rejection: NotAllowedError -> one muted retry (sound restored later). */
+    function safePlay(v) {
+      var p;
+      try { p = v.play(); } catch (e) { return; }
+      if (!p || typeof p.then !== 'function') return;
+      p.then(null, function (err) {
+        try {
+          if (!isEnabled() || !err || err.name !== 'NotAllowedError') return;
+          if (v.muted || mutedByUs) return; // muted already (maybe by the viewer): nothing more to try
+          mutedByUs = { video: v, volume: v.volume };
+          v.muted = true;
+          emit('stall-kick', { channel: lastChannel, action: 'muted-play' });
+          var p2 = v.play();
+          if (p2 && typeof p2.then === 'function') p2.then(null, function () { restoreSound(); });
+        } catch (e) { /* ignore */ }
+      });
+    }
+
+    function ahead(v) {
+      var b = v.buffered;
+      var ct = v.currentTime;
+      if (!b || !b.length) return 0;
+      for (var i = 0; i < b.length; i++) {
+        if (ct >= b.start(i) - rc.gapToleranceSec && ct < b.end(i)) return b.end(i) - ct;
+      }
+      return 0;
+    }
+
+    /** Where to seek to get over a hole in the buffered ranges, or null if there is none. */
+    function gapTarget(v) {
+      var b = v.buffered;
+      if (!b || !b.length) return null;
+      var ct = v.currentTime;
+      var tol = rc.gapToleranceSec;
+      for (var i = 0; i < b.length; i++) {
+        var s = b.start(i), e = b.end(i);
+        if (ct >= s - tol && ct < e - tol) return null; // data right here: no hole to skip
+        if (s > ct) return s + rc.gapSeekOffsetSec;     // first range ahead of the playhead
+      }
+      var lastEnd = b.end(b.length - 1);
+      // Playhead beyond everything buffered (timestamps went back after a switch): go back to the data.
+      if (ct > lastEnd + 1) return Math.max(b.start(b.length - 1), lastEnd - 1.5);
+      return null;
+    }
+
+    /** One soft action; returns its name. */
+    function softKick(v, reason) {
+      var action;
+      if (v.paused) {
+        action = 'play';
+        safePlay(v);
+      } else {
+        var target = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) ? gapTarget(v) : null;
+        if (target !== null) {
+          action = 'seek';
+          try { v.currentTime = target; } catch (e) { /* ignore */ }
+        } else {
+          action = 'nudge';
+          ownPauseAt = now();
+          try { v.pause(); } catch (e) { /* ignore */ }
+          safePlay(v);
+        }
+      }
+      return action;
     }
 
     function preserveLocalStorage() {
@@ -169,20 +353,20 @@
       }, rc.preserveWindowMs);
     }
 
-    function hardReload(channel) {
+    function hardReload(channel, v) {
       var ps = null;
       try { ps = finder(); } catch (e) { ps = null; }
       if (!ps || !ps.state) {
         emit('reload-failed', { channel: channel, reason: 'player state not found' });
         return false;
       }
-      try {
-        if (ps.player && typeof ps.player.isPaused === 'function' && ps.player.isPaused()) return false;
-      } catch (e) { /* ignore */ }
+      // Only the viewer's own pause stops a reload (the player pausing itself is what we fix).
+      if (userPaused(v)) return false;
       preserveLocalStorage();
       try {
         ps.state.setSrc({ isNewMediaPlayerInstance: true, refreshAccessToken: true });
         if (ps.player && typeof ps.player.play === 'function') ps.player.play();
+        lastReloadAt = now();
         emit('player-reload', { channel: channel, count: limiter.count(channel) });
         return true;
       } catch (e) {
@@ -198,6 +382,11 @@
       try { opts.onDegrade(channel); } catch (e) { /* ignore */ }
     }
 
+    function giveUp(t) {
+      cooldownUntil = t + rc.giveUpCooldownMs;
+      disarm();
+    }
+
     function tick() {
       try {
         if (!watch || !isEnabled()) { disarm(); return; }
@@ -205,46 +394,102 @@
         if (t > watch.until) { disarm(); return; }
         var v = findVideo();
         if (!v) return;
-        if (v.paused || v.ended) { watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; return; }
-        if (v.currentTime !== watch.lastTime) {
+        // Hidden tab: browsers stop drawing video; never act then (research-2026-11-13 C5).
+        if (!visible() || v.ended || userPaused(v)) {
+          watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; watch.stallSince = null;
+          return;
+        }
+        if (!v.paused && Math.abs(v.currentTime - watch.lastTime) > 0.1) {
           watch.lastTime = v.currentTime;
           watch.lastAdvanceAt = t;
+          watch.stallSince = null;
+          if (t - watch.healthySince >= rc.healthyResetMs) { watch.kicks = 0; watch.firstSoftAt = null; }
           return;
         }
-        if (t - watch.lastAdvanceAt < rc.stallThresholdMs) return;
-        // Stalled.
-        if (watch.step === 0) {
-          watch.step = 1;
-          watch.lastAdvanceAt = t;
-          log.debug('stall after playlist switch: pause/play');
-          softKick(v);
-          emit('stall-kick', { channel: watch.channel });
-          return;
+        watch.healthySince = t;
+        // Keep watching while frozen; the ladder below always ends in giveUp, so this is bounded.
+        watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
+        var reason = v.paused ? 'paused' : 'stall';
+        if (t - watch.lastAdvanceAt < (v.paused ? rc.pausedStallMs : rc.stallThresholdMs)) return;
+        if (watch.stallSince === null) watch.stallSince = t;
+        // Stalled: soft actions first.
+        if (watch.kicks < rc.maxSoftKicks && kicksAllowed(t)) {
+          if (t - watch.lastKickAt < rc.minKickIntervalMs) return;
+          var draining = ahead(v) < rc.drainingBufferSec;
+          var gap = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) && gapTarget(v) !== null;
+          if (reason === 'paused' || draining || gap) {
+            watch.kicks++;
+            watch.lastKickAt = t;
+            if (watch.firstSoftAt === null) watch.firstSoftAt = t;
+            kickTimes.push(t);
+            var action = softKick(v, reason);
+            log.debug('stall after playlist switch:', action);
+            emit('stall-kick', { channel: watch.channel, action: action });
+            return;
+          }
         }
-        if (watch.step === 1) {
+        // Soft actions used up (or none fits): the hard reload, if this watch may do one.
+        var since = watch.firstSoftAt !== null ? watch.firstSoftAt : watch.stallSince;
+        if (!watch.reloaded && watch.hard && t - since >= rc.hardReloadAfterMs) {
+          if (t - lastReloadAt < rc.reloadCooldownMs) return;
           var ch = watch.channel;
-          watch.step = 2;
+          watch.reloaded = true;
           watch.lastAdvanceAt = t;
-          if (degraded[ch]) { disarm(); return; }
+          watch.stallSince = null;
+          if (degraded[ch]) { giveUp(t); return; }
           if (limiter.allow(ch)) {
             log.debug('still stalled: player reload');
-            hardReload(ch);
+            hardReload(ch, v);
           } else {
             degrade(ch);
-            disarm();
+            giveUp(t);
           }
           return;
         }
-        disarm(); // step 2 done: give up for this switch
+        if (watch.reloaded || !watch.hard) {
+          // Nothing left to try for this watch.
+          if (t - since >= rc.hardReloadAfterMs) giveUp(t);
+        }
       } catch (e) {
         log.warn('recovery tick failed', e && e.message);
         disarm();
       }
     }
 
+    /** 'segment-repeat': the player was handed a segment it already had; restart it once. */
+    function repeatKick() {
+      var t = now();
+      if (t - lastRepeatKickAt < rc.repeatRestartMinIntervalMs || !visible()) return;
+      var v = findVideo();
+      if (!v || v.paused || v.ended) return;
+      lastRepeatKickAt = t;
+      ownPauseAt = t;
+      try { v.pause(); } catch (e) { /* ignore */ }
+      safePlay(v);
+      emit('stall-kick', { channel: lastChannel, action: 'repeat-restart' });
+    }
+
     function onEvent(name, data) {
-      if (!isEnabled()) return;
-      if (name === 'playlist-switch' || name === 'ad-end') arm(data && data.channel);
+      try {
+        if (!isEnabled()) return;
+        var d = data || {};
+        if (d.channel) lastChannel = d.channel;
+        if (name === 'playlist-switch') {
+          serving = d.to || 'native';
+          if (serving === 'native') nativeSince = now();
+          // Switching to the stripped playlist or to a backup of another quality may need a reload;
+          // the switch back to native is judged by the ad-end that comes with it.
+          arm(d.channel, { hard: serving === 'stripped' || (serving !== 'native' && d.matched === false) });
+        } else if (name === 'ad-end') {
+          // Prefer soft recovery when nothing was stripped or the backup matched native quality.
+          var soft = d.outcome === 'none' || (d.outcome === 'backup' && d.matched);
+          arm(d.channel, { hard: !soft });
+        } else if (name === 'segment-repeat') {
+          repeatKick();
+        }
+      } catch (e) {
+        log.warn('recovery event failed', e && e.message);
+      }
     }
 
     return {

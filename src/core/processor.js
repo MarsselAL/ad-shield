@@ -69,11 +69,13 @@
         return c;
       }
 
-      function setServing(c, to) {
+      function setServing(c, to, matched) {
         if (c.serving === to) return;
         var from = c.serving;
         c.serving = to;
-        emit('playlist-switch', { channel: c.id, from: from, to: to });
+        var d = { channel: c.id, from: from, to: to };
+        if (matched !== undefined) d.matched = matched; // backup of the native quality?
+        emit('playlist-switch', d);
       }
 
       function rememberAdSegments(urls) {
@@ -139,6 +141,20 @@
         return order;
       }
 
+      var setT = deps.setTimeout || (typeof setTimeout === 'function' ? function (f, ms) { return setTimeout(f, ms); } : null);
+      var clearT = deps.clearTimeout || (typeof clearTimeout === 'function' ? function (id) { clearTimeout(id); } : function () {});
+      var views = new Map();      // player-facing media playlist URL -> m3u8 sequence state
+
+      function viewFor(url) {
+        var v = views.get(url);
+        if (!v) {
+          v = M.newSequenceState();
+          views.set(url, v);
+          bound(views, cfg.maxTrackedPlaylists);
+        }
+        return v;
+      }
+
       function tryBackups(c, target) {
         var order = backupOrder(c);
         var tries = 0;
@@ -158,7 +174,9 @@
         function attempt(type) {
           var cached = c.backupMasters[type];
           var masterP;
-          if (cached && now() - cached.at < cfg.backupMasterTtlMs) {
+          // The type being served keeps its master past the TTL, so a steady-state backup poll is
+          // one fetch (a failing media fetch drops it below).
+          if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) {
             masterP = Promise.resolve(cached);
           } else {
             masterP = Promise.resolve(deps.getToken(c.id, type)).then(function (tok) {
@@ -188,17 +206,70 @@
                 return null;
               }
               if (cfg.neverPinPlayerTypes.indexOf(type) === -1) c.pinned = type;
-              return { type: type, text: res.text, variant: v };
+              return { type: type, text: res.text, variant: v, matched: sameQuality(v, target) };
             });
           });
         }
         return next();
       }
 
+      function sameQuality(v, t) {
+        return !!v && !!t && v.width === t.width && v.height === t.height &&
+          Math.abs((v.frameRate || 0) - (t.frameRate || 0)) < 1 &&
+          M.codecFamily(v.codecs, cfg) === M.codecFamily(t.codecs, cfg);
+      }
+
+      /** One backup search per channel at a time; later polls join the one in flight. */
+      function search(c, target) {
+        if (c.search) return c.search.target === target.url ? c.search.promise : Promise.resolve(null);
+        var entry = { target: target.url, promise: null };
+        function done(r) { if (c.search === entry) c.search = null; return r || null; }
+        entry.promise = Promise.resolve().then(function () { return tryBackups(c, target); }).then(done, function (e) {
+          log.debug('backup search failed', e && e.message);
+          return done(null);
+        });
+        c.search = entry;
+        return entry.promise;
+      }
+
+      /** Resolve with p's value, or null after cfg.backupPollDeadlineMs (p keeps running). */
+      function withDeadline(p) {
+        var ms = cfg.backupPollDeadlineMs;
+        if (!(ms > 0) || !setT) return p;
+        return new Promise(function (resolve) {
+          var settled = false;
+          var id = setT(function () {
+            if (settled) return;
+            settled = true;
+            log.debug('backup search over the poll deadline: serving stripped, search continues');
+            resolve(null);
+          }, ms);
+          function finish(r) {
+            if (settled) return;
+            settled = true;
+            resolve(r);
+            try { clearT(id); } catch (e) { /* the answer is already out */ }
+          }
+          p.then(finish, function () { finish(null); });
+        });
+      }
+
       function endBreak(c) {
-        emit('ad-end', { channel: c.id, midroll: c.midroll, outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none') });
+        emit('ad-end', {
+          channel: c.id, midroll: c.midroll,
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none'),
+          // Every backup served in this break matched native quality and nothing was stripped:
+          // recovery prefers soft actions (research-2026-11-13 §4 item 5).
+          matched: !!c.flags.backup && !c.flags.unmatched && !c.flags.stripped
+        });
         c.inBreak = false;
         c.flags = {};
+      }
+
+      function isBackup(serving) { return String(serving).indexOf('backup:') === 0; }
+
+      function canSwap(c) {
+        return c.kind === 'live' && !degraded[c.id] && !!c.masterUrl && settings().playerTypes.length > 0;
       }
 
       /** Called with a media playlist; resolves to the text to give the player. Never rejects. */
@@ -215,42 +286,104 @@
           }
           c = channels.get(info.key);
           if (!c) return Promise.resolve(text);
-          if (!ads) {
-            if (c.inBreak) endBreak(c);
-            setServing(c, 'native');
-            c.lastClean = text;
-            c.lastCleanAt = now();
-            return Promise.resolve(text);
-          }
-          if (!c.inBreak) {
-            c.inBreak = true;
-            c.midroll = M.isMidroll(text, cfg);
-            c.flags = {};
-            emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
-          }
-          var stripped = M.stripAds(text, cfg);
-          rememberAdSegments(stripped.removedUrls);
-          var canSwap = c.kind === 'live' && !degraded[c.id] && c.masterUrl && settings().playerTypes.length > 0;
-          var backupP = canSwap ? tryBackups(c, info.variant) : Promise.resolve(null);
-          return backupP.then(function (b) {
-            if (b) {
-              if (!c.flags.backup) {
-                c.flags.backup = true;
-                emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution });
-              }
-              setServing(c, 'backup:' + b.type);
-              return b.text;
-            }
-            return serveStripped(c, text, stripped);
-          }).catch(function (e) {
+          var ch = c;
+          var planP = plan(ch, info, text, ads).then(null, function (e) {
             log.warn('backup search failed, stripping', e && e.message);
-            return serveStripped(c, text, stripped);
+            return { kind: ads ? 'stripped' : 'native', stripped: ads ? M.stripAds(text, cfg) : null };
           });
+          // Answers leave in request order, so an older slow answer never overtakes a newer
+          // one, and state changes (switch events, numbering) happen in that order too.
+          var prev = ch.tail || Promise.resolve();
+          var out = Promise.all([prev, planP]).then(function (r) {
+            return finalize(ch, url, text, r[1]);
+          }).then(null, function (e) {
+            log.warn('media finalize failed, passing through', e && e.message);
+            emit('failure', { channel: ch.id, where: 'media', message: String(e && e.message) });
+            return text;
+          });
+          ch.tail = out.then(function () {}, function () {});
+          return out;
         } catch (e) {
           log.warn('media processing failed, passing through', e && e.message);
           emit('failure', { channel: c && c.id, where: 'media', message: String(e && e.message) });
           return Promise.resolve(text);
         }
+      }
+
+      /** Decide what to serve (may wait for the backup search, bounded by the poll deadline). */
+      function plan(c, info, text, ads) {
+        if (!ads) {
+          c.cleanStreak = (c.cleanStreak || 0) + 1;
+          if (isBackup(c.serving) && c.cleanStreak < cfg.nativeSwitchBackPolls && canSwap(c)) {
+            // Native looks clean again: stay on the backup for one more poll (debounce).
+            return withDeadline(search(c, info.variant)).then(function (b) {
+              return b ? { kind: 'backup', b: b } : { kind: 'native' };
+            });
+          }
+          return Promise.resolve({ kind: 'native' });
+        }
+        c.cleanStreak = 0;
+        if (!c.inBreak) {
+          c.inBreak = true;
+          c.midroll = M.isMidroll(text, cfg);
+          c.flags = {};
+          emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
+        }
+        var stripped = M.stripAds(text, cfg);
+        rememberAdSegments(stripped.removedUrls);
+        if (!canSwap(c)) return Promise.resolve({ kind: 'stripped', stripped: stripped });
+        return withDeadline(search(c, info.variant)).then(function (b) {
+          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped, missed: true };
+        });
+      }
+
+      function sequenced(c, url, original, served, sourceKey) {
+        if (c.kind !== 'live' || !M.isLivePlaylist(served)) return served;
+        var view = viewFor(url);
+        if (served === null) {
+          if (!view.active) return original;
+        } else if (!view.active && served === original && sourceKey === 'native') {
+          view.passthrough = original; // untouched: the player keeps Twitch's own numbering
+          return original;
+        }
+        var r = M.resequence(view, served, sourceKey, cfg.sequencer);
+        if (r.repeat) {
+          var t = now();
+          if (!c.lastRepeatAt || t - c.lastRepeatAt >= cfg.repeatEventMinIntervalMs) {
+            c.lastRepeatAt = t;
+            emit('segment-repeat', { channel: c.id });
+          }
+        }
+        return r.text;
+      }
+
+      /** Apply a plan (in request order) and build the answer. */
+      function finalize(c, url, original, pl) {
+        if (pl.kind === 'native') {
+          if (c.inBreak) endBreak(c);
+          setServing(c, 'native');
+          c.lastClean = original;
+          c.lastCleanAt = now();
+          return sequenced(c, url, original, original, 'native');
+        }
+        if (pl.kind === 'backup') {
+          var b = pl.b;
+          if (c.inBreak && !c.flags.backup) {
+            c.flags.backup = true;
+            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution, matched: b.matched });
+          }
+          if (c.inBreak && !b.matched) c.flags.unmatched = true;
+          c.lastBackupAt = now();
+          setServing(c, 'backup:' + b.type, b.matched);
+          var key = 'backup:' + b.type + ':' + (b.variant.resolution || 'audio') + ':' + (b.variant.frameRate || 0) + ':' + (b.variant.codecs || '');
+          return sequenced(c, url, original, b.text, key);
+        }
+        // Stripped. A backup was being served and only this poll missed it: hold briefly.
+        if (pl.missed && isBackup(c.serving) && now() - (c.lastBackupAt || 0) < cfg.backupHoldMs) {
+          var view = views.get(url);
+          if (view && view.active) return sequenced(c, url, original, null, view.lastSource);
+        }
+        return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
       function serveStripped(c, original, stripped) {

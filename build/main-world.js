@@ -157,15 +157,56 @@
     maxBackupTypesPerPoll: 5,        // max playerTypes tried for one playlist poll
     playerTypeLockoutMs: 5000,       // a failed type is skipped for this long (R: 5 s, §4.1)
     backupMasterTtlMs: 60000,        // cached backup master per type
-    lastCleanMaxAgeMs: 20000,        // last clean playlist may be served this long when stripping empties it
+    lastCleanMaxAgeMs: 6000,         // last clean playlist may be served this long when stripping empties it
+                                     // (was 20 s: the player saw no new segments for that long)
+    // One media-playlist poll waits at most this long for the backup search; then the stripped
+    // playlist is served and the search goes on in the background (one per channel). The
+    // player's buffer must not drain while we wait. Our choice (Twitch polls about every 2 s).
+    backupPollDeadlineMs: 1800,
+    // Clean native polls in a row needed before leaving a backup (debounces native<->backup flapping).
+    nativeSwitchBackPolls: 2,
+    // While a backup is being served and one poll's backup search fails or times out, keep
+    // serving what the player already has (no new segments) this long before falling back to
+    // the stripped native playlist, so one slow poll does not flip the source twice.
+    backupHoldMs: 4000,
+    // At most one 'segment-repeat' event per channel per this interval (repeat detector).
+    repeatEventMinIntervalMs: 20000,
+    // Player-facing numbering of rewritten live media playlists (m3u8.resequence). Segments
+    // are identified by their live number (#EXT-X-TWITCH-LIVE-SEQUENCE + index, docs/
+    // research-2026-11-13.md C1/F1) where known, else by URL, and keep the number they were
+    // first given; new segments get the next number, so MEDIA-SEQUENCE / DISCONTINUITY-SEQUENCE
+    // stay continuous and monotonic across native, stripped and backup playlists.
+    sequencer: {
+      maxWindow: 30,                 // segments remembered for re-serving
+      minSegments: 3,                // a served playlist lists at least this many (if known)
+      maxSeen: 400,                  // segment identities remembered
+      overlapToleranceMs: 250,       // no live number: a new segment ending this close to what was given is a repeat (skipped)
+      gapToleranceMs: 1500,          // a date-time jump bigger than this gets a DISCONTINUITY
+      repeatToleranceMs: 500         // an appended segment starting this far before the given end = repeat (event)
+    },
     adSegmentCacheTtlMs: 120000,     // ad segment URLs remembered (P/R: 120 s, §2.3)
     maxTrackedPlaylists: 200,        // memory bound for playlist/variant maps
 
     // Recovery (page). research-technique.md §5.
     recovery: {
-      watchWindowMs: 20000,          // after a playlist switch, watch the video this long
+      watchWindowMs: 20000,          // after a playlist switch, watch the video this long (extended by re-arms)
       checkIntervalMs: 1000,         // sample interval while watching (no timer otherwise)
-      stallThresholdMs: 4000,        // currentTime not advancing this long = stalled
+      stallThresholdMs: 3000,        // playhead not advancing for 3 ticks = stalled (research-2026-11-13 F9)
+      pausedStallMs: 2000,           // paused, not by the user, this long = stalled -> play()
+      userGestureWindowMs: 1500,     // a pause this soon after a click/key on the player is the user's
+      minKickIntervalMs: 8000,       // at least this long between two soft actions (research-2026-11-13 F6)
+      maxSoftKicks: 2,               // soft actions per watch (research-2026-11-13 §4 item 4: max 2 per break)
+      maxKicksPerWindow: 6,          // soft actions overall ...
+      kickWindowMs: 120000,          // ... per 2 minutes
+      drainingBufferSec: 0.5,        // frozen with less than this buffered ahead -> pause/play nudge (F6)
+      gapToleranceSec: 0.25,         // buffered ranges closer than this count as continuous
+      gapSeekOffsetSec: 0.05,        // seek to the start of the next range + this (F9)
+      hardReloadAfterMs: 15000,      // a stall must last this long after the first soft action before a hard reload
+      reloadCooldownMs: 15000,       // no hard reload within this long of the previous one
+      giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
+      healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
+      rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
+      repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
       maxReloadsPerWindow: 3,        // hard reloads per channel ...
       reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only
       preserveWindowMs: 5000,        // localStorage values are pinned this long around a reload
@@ -181,6 +222,11 @@
 
     // Tiny valid responses served for ad segment fetches (research-technique.md §3 item 4(a)).
     // .ts: one MPEG-TS null packet (188 bytes, PID 0x1FFF). Other: a 40-byte MP4 'ftyp' box.
+    // Only a fallback: ad segments never appear in playlists we serve, so the player should not
+    // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
+    // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
+    // demuxers drop null packets and the recovery watch seeks over the resulting hole. See
+    // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',
 
@@ -577,7 +623,8 @@
      *  - #EXT-X-DISCONTINUITY-SEQUENCE is raised by the discontinuities dropped with leading
      *    removed segments; a single #EXT-X-DISCONTINUITY is put before a kept segment that
      *    follows removed ones (timestamps jump there). HLS cannot express gaps, so numbering
-     *    after a middle gap is best-effort.
+     *    after a middle gap is only right within this one playlist: live playlists the player
+     *    sees go through resequence(), which keeps numbers stable across polls.
      */
     function stripAds(text, cfg) {
       var src = String(text || '');
@@ -670,6 +717,184 @@
         removedUrls: removedUrls,
         prefetchRemoved: prefetchRemoved
       };
+    }
+
+    function parseIntTag(line) {
+      var n = parseInt(tagValue(line), 10);
+      return isNaN(n) ? null : n;
+    }
+
+    /**
+     * Parse a media playlist into { header, segs, tail, mediaSeq, discSeq, liveSeq, targetDuration,
+     * endlist }. header: tags before the first segment, without the numbering tags and
+     * TARGETDURATION. segs: { url, tags (without DISCONTINUITY), disc, pdt (ms|null), dur (s),
+     * live (live number|null) }. tail: tags after the last URI (prefetch etc.).
+     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first segment; the following
+     * ones count up until the first DISCONTINUITY after it (past that, unknown).
+     */
+    function parseMedia(text) {
+      var lines = splitLines(text || '');
+      var r = { header: [], segs: [], tail: [], mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
+      var pending = [];
+      var started = false;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line === '') continue;
+        if (line.charAt(0) === '#') {
+          if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) { r.mediaSeq = parseIntTag(line) || 0; continue; }
+          if (line.indexOf('#EXT-X-DISCONTINUITY-SEQUENCE:') === 0) { r.discSeq = parseIntTag(line) || 0; continue; }
+          if (line.indexOf('#EXT-X-TWITCH-LIVE-SEQUENCE:') === 0) { r.liveSeq = parseIntTag(line); continue; }
+          if (line.indexOf('#EXT-X-TARGETDURATION:') === 0) { r.targetDuration = parseFloat(tagValue(line)) || 0; continue; }
+          if (line.indexOf('#EXT-X-ENDLIST') === 0) { r.endlist = true; continue; }
+          if (isSegmentTag(line)) { started = true; pending.push(line); continue; }
+          if (!started) r.header.push(line); else pending.push(line);
+          continue;
+        }
+        var seg = { url: line, tags: [], disc: false, pdt: null, dur: 0, live: null };
+        for (var p = 0; p < pending.length; p++) {
+          var t = pending[p];
+          if (t === '#EXT-X-DISCONTINUITY') { seg.disc = true; continue; }
+          if (t.indexOf('#EXTINF') === 0) seg.dur = parseFloat(tagValue(t)) || 0;
+          if (t.indexOf('#EXT-X-PROGRAM-DATE-TIME:') === 0) {
+            var ms = Date.parse(tagValue(t));
+            if (!isNaN(ms)) seg.pdt = ms;
+          }
+          seg.tags.push(t);
+        }
+        r.segs.push(seg);
+        pending = [];
+        started = true;
+      }
+      for (var q = 0; q < pending.length; q++) {
+        if (pending[q].indexOf('#EXTINF') !== 0 && pending[q] !== '#EXT-X-DISCONTINUITY') r.tail.push(pending[q]);
+      }
+      if (r.liveSeq !== null) {
+        for (var k = 0; k < r.segs.length; k++) {
+          if (k > 0 && r.segs[k].disc) break;
+          r.segs[k].live = r.liveSeq + k;
+        }
+      }
+      return r;
+    }
+
+    /** Per player-facing playlist state for resequence(). */
+    function newSequenceState() {
+      return {
+        active: false, win: [], seen: new Map(), next: 0, baseDn: 0,
+        lastEnd: null, lastLive: null, lastSource: null, lastHeader: null, lastTarget: 0, lastLiveSeq: null, lastCount: 0,
+        passthrough: null
+      };
+    }
+
+    function segKey(s) { return s.live !== null && s.live !== undefined ? 'L' + s.live : 'U' + s.url; }
+
+    /**
+     * Give the player a continuous, stable view of a live media playlist across polls and
+     * sources (native, stripped native, backup). docs/research-2026-11-13.md C1/C3.
+     *  - A segment keeps the number it was first given. It is identified by its live number
+     *    where known (same live segment = same identity in native and backup playlists), else by
+     *    URL. A segment whose live number is not past the newest one given, or (no live numbers)
+     *    which ends before what was given, is a segment the player already has: it is not listed
+     *    again under a new number.
+     *  - New segments get the next number, so MEDIA-SEQUENCE never jumps or goes back.
+     *  - #EXT-X-DISCONTINUITY before the first new segment after a source change, a live-number
+     *    gap, a date-time gap, or where the source had one; DISCONTINUITY-SEQUENCE counts the
+     *    ones that slid out, so it is monotonic too.
+     *  - The output lists the newest max(source segments, minSegments) segments given (so an
+     *    all-stripped poll repeats the newest known ones instead of an empty playlist).
+     * state.passthrough: the last playlist served untouched before the first rewrite; its
+     * numbering seeds the state. text null = no new source this poll (hold).
+     * Returns { text, appended, repeat } (repeat: an appended segment overlaps what was given).
+     */
+    function resequence(st, text, sourceKey, opts) {
+      var o = opts || {};
+      var maxWindow = o.maxWindow || 30, minSegments = o.minSegments || 3, maxSeen = o.maxSeen || 400;
+      var overlapTol = o.overlapToleranceMs === undefined ? 250 : o.overlapToleranceMs;
+      var gapTol = o.gapToleranceMs === undefined ? 1500 : o.gapToleranceMs;
+      var repeatTol = o.repeatToleranceMs === undefined ? 500 : o.repeatToleranceMs;
+      var p = text === null || text === undefined ? null : parseMedia(text);
+
+      function remember(s, seq, dn, src) {
+        var e = { seq: seq, url: s.url, tags: s.tags, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
+        st.win.push(e);
+        st.seen.set(segKey(s), seq);
+        st.seen.set('U' + s.url, seq);
+        st.lastLive = s.live !== null && s.live !== undefined ? s.live : null;
+        if (s.pdt !== null) st.lastEnd = s.pdt + s.dur * 1000;
+        else if (st.lastEnd !== null) st.lastEnd += s.dur * 1000;
+        st.lastSource = src;
+      }
+
+      if (!st.active) {
+        st.active = true;
+        var seed = st.passthrough ? parseMedia(st.passthrough) : null;
+        st.passthrough = null;
+        if (seed && seed.segs.length) {
+          var dn0 = seed.discSeq;
+          for (var a = 0; a < seed.segs.length; a++) {
+            if (a > 0 && seed.segs[a].disc) dn0++;
+            remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
+          }
+          st.next = seed.mediaSeq + seed.segs.length;
+          st.lastHeader = seed.header; st.lastTarget = seed.targetDuration; st.lastLiveSeq = seed.liveSeq;
+        } else if (p) {
+          st.next = p.mediaSeq;
+          st.baseDn = p.discSeq;
+        }
+      }
+      if (p) { st.lastHeader = p.header; st.lastTarget = p.targetDuration; st.lastLiveSeq = p.liveSeq; }
+
+      var segs = p ? p.segs : [];
+      var appended = 0, repeat = false;
+      for (var i = 0; i < segs.length; i++) {
+        var s = segs[i];
+        if (st.seen.has(segKey(s)) || st.seen.has('U' + s.url)) continue;
+        var hasLive = s.live !== null && st.lastLive !== null;
+        if (hasLive) {
+          if (s.live <= st.lastLive) continue; // the player already has this live segment
+        } else if (s.pdt !== null && st.lastEnd !== null && s.pdt + s.dur * 1000 <= st.lastEnd + overlapTol) {
+          continue;
+        }
+        if (!hasLive && s.pdt !== null && st.lastEnd !== null && st.lastEnd - s.pdt > repeatTol) repeat = true;
+        var last = st.win.length ? st.win[st.win.length - 1] : null;
+        var disc = !!last && (s.disc || sourceKey !== st.lastSource ||
+          (hasLive && s.live > st.lastLive + 1) ||
+          (s.pdt !== null && st.lastEnd !== null && s.pdt - st.lastEnd > gapTol));
+        var dn = last ? last.dn + (disc ? 1 : 0) : st.baseDn;
+        remember(s, st.next++, dn, sourceKey);
+        appended++;
+      }
+      while (st.win.length > maxWindow) st.win.shift();
+      while (st.seen.size > maxSeen) st.seen.delete(st.seen.keys().next().value);
+
+      // Hold (no source): list what was listed last time.
+      var out = st.win.slice(-Math.max(p ? segs.length : (st.lastCount || 0), minSegments));
+      st.lastCount = out.length;
+      var header = (p ? p.header : st.lastHeader) || [];
+      var lines = [];
+      var td = p ? p.targetDuration : st.lastTarget;
+      for (var d = 0; d < out.length; d++) td = Math.max(td, Math.ceil(out[d].dur));
+      var rest = header.filter(function (l) { return l.indexOf('#EXTM3U') !== 0; });
+      var vi = -1;
+      for (var h = 0; h < rest.length; h++) if (rest[h].indexOf('#EXT-X-VERSION') === 0) { vi = h; break; }
+      lines.push('#EXTM3U');
+      var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
+      numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
+      numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
+      var liveSeq = out.length && out[0].live !== null ? out[0].live : st.lastLiveSeq;
+      if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
+      rest.splice(vi + 1, 0, numbering.join('\n'));
+      lines.push(rest.join('\n'));
+      for (var j = 0; j < out.length; j++) {
+        if (j > 0 && out[j].dn !== out[j - 1].dn) lines.push('#EXT-X-DISCONTINUITY');
+        for (var t = 0; t < out[j].tags.length; t++) lines.push(out[j].tags[t]);
+        lines.push(out[j].url);
+      }
+      // Prefetch hints belong to the source's newest segment: only when that is our newest too.
+      if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+        for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
+      }
+      return { text: lines.filter(function (l) { return l !== ''; }).join('\n') + '\n', appended: appended, repeat: repeat };
     }
 
     /** Count media segments (URI lines) in a media playlist. */
@@ -765,7 +990,9 @@
         var area = Math.abs(v.width * v.height - tArea);
         var fps = Math.abs((v.frameRate || 0) - tFps);
         var fam = codecFamily(v.codecs, cfg) === tFam ? 0 : 1;
-        return [exact, exact ? area : 0, fps, fam, -(v.bandwidth || 0)];
+        // Same CODECS string (profile/level and audio codec) avoids a decoder reconfiguration.
+        var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
+        return [exact, exact ? area : 0, fps, fam, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
       for (var i = 0; i < video.length; i++) {
@@ -893,6 +1120,9 @@
       isAdSegmentUrl: isAdSegmentUrl,
       isLivePlaylist: isLivePlaylist,
       stripAds: stripAds,
+      parseMedia: parseMedia,
+      newSequenceState: newSequenceState,
+      resequence: resequence,
       countSegments: countSegments,
       codecFamily: codecFamily,
       parseMaster: parseMaster,
@@ -1116,11 +1346,13 @@
         return c;
       }
 
-      function setServing(c, to) {
+      function setServing(c, to, matched) {
         if (c.serving === to) return;
         var from = c.serving;
         c.serving = to;
-        emit('playlist-switch', { channel: c.id, from: from, to: to });
+        var d = { channel: c.id, from: from, to: to };
+        if (matched !== undefined) d.matched = matched; // backup of the native quality?
+        emit('playlist-switch', d);
       }
 
       function rememberAdSegments(urls) {
@@ -1186,6 +1418,20 @@
         return order;
       }
 
+      var setT = deps.setTimeout || (typeof setTimeout === 'function' ? function (f, ms) { return setTimeout(f, ms); } : null);
+      var clearT = deps.clearTimeout || (typeof clearTimeout === 'function' ? function (id) { clearTimeout(id); } : function () {});
+      var views = new Map();      // player-facing media playlist URL -> m3u8 sequence state
+
+      function viewFor(url) {
+        var v = views.get(url);
+        if (!v) {
+          v = M.newSequenceState();
+          views.set(url, v);
+          bound(views, cfg.maxTrackedPlaylists);
+        }
+        return v;
+      }
+
       function tryBackups(c, target) {
         var order = backupOrder(c);
         var tries = 0;
@@ -1205,7 +1451,9 @@
         function attempt(type) {
           var cached = c.backupMasters[type];
           var masterP;
-          if (cached && now() - cached.at < cfg.backupMasterTtlMs) {
+          // The type being served keeps its master past the TTL, so a steady-state backup poll is
+          // one fetch (a failing media fetch drops it below).
+          if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) {
             masterP = Promise.resolve(cached);
           } else {
             masterP = Promise.resolve(deps.getToken(c.id, type)).then(function (tok) {
@@ -1235,17 +1483,70 @@
                 return null;
               }
               if (cfg.neverPinPlayerTypes.indexOf(type) === -1) c.pinned = type;
-              return { type: type, text: res.text, variant: v };
+              return { type: type, text: res.text, variant: v, matched: sameQuality(v, target) };
             });
           });
         }
         return next();
       }
 
+      function sameQuality(v, t) {
+        return !!v && !!t && v.width === t.width && v.height === t.height &&
+          Math.abs((v.frameRate || 0) - (t.frameRate || 0)) < 1 &&
+          M.codecFamily(v.codecs, cfg) === M.codecFamily(t.codecs, cfg);
+      }
+
+      /** One backup search per channel at a time; later polls join the one in flight. */
+      function search(c, target) {
+        if (c.search) return c.search.target === target.url ? c.search.promise : Promise.resolve(null);
+        var entry = { target: target.url, promise: null };
+        function done(r) { if (c.search === entry) c.search = null; return r || null; }
+        entry.promise = Promise.resolve().then(function () { return tryBackups(c, target); }).then(done, function (e) {
+          log.debug('backup search failed', e && e.message);
+          return done(null);
+        });
+        c.search = entry;
+        return entry.promise;
+      }
+
+      /** Resolve with p's value, or null after cfg.backupPollDeadlineMs (p keeps running). */
+      function withDeadline(p) {
+        var ms = cfg.backupPollDeadlineMs;
+        if (!(ms > 0) || !setT) return p;
+        return new Promise(function (resolve) {
+          var settled = false;
+          var id = setT(function () {
+            if (settled) return;
+            settled = true;
+            log.debug('backup search over the poll deadline: serving stripped, search continues');
+            resolve(null);
+          }, ms);
+          function finish(r) {
+            if (settled) return;
+            settled = true;
+            resolve(r);
+            try { clearT(id); } catch (e) { /* the answer is already out */ }
+          }
+          p.then(finish, function () { finish(null); });
+        });
+      }
+
       function endBreak(c) {
-        emit('ad-end', { channel: c.id, midroll: c.midroll, outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none') });
+        emit('ad-end', {
+          channel: c.id, midroll: c.midroll,
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none'),
+          // Every backup served in this break matched native quality and nothing was stripped:
+          // recovery prefers soft actions (research-2026-11-13 §4 item 5).
+          matched: !!c.flags.backup && !c.flags.unmatched && !c.flags.stripped
+        });
         c.inBreak = false;
         c.flags = {};
+      }
+
+      function isBackup(serving) { return String(serving).indexOf('backup:') === 0; }
+
+      function canSwap(c) {
+        return c.kind === 'live' && !degraded[c.id] && !!c.masterUrl && settings().playerTypes.length > 0;
       }
 
       /** Called with a media playlist; resolves to the text to give the player. Never rejects. */
@@ -1262,42 +1563,104 @@
           }
           c = channels.get(info.key);
           if (!c) return Promise.resolve(text);
-          if (!ads) {
-            if (c.inBreak) endBreak(c);
-            setServing(c, 'native');
-            c.lastClean = text;
-            c.lastCleanAt = now();
-            return Promise.resolve(text);
-          }
-          if (!c.inBreak) {
-            c.inBreak = true;
-            c.midroll = M.isMidroll(text, cfg);
-            c.flags = {};
-            emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
-          }
-          var stripped = M.stripAds(text, cfg);
-          rememberAdSegments(stripped.removedUrls);
-          var canSwap = c.kind === 'live' && !degraded[c.id] && c.masterUrl && settings().playerTypes.length > 0;
-          var backupP = canSwap ? tryBackups(c, info.variant) : Promise.resolve(null);
-          return backupP.then(function (b) {
-            if (b) {
-              if (!c.flags.backup) {
-                c.flags.backup = true;
-                emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution });
-              }
-              setServing(c, 'backup:' + b.type);
-              return b.text;
-            }
-            return serveStripped(c, text, stripped);
-          }).catch(function (e) {
+          var ch = c;
+          var planP = plan(ch, info, text, ads).then(null, function (e) {
             log.warn('backup search failed, stripping', e && e.message);
-            return serveStripped(c, text, stripped);
+            return { kind: ads ? 'stripped' : 'native', stripped: ads ? M.stripAds(text, cfg) : null };
           });
+          // Answers leave in request order, so an older slow answer never overtakes a newer
+          // one, and state changes (switch events, numbering) happen in that order too.
+          var prev = ch.tail || Promise.resolve();
+          var out = Promise.all([prev, planP]).then(function (r) {
+            return finalize(ch, url, text, r[1]);
+          }).then(null, function (e) {
+            log.warn('media finalize failed, passing through', e && e.message);
+            emit('failure', { channel: ch.id, where: 'media', message: String(e && e.message) });
+            return text;
+          });
+          ch.tail = out.then(function () {}, function () {});
+          return out;
         } catch (e) {
           log.warn('media processing failed, passing through', e && e.message);
           emit('failure', { channel: c && c.id, where: 'media', message: String(e && e.message) });
           return Promise.resolve(text);
         }
+      }
+
+      /** Decide what to serve (may wait for the backup search, bounded by the poll deadline). */
+      function plan(c, info, text, ads) {
+        if (!ads) {
+          c.cleanStreak = (c.cleanStreak || 0) + 1;
+          if (isBackup(c.serving) && c.cleanStreak < cfg.nativeSwitchBackPolls && canSwap(c)) {
+            // Native looks clean again: stay on the backup for one more poll (debounce).
+            return withDeadline(search(c, info.variant)).then(function (b) {
+              return b ? { kind: 'backup', b: b } : { kind: 'native' };
+            });
+          }
+          return Promise.resolve({ kind: 'native' });
+        }
+        c.cleanStreak = 0;
+        if (!c.inBreak) {
+          c.inBreak = true;
+          c.midroll = M.isMidroll(text, cfg);
+          c.flags = {};
+          emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
+        }
+        var stripped = M.stripAds(text, cfg);
+        rememberAdSegments(stripped.removedUrls);
+        if (!canSwap(c)) return Promise.resolve({ kind: 'stripped', stripped: stripped });
+        return withDeadline(search(c, info.variant)).then(function (b) {
+          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped, missed: true };
+        });
+      }
+
+      function sequenced(c, url, original, served, sourceKey) {
+        if (c.kind !== 'live' || !M.isLivePlaylist(served)) return served;
+        var view = viewFor(url);
+        if (served === null) {
+          if (!view.active) return original;
+        } else if (!view.active && served === original && sourceKey === 'native') {
+          view.passthrough = original; // untouched: the player keeps Twitch's own numbering
+          return original;
+        }
+        var r = M.resequence(view, served, sourceKey, cfg.sequencer);
+        if (r.repeat) {
+          var t = now();
+          if (!c.lastRepeatAt || t - c.lastRepeatAt >= cfg.repeatEventMinIntervalMs) {
+            c.lastRepeatAt = t;
+            emit('segment-repeat', { channel: c.id });
+          }
+        }
+        return r.text;
+      }
+
+      /** Apply a plan (in request order) and build the answer. */
+      function finalize(c, url, original, pl) {
+        if (pl.kind === 'native') {
+          if (c.inBreak) endBreak(c);
+          setServing(c, 'native');
+          c.lastClean = original;
+          c.lastCleanAt = now();
+          return sequenced(c, url, original, original, 'native');
+        }
+        if (pl.kind === 'backup') {
+          var b = pl.b;
+          if (c.inBreak && !c.flags.backup) {
+            c.flags.backup = true;
+            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution, matched: b.matched });
+          }
+          if (c.inBreak && !b.matched) c.flags.unmatched = true;
+          c.lastBackupAt = now();
+          setServing(c, 'backup:' + b.type, b.matched);
+          var key = 'backup:' + b.type + ':' + (b.variant.resolution || 'audio') + ':' + (b.variant.frameRate || 0) + ':' + (b.variant.codecs || '');
+          return sequenced(c, url, original, b.text, key);
+        }
+        // Stripped. A backup was being served and only this poll missed it: hold briefly.
+        if (pl.missed && isBackup(c.serving) && now() - (c.lastBackupAt || 0) < cfg.backupHoldMs) {
+          var view = views.get(url);
+          if (view && view.active) return sequenced(c, url, original, null, view.lastSource);
+        }
+        return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
       function serveStripped(c, original, stripped) {
@@ -1610,18 +1973,29 @@
 
 // ---- src/page/recovery.js ----
 /*
- * Player recovery / health (MAIN world). docs/research-technique.md §5.
+ * Player recovery / health (MAIN world). docs/research-technique.md §5 and
+ * docs/research-2026-11-13.md §2 (F2, F6, F9) / §4 items 2, 4, 5.
  *
- * After every playlist switch (native <-> backup <-> stripped) and every ad end, watch the main
- * <video> for cfg.recovery.watchWindowMs. If currentTime does not advance for
- * stallThresholdMs while it should be playing:
- *   step 1: pause/play ("soft kick")
- *   step 2: hard player reload through the React fiber setSrc approach, keeping the
- *           localStorage quality/volume/muted/lowLatency values across the reload
- *   then give up for this switch (no loops).
- * Hard reloads are rate-limited per channel (maxReloadsPerWindow per reloadWindowMs). Over
- * the limit, the channel is switched to strip-only mode for the rest of the page session
- * (onDegrade) and no further reloads happen there.
+ * A watch is armed after every playlist switch (native <-> backup <-> stripped), every ad end,
+ * and (while a backup/stripped playlist is served, and for rearmAfterNativeMs after returning
+ * to native) on the main <video>'s waiting/stalled events and on pauses nobody asked for.
+ * While armed, once per checkIntervalMs, and only while the tab is visible:
+ *   - paused, and the pause did not follow a click/key on the player  -> play()
+ *   - playhead stuck stallThresholdMs (3 ticks), not enough data (readyState < 3) and a hole
+ *     in the buffered ranges ahead                                     -> seek over the hole
+ *   - playhead stuck and less than drainingBufferSec buffered ahead   -> pause/play nudge
+ *   at most maxSoftKicks per watch, minKickIntervalMs apart, maxKicksPerWindow overall;
+ *   - still stuck hardReloadAfterMs after the first soft action       -> one hard player reload
+ *     (React fiber setSrc, localStorage quality/volume/muted/lowLatency kept), not within
+ *     reloadCooldownMs of the previous one, and not for a watch armed only by a break that
+ *     stripped nothing / used a backup of the native quality (soft recovery only);
+ *   - then the watch ends with giveUpCooldownMs of no automatic actions (no loops).
+ * play() rejected with NotAllowedError (no sound allowed): retried once muted, and the sound is
+ * restored at the next click/key unless someone unmuted or the viewer had muted already.
+ * 'segment-repeat' from the worker (the player was handed a segment it already had): one
+ * pause/play, at most once per repeatRestartMinIntervalMs.
+ * Hard reloads are rate-limited per channel (maxReloadsPerWindow per reloadWindowMs). Over the
+ * limit, the channel is switched to strip-only mode for the page session (onDegrade).
  * There is no timer unless a watch is active. Every step is wrapped in try/catch.
  * opts.isEnabled() false (extension switched off): events are ignored and a running watch is
  * dropped on its next tick, so nothing touches the player.
@@ -1709,6 +2083,21 @@
     var degraded = {};
     var watch = null;
     var timer = null;
+    var lastGestureAt = -Infinity;
+    var ownPauseAt = -Infinity;
+    var pauses = typeof WeakMap === 'function' ? new WeakMap() : null; // video -> { user }
+    var serving = 'native';
+    var nativeSince = -Infinity;
+    var lastChannel = '';
+    var kickTimes = [];
+    var cooldownUntil = -Infinity;
+    var lastReloadAt = -Infinity;
+    var lastRepeatKickAt = -Infinity;
+    var mutedByUs = null; // { video, volume }: we muted to get play() allowed
+
+    function isMainVideo(v) {
+      return !!v && v.nodeName === 'VIDEO' && String(v.currentSrc || v.src || '').indexOf('blob:') === 0;
+    }
 
     function findVideo() {
       var vids = doc.querySelectorAll(cfg.player.videoSelector);
@@ -1722,20 +2111,115 @@
       return fallback;
     }
 
+    function visible() {
+      return !doc || doc.visibilityState === undefined || doc.visibilityState === 'visible';
+    }
+
+    /** A pause counts as the viewer's when it follows a click/key on the player (or is unknown). */
+    function userPaused(v) {
+      if (!v || !v.paused) return false;
+      var info = pauses ? pauses.get(v) : null;
+      return !info || info.user;
+    }
+
+    /** Waiting/stalled/unexpected pauses matter while a backup/stripped playlist is served and a bit after. */
+    function sensitive() {
+      return serving !== 'native' || now() - nativeSince < rc.rearmAfterNativeMs;
+    }
+
+    function onPlayer(e) {
+      var t = e && e.target;
+      if (e.type === 'keydown') {
+        if (!t) return true;
+        var tag = String(t.nodeName || '').toUpperCase();
+        return !(tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable); // typing in chat is not a player key
+      }
+      if (t && typeof t.closest === 'function') {
+        try { return !!t.closest(cfg.player.playerContainerSelector + ',video'); } catch (err) { return true; }
+      }
+      return true;
+    }
+
+    function restoreSound() {
+      if (!mutedByUs) return;
+      var m = mutedByUs;
+      mutedByUs = null;
+      try {
+        if (m.video.muted) {
+          m.video.muted = false;
+          if (typeof m.volume === 'number') m.video.volume = m.volume;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function onGesture(e) {
+      try {
+        if (!isEnabled() || (e && e.isTrusted === false)) return;
+        restoreSound(); // any real gesture allows sound again
+        if (onPlayer(e)) lastGestureAt = now();
+      } catch (err) { /* ignore */ }
+    }
+
+    function onMediaEvent(e) {
+      try {
+        var v = e && e.target;
+        if (!isEnabled() || !isMainVideo(v)) return;
+        var t = now();
+        if (e.type === 'pause') {
+          var own = t - ownPauseAt < 1000;
+          var user = !own && t - lastGestureAt <= rc.userGestureWindowMs;
+          if (pauses) pauses.set(v, { user: user });
+          if (!user && !own && sensitive()) arm(lastChannel, { hard: true });
+        } else if (e.type === 'play' || e.type === 'playing') {
+          if (pauses) pauses.delete(v);
+        } else if (e.type === 'waiting' || e.type === 'stalled') {
+          if (sensitive()) arm(lastChannel, { hard: true });
+        } else if (e.type === 'volumechange') {
+          if (mutedByUs && mutedByUs.video === v && !v.muted) mutedByUs = null; // unmuted by someone: done
+        }
+      } catch (err) { /* ignore */ }
+    }
+
+    if (doc && typeof doc.addEventListener === 'function') {
+      ['pointerdown', 'mousedown', 'keydown', 'touchstart'].forEach(function (type) {
+        doc.addEventListener(type, onGesture, true);
+      });
+      // Media events do not bubble, but a capturing listener on the document sees them.
+      ['pause', 'play', 'playing', 'waiting', 'stalled', 'volumechange'].forEach(function (type) {
+        doc.addEventListener(type, onMediaEvent, true);
+      });
+    }
+
     function disarm() {
       watch = null;
       if (timer !== null) { clearIv(timer); timer = null; }
     }
 
-    function arm(channel) {
+    /** Start a watch, or extend the running one (its counters are kept: no reset by re-arming). */
+    function arm(channel, o) {
       try {
+        var t = now();
+        if (t < cooldownUntil) return;
+        var hard = !o || o.hard !== false;
+        if (watch) {
+          watch.until = Math.max(watch.until, t + rc.watchWindowMs);
+          if (hard) watch.hard = true;
+          if (channel) watch.channel = channel;
+          return;
+        }
         var v = findVideo();
         watch = {
-          channel: channel || '',
-          until: now() + rc.watchWindowMs,
+          channel: channel || lastChannel || '',
+          until: t + rc.watchWindowMs,
           lastTime: v ? v.currentTime : -1,
-          lastAdvanceAt: now(),
-          step: 0
+          lastAdvanceAt: t,
+          healthySince: t,
+          stallSince: null,
+          firstSoftAt: null,
+          kicks: 0,
+          lastKickAt: -Infinity,
+          reloaded: false,
+          hard: hard
         };
         if (timer === null) timer = setIv(tick, rc.checkIntervalMs);
       } catch (e) {
@@ -1743,12 +2227,75 @@
       }
     }
 
-    function softKick(v) {
-      try {
-        v.pause();
-        var p = v.play();
-        if (p && typeof p.catch === 'function') p.catch(function () {});
-      } catch (e) { /* ignore */ }
+    function kicksAllowed(t) {
+      kickTimes = kickTimes.filter(function (x) { return t - x < rc.kickWindowMs; });
+      return kickTimes.length < rc.maxKicksPerWindow;
+    }
+
+    /** play() that copes with a rejection: NotAllowedError -> one muted retry (sound restored later). */
+    function safePlay(v) {
+      var p;
+      try { p = v.play(); } catch (e) { return; }
+      if (!p || typeof p.then !== 'function') return;
+      p.then(null, function (err) {
+        try {
+          if (!isEnabled() || !err || err.name !== 'NotAllowedError') return;
+          if (v.muted || mutedByUs) return; // muted already (maybe by the viewer): nothing more to try
+          mutedByUs = { video: v, volume: v.volume };
+          v.muted = true;
+          emit('stall-kick', { channel: lastChannel, action: 'muted-play' });
+          var p2 = v.play();
+          if (p2 && typeof p2.then === 'function') p2.then(null, function () { restoreSound(); });
+        } catch (e) { /* ignore */ }
+      });
+    }
+
+    function ahead(v) {
+      var b = v.buffered;
+      var ct = v.currentTime;
+      if (!b || !b.length) return 0;
+      for (var i = 0; i < b.length; i++) {
+        if (ct >= b.start(i) - rc.gapToleranceSec && ct < b.end(i)) return b.end(i) - ct;
+      }
+      return 0;
+    }
+
+    /** Where to seek to get over a hole in the buffered ranges, or null if there is none. */
+    function gapTarget(v) {
+      var b = v.buffered;
+      if (!b || !b.length) return null;
+      var ct = v.currentTime;
+      var tol = rc.gapToleranceSec;
+      for (var i = 0; i < b.length; i++) {
+        var s = b.start(i), e = b.end(i);
+        if (ct >= s - tol && ct < e - tol) return null; // data right here: no hole to skip
+        if (s > ct) return s + rc.gapSeekOffsetSec;     // first range ahead of the playhead
+      }
+      var lastEnd = b.end(b.length - 1);
+      // Playhead beyond everything buffered (timestamps went back after a switch): go back to the data.
+      if (ct > lastEnd + 1) return Math.max(b.start(b.length - 1), lastEnd - 1.5);
+      return null;
+    }
+
+    /** One soft action; returns its name. */
+    function softKick(v, reason) {
+      var action;
+      if (v.paused) {
+        action = 'play';
+        safePlay(v);
+      } else {
+        var target = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) ? gapTarget(v) : null;
+        if (target !== null) {
+          action = 'seek';
+          try { v.currentTime = target; } catch (e) { /* ignore */ }
+        } else {
+          action = 'nudge';
+          ownPauseAt = now();
+          try { v.pause(); } catch (e) { /* ignore */ }
+          safePlay(v);
+        }
+      }
+      return action;
     }
 
     function preserveLocalStorage() {
@@ -1780,20 +2327,20 @@
       }, rc.preserveWindowMs);
     }
 
-    function hardReload(channel) {
+    function hardReload(channel, v) {
       var ps = null;
       try { ps = finder(); } catch (e) { ps = null; }
       if (!ps || !ps.state) {
         emit('reload-failed', { channel: channel, reason: 'player state not found' });
         return false;
       }
-      try {
-        if (ps.player && typeof ps.player.isPaused === 'function' && ps.player.isPaused()) return false;
-      } catch (e) { /* ignore */ }
+      // Only the viewer's own pause stops a reload (the player pausing itself is what we fix).
+      if (userPaused(v)) return false;
       preserveLocalStorage();
       try {
         ps.state.setSrc({ isNewMediaPlayerInstance: true, refreshAccessToken: true });
         if (ps.player && typeof ps.player.play === 'function') ps.player.play();
+        lastReloadAt = now();
         emit('player-reload', { channel: channel, count: limiter.count(channel) });
         return true;
       } catch (e) {
@@ -1809,6 +2356,11 @@
       try { opts.onDegrade(channel); } catch (e) { /* ignore */ }
     }
 
+    function giveUp(t) {
+      cooldownUntil = t + rc.giveUpCooldownMs;
+      disarm();
+    }
+
     function tick() {
       try {
         if (!watch || !isEnabled()) { disarm(); return; }
@@ -1816,46 +2368,102 @@
         if (t > watch.until) { disarm(); return; }
         var v = findVideo();
         if (!v) return;
-        if (v.paused || v.ended) { watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; return; }
-        if (v.currentTime !== watch.lastTime) {
+        // Hidden tab: browsers stop drawing video; never act then (research-2026-11-13 C5).
+        if (!visible() || v.ended || userPaused(v)) {
+          watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; watch.stallSince = null;
+          return;
+        }
+        if (!v.paused && Math.abs(v.currentTime - watch.lastTime) > 0.1) {
           watch.lastTime = v.currentTime;
           watch.lastAdvanceAt = t;
+          watch.stallSince = null;
+          if (t - watch.healthySince >= rc.healthyResetMs) { watch.kicks = 0; watch.firstSoftAt = null; }
           return;
         }
-        if (t - watch.lastAdvanceAt < rc.stallThresholdMs) return;
-        // Stalled.
-        if (watch.step === 0) {
-          watch.step = 1;
-          watch.lastAdvanceAt = t;
-          log.debug('stall after playlist switch: pause/play');
-          softKick(v);
-          emit('stall-kick', { channel: watch.channel });
-          return;
+        watch.healthySince = t;
+        // Keep watching while frozen; the ladder below always ends in giveUp, so this is bounded.
+        watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
+        var reason = v.paused ? 'paused' : 'stall';
+        if (t - watch.lastAdvanceAt < (v.paused ? rc.pausedStallMs : rc.stallThresholdMs)) return;
+        if (watch.stallSince === null) watch.stallSince = t;
+        // Stalled: soft actions first.
+        if (watch.kicks < rc.maxSoftKicks && kicksAllowed(t)) {
+          if (t - watch.lastKickAt < rc.minKickIntervalMs) return;
+          var draining = ahead(v) < rc.drainingBufferSec;
+          var gap = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) && gapTarget(v) !== null;
+          if (reason === 'paused' || draining || gap) {
+            watch.kicks++;
+            watch.lastKickAt = t;
+            if (watch.firstSoftAt === null) watch.firstSoftAt = t;
+            kickTimes.push(t);
+            var action = softKick(v, reason);
+            log.debug('stall after playlist switch:', action);
+            emit('stall-kick', { channel: watch.channel, action: action });
+            return;
+          }
         }
-        if (watch.step === 1) {
+        // Soft actions used up (or none fits): the hard reload, if this watch may do one.
+        var since = watch.firstSoftAt !== null ? watch.firstSoftAt : watch.stallSince;
+        if (!watch.reloaded && watch.hard && t - since >= rc.hardReloadAfterMs) {
+          if (t - lastReloadAt < rc.reloadCooldownMs) return;
           var ch = watch.channel;
-          watch.step = 2;
+          watch.reloaded = true;
           watch.lastAdvanceAt = t;
-          if (degraded[ch]) { disarm(); return; }
+          watch.stallSince = null;
+          if (degraded[ch]) { giveUp(t); return; }
           if (limiter.allow(ch)) {
             log.debug('still stalled: player reload');
-            hardReload(ch);
+            hardReload(ch, v);
           } else {
             degrade(ch);
-            disarm();
+            giveUp(t);
           }
           return;
         }
-        disarm(); // step 2 done: give up for this switch
+        if (watch.reloaded || !watch.hard) {
+          // Nothing left to try for this watch.
+          if (t - since >= rc.hardReloadAfterMs) giveUp(t);
+        }
       } catch (e) {
         log.warn('recovery tick failed', e && e.message);
         disarm();
       }
     }
 
+    /** 'segment-repeat': the player was handed a segment it already had; restart it once. */
+    function repeatKick() {
+      var t = now();
+      if (t - lastRepeatKickAt < rc.repeatRestartMinIntervalMs || !visible()) return;
+      var v = findVideo();
+      if (!v || v.paused || v.ended) return;
+      lastRepeatKickAt = t;
+      ownPauseAt = t;
+      try { v.pause(); } catch (e) { /* ignore */ }
+      safePlay(v);
+      emit('stall-kick', { channel: lastChannel, action: 'repeat-restart' });
+    }
+
     function onEvent(name, data) {
-      if (!isEnabled()) return;
-      if (name === 'playlist-switch' || name === 'ad-end') arm(data && data.channel);
+      try {
+        if (!isEnabled()) return;
+        var d = data || {};
+        if (d.channel) lastChannel = d.channel;
+        if (name === 'playlist-switch') {
+          serving = d.to || 'native';
+          if (serving === 'native') nativeSince = now();
+          // Switching to the stripped playlist or to a backup of another quality may need a reload;
+          // the switch back to native is judged by the ad-end that comes with it.
+          arm(d.channel, { hard: serving === 'stripped' || (serving !== 'native' && d.matched === false) });
+        } else if (name === 'ad-end') {
+          // Prefer soft recovery when nothing was stripped or the backup matched native quality.
+          var soft = d.outcome === 'none' || (d.outcome === 'backup' && d.matched);
+          arm(d.channel, { hard: !soft });
+        } else if (name === 'segment-repeat') {
+          repeatKick();
+        }
+      } catch (e) {
+        log.warn('recovery event failed', e && e.message);
+      }
     }
 
     return {
