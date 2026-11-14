@@ -23,7 +23,7 @@ try {
 } catch (e) {
   console.warn('[TAS] autoconsent library not loaded', e && e.message);
 }
-importScripts('/src/shared/blocking.js', '/src/shared/filterlist.js', '/src/shared/lists.js', '/src/background/general.js',
+importScripts('/src/shared/blocking.js', '/src/shared/userfilters.js', '/src/shared/filterlist.js', '/src/shared/lists.js', '/src/background/general.js',
   '/src/background/updater.js');
 
 (function () {

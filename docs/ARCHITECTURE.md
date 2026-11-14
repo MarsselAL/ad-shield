@@ -48,6 +48,8 @@ limit (1,000) and the ruleset count limits.
 | `src/scriptlets/lib.js`, `src/scriptlets/runner.js` -> `build/scriptlets-main.js` | MAIN, all frames, document_start, YouTube hosts only | Our scriptlets (section below). |
 | `src/content/general.js` | ISOLATED, top frame, document_start | Sends `as-page` with the host and `performance.timeOrigin`; once after `load` + 1.5 s (idle callback) checks this site's cookie selectors with `querySelector` and reports one `as-banner` if one matched. No observers, no repeating timers. |
 | `vendor/autoconsent/content.bundle.js` | ISOLATED, all frames | autoconsent, registered only while auto-reject is on. |
+| `src/shared/userfilters.js` | background, options, tests | "My filters" (section below): storage key `userFilters`, normalisation, caps, the `host##selector` text format, the conservative selector syntax check, `cssFor(host)`. |
+| `src/shared/selector.js` + `src/content/picker.js` | ISOLATED, top frame, injected on click only | The element picker (section below). Never registered as a content script. |
 
 Registered content scripts (ids start with `as-`; the Twitch ones stay in `manifest.json`):
 
@@ -55,7 +57,7 @@ Registered content scripts (ids start with `as-`; the Twitch ones stay in `manif
 |---|---|---|---|
 | `as-css-ads` | `rules/cosmetic/ads_generic.css` | all | allowlist + exception hosts |
 | `as-css-cookies` | `rules/cosmetic/cookies_generic.css` | all | allowlist + exception hosts |
-| `as-site` | `src/content/general.js` | top | allowlist |
+| `as-site` | `src/content/general.js` (all sites while Ads or Cookie banners (hide) is on; otherwise only the hosts that have "My filters") | top | allowlist |
 | `as-autoconsent` | `vendor/autoconsent/content.bundle.js` (`matchOriginAsFallback`) | all | allowlist |
 | `as-css-youtube` | `rules/cosmetic/youtube.css`, matches `youtube.com`, `youtube-nocookie.com`, `youtubekids.com` (`YOUTUBE_CSS_HOSTS`) | all | allowlist |
 | `as-scriptlets` | `build/scriptlets-main.js`, `world: 'MAIN'`, `matchOriginAsFallback`, matches only the hosts of `rules/scriptlets.json` | all | allowlist |
@@ -132,6 +134,50 @@ subdomains), run `python3 tools/build.py` and `bash tests/run.sh`, reload the ex
 are registered automatically (the plan signature changes). A new scriptlet goes into the table
 at the end of `lib.js` with a test in `tests/scriptlets.test.js`; set `fn.frames = true` if it
 patches window-level APIs that a child frame could hand out.
+
+### Element picker and "My filters"
+
+- **Start**: the popup button "Hide an element on this page" (shown on http(s) pages while Ad
+  Shield and the site switch are on) calls `chrome.scripting.executeScript` with
+  `files: ['src/shared/selector.js', 'src/content/picker.js']` on the tab's top frame (ISOLATED
+  world) and closes the popup. Nothing is injected until that click.
+- **UI** (`src/content/picker.js`): one `<as-picker>` element on `<html>` (fixed, full viewport,
+  z-index 2147483647, `pointer-events: none`, inline `!important` styles) with a closed shadow
+  root holding the highlight box and the panel. All styles are set through CSSOM
+  (`element.style`), which page CSP does not block. Mouse events on the page are swallowed
+  while picking (capture listeners on `window`); a click picks the element. The panel shows the
+  selector (editable), "Wider" / "Narrower" (parent / back towards the picked element), "Move
+  panel", "Hide" (also Enter), "Cancel" (also Esc). Preview: every match is hidden with an
+  inline `display: none !important` and the count is shown; selectors matching `<html>`,
+  `<body>` or the picker itself are refused. Quitting restores the inline styles.
+- **Selector** (`src/shared/selector.js`, tested pure parts): ids and classes that look generated
+  are skipped (`looksRandom`: 4+ digit runs, hex / mixed-case hashes, `css-` / `jsx-` / `sc-`
+  prefixes, CSS-modules `__hash` suffixes, names over 40 characters, names needing escapes).
+  Order: unique `#id`, unique `tag.class` (one or two classes), else a `>` path of
+  `tag.class` / `tag:nth-of-type(n)` steps up to an ancestor with a unique step (at most 8
+  steps), shortened from the left while it still matches only the picked element. The result
+  is checked with `querySelectorAll`.
+- **Save**: `{type: 'as-picker-save', selector}` to the background. The site is the sender
+  tab's host (`siteKey`, without `www.`), not a value from the page; top frame only. The
+  selector gets the conservative check (`userFilters.selectorError`: no `{ } ;` outside quotes,
+  no comments, no at-rules, no control characters, balanced brackets and quotes, at most 500
+  characters), is stored and inserted into the tab at once (`insertCSS`, `origin: 'USER'`)
+  unless the master switch is off or the site is allowlisted.
+- **Storage**: `chrome.storage.local` `userFilters` = `{ "example.com": ["selector", ...] }`
+  (a host covers its subdomains). Caps: 200 selectors per site, 5,000 in all, 500 characters
+  each. Per site only: there are no global user filters (a line without a site is rejected).
+- **Applied**: on every page load the `as-page` hello also injects the user's selectors for the
+  host and its parent domains, one rule per selector (an invalid one only drops itself),
+  whenever the master switch is on and the site is not allowlisted, also with Ads and Cookie
+  banners (hide) off (then `as-site` is registered for the hosts with user filters only). Top
+  frame only, like the site-specific list CSS.
+- **Options page** "My filters": a textarea in `example.com##.selector` format (one per line,
+  `a.com,b.com##sel` for several sites, `!` comments are accepted but not stored). Save checks
+  every line (site, the conservative check and the browser's own parser) and lists errors per
+  line; nothing is saved while there are errors. Picker saves show up there.
+- **Limits**: top frame only (no iframes, no shadow DOM content); elements hidden by `display`
+  only; selectors with generated names are avoided but a site redesign can still break one;
+  a page's own window capture listeners registered before the picker still see its events.
 
 ### Weekly filter-list update (`src/background/updater.js`)
 

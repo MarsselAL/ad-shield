@@ -1,13 +1,15 @@
 /*
  * Options page. Toggles save immediately; the playerType list and the allowlist save after
  * validation. Twitch/master settings live under "settings" (src/shared/settings.js), the
- * all-sites settings and allowlist under "blocking" (src/shared/blocking.js).
+ * all-sites settings and allowlist under "blocking" (src/shared/blocking.js), "My filters" under
+ * "userFilters" (src/shared/userfilters.js; the element picker adds to it).
  */
 (function () {
   'use strict';
   var ns = globalThis.__TAS__;
   var S = ns.settings;
   var B = ns.blocking;
+  var U = ns.userFilters;
   var cfg = ns.config;
   var $ = function (id) { return document.getElementById(id); };
   var settings = S.defaults();
@@ -80,6 +82,34 @@
     saveBlocking(Object.assign({}, blocking, { allowlist: v.value })).then(function () {
       renderAllowlist();
       flash('al-saved', 'Saved.');
+    });
+  });
+
+  // ---------------------------------------------------------------- my filters
+  var ufDirty = false;
+
+  function renderUserFilters(stored) {
+    if (ufDirty) return; // keep the user's unsaved edits
+    $('userfilters').value = U.toText(stored);
+  }
+
+  /** The browser's own selector parser: null when valid. */
+  function domCheck(sel) {
+    try { document.createDocumentFragment().querySelector(sel); return null; } catch (e) { return 'is not valid CSS'; }
+  }
+
+  $('userfilters').addEventListener('input', function () { ufDirty = true; });
+
+  $('uf-save').addEventListener('click', function () {
+    var v = U.parseText($('userfilters').value, domCheck);
+    showErrors('uf-errors', v.errors);
+    if (!v.ok) return;
+    var o = {};
+    o[U.STORAGE_KEY] = v.value;
+    chrome.storage.local.set(o).then(function () {
+      ufDirty = false;
+      renderUserFilters(v.value);
+      flash('uf-saved', 'Saved.');
     });
   });
 
@@ -171,11 +201,12 @@
   $('known').textContent = cfg.knownPlayerTypes.join(', ');
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
-  chrome.storage.local.get([S.STORAGE_KEY, B.STORAGE_KEY]).then(function (r) {
+  chrome.storage.local.get([S.STORAGE_KEY, B.STORAGE_KEY, U.STORAGE_KEY]).then(function (r) {
     settings = S.normalize(r[S.STORAGE_KEY]);
     blocking = B.normalize(r[B.STORAGE_KEY]);
     render();
     renderAllowlist();
+    renderUserFilters(r[U.STORAGE_KEY]);
   });
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== 'local') return;
@@ -185,6 +216,7 @@
       renderAllowlist();
     }
     if (changes[S.STORAGE_KEY] || changes[B.STORAGE_KEY]) render();
+    if (changes[U.STORAGE_KEY]) renderUserFilters(changes[U.STORAGE_KEY].newValue);
     if (changes[Lists.META_KEY] && !listsBusy) refreshLists();
   });
 })();

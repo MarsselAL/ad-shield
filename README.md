@@ -24,6 +24,10 @@ JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configu
   hiding CSS and two network rules (`/pagead/`, `/youtubei/v1/player/ad_break`). They run on
   youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
+- **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
+  "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
+  kept under **My filters** on the options page (`example.com##.selector`, editable there) and
+  applied on every visit to that site. Per site only; top frame only.
 - **Weekly filter-list updates** (on by default, can be switched off): downloads the three lists
   from their public addresses once a week, converts them in the browser and installs them as
   dynamic rules; "Update now" and "Use built-in lists" on the options page. The generic
@@ -129,7 +133,7 @@ To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests
 | Permission | Why |
 |---|---|
 | `storage` | Settings, allowlist and statistics. |
-| `scripting` | Registers the cosmetic CSS / page script / autoconsent content scripts; injects site CSS; runs autoconsent's page-world snippets; removes leftover dynamic scripts of older versions. |
+| `scripting` | Registers the cosmetic CSS / page script / autoconsent content scripts; injects site CSS and My filters; injects the element picker when you click "Hide an element on this page"; runs autoconsent's page-world snippets; removes leftover dynamic scripts of older versions. |
 | `declarativeNetRequest` | Static rulesets in `rules/` and the dynamic allowlist rule. |
 | `declarativeNetRequestFeedback` | Popup counts via `getMatchedRules` and the badge count (see below). |
 | host `<all_urls>` | Needed for `modifyHeaders` (cookie stripping), for CSS on all sites and for autoconsent. |
@@ -179,6 +183,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
+| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever Ad Shield is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
 | Block client-side ad requests | on | DNR ruleset `client_ads`: `edge.ads.twitch.tv` and Amazon's `apstag.js`, only for requests from twitch.tv pages. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host. |

@@ -81,7 +81,7 @@ globalThis.fetch = function (url) {
   return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(readFile(path))); } });
 };
 
-loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js', 'src/shared/lists.js',
+loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js', 'src/shared/userfilters.js', 'src/shared/lists.js',
   'src/background/autoconsent-shim.js', 'vendor/autoconsent/autoconsent.cjs.js', 'src/background/general.js');
 var B = __TAS__.blocking;
 var SITE = JSON.parse(readFile('rules/cosmetic/site.json'));
@@ -229,6 +229,65 @@ test('messages from other extensions or without a tab are ignored', function () 
   });
 });
 
+// ------------------------------------------------------------------ element picker / My filters
+test('picker save: stored under the site key, CSS inserted into the top frame at once', function () {
+  var before = calls.css.length;
+  return send({ type: 'as-picker-save', selector: '.while-off' }).then(function (resp) {
+    assert.ok(resp.ok, 'master switch off: stored');
+    assert.equal(calls.css.length, before, 'master switch off: nothing inserted');
+    return chrome.storage.local.set({ settings: __TAS__.settings.defaults(), userFilters: {} }).then(flush);
+  }).then(function () {
+    return send({ type: 'as-picker-save', selector: ' .my-ad ' });
+  }).then(function (resp) {
+    assert.deepEqual(resp, { ok: true, error: null });
+    assert.deepEqual(local.userFilters, { '1news.co.nz': ['.my-ad'] }, 'site taken from the tab URL, www. dropped');
+    assert.equal(calls.css.length, before + 1);
+    assert.deepEqual(calls.css[calls.css.length - 1], { target: { tabId: 7, frameIds: [0] }, css: '.my-ad{display:none!important}', origin: 'USER' });
+    return send({ type: 'as-picker-save', selector: '.my-ad' });
+  }).then(function (resp) {
+    assert.ok(resp.ok, 'saving the same selector again is fine');
+    assert.deepEqual(local.userFilters, { '1news.co.nz': ['.my-ad'] });
+  });
+});
+
+test('picker save: bad selector, sub frame or allowlisted site', function () {
+  var before = calls.css.length;
+  return send({ type: 'as-picker-save', selector: 'div{color:red}' }).then(function (resp) {
+    assert.equal(resp.ok, false);
+    assert.includes(resp.error, 'Selector');
+    return send({ type: 'as-picker-save', selector: '.x' }, { frameId: 3 });
+  }).then(function (resp) {
+    assert.equal(resp.ok, false);
+    return send({ type: 'as-picker-save', selector: '.y' }, { tab: { id: 9, url: 'https://shop.off.example/' } });
+  }).then(function (resp) {
+    assert.ok(resp.ok, 'stored on an allowlisted site');
+    assert.deepEqual(local.userFilters['shop.off.example'], ['.y']);
+    assert.equal(calls.css.length, before, 'nothing inserted: bad selector, sub frame, allowlisted site');
+    return chrome.storage.local.set({ userFilters: { '1news.co.nz': ['.my-ad'] } }).then(flush);
+  });
+});
+
+test('page hello: My filters added to the site CSS; with Ads and Cookie banners off only they apply', function () {
+  return send({ type: 'as-page', host: 'www.1news.co.nz', t: 5 }).then(function () {
+    var css = calls.css[calls.css.length - 1].css;
+    assert.includes(css, SITE.ads['1news.co.nz'][0] + '{display:none!important}');
+    assert.includes(css, '\n.my-ad{display:none!important}');
+    return setBlocking({ ads: false, hideCookieBanners: false });
+  }).then(function () {
+    var site = registered.filter(function (s) { return s.id === 'as-site'; })[0];
+    assert.deepEqual(site.matches, ['*://*.1news.co.nz/*'], 'page script only where My filters exist');
+    return send({ type: 'as-page', host: 'www.1news.co.nz', t: 6 });
+  }).then(function (resp) {
+    assert.equal(calls.css[calls.css.length - 1].css, '.my-ad{display:none!important}');
+    assert.deepEqual(resp, { cookieSelectors: [] });
+    return chrome.storage.local.set({ userFilters: {} }).then(flush);
+  }).then(function () {
+    assert.equal(ids().indexOf('as-site'), -1, 'no filters left: page script unregistered');
+    return setBlocking({ ads: true, hideCookieBanners: true });
+  }).then(function () {
+    assert.ok(ids().indexOf('as-site') !== -1);
+  });
+});
 
 // ------------------------------------------------------------------ updated lists (dynamic rules)
 function dynRule(id) { return { id: id, priority: 1, action: { type: 'block' }, condition: { requestDomains: ['d' + id + '.example'] } }; }

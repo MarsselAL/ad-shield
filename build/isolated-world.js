@@ -644,8 +644,10 @@
    * background instead (minus the exceptions), so the static CSS file skips them.
    * slHosts: scriptletHosts(rules/scriptlets.json); build/scriptlets-main.js runs only there
    * (MAIN world, every frame incl. about:blank ones), while Ads and Page scripts are both on.
+   * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
+   * background for their CSS, so with Ads and Cookie banners both off it still runs there.
    */
-  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts, slHosts) {
+  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts, slHosts, userHosts) {
     if (!masterEnabled) return [];
     var allow = patternsFor(b.allowlist);
     var cssExclude = allow.concat(patternsFor(cosmeticExcludeHosts));
@@ -655,15 +657,17 @@
       if (cssExclude.length) o.excludeMatches = cssExclude.slice();
       plan.push(o);
     }
-    function js(id, file, allFrames) {
-      var o = { id: id, js: [file], matches: WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
+    function js(id, file, allFrames, matches) {
+      var o = { id: id, js: [file], matches: matches || WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
       if (allFrames) o.matchOriginAsFallback = true;
       if (allow.length) o.excludeMatches = allow.slice();
       plan.push(o);
     }
     if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css');
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
+    var userMatches = patternsFor(userHosts);
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);
+    else if (userMatches.length) js('as-site', 'src/content/general.js', false, userMatches);
     if (b.autoRejectCookies) js('as-autoconsent', 'vendor/autoconsent/content.bundle.js', true);
     if (b.ads) {
       var yt = { id: 'as-css-youtube', css: ['rules/cosmetic/youtube.css'], matches: patternsFor(YOUTUBE_CSS_HOSTS), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };

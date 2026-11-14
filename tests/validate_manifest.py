@@ -122,7 +122,7 @@ def main():
                   "service worker must not register content scripts dynamically (they are in manifest.json)")
             check("/src/background/general.js" in src and "/src/shared/blocking.js" in src,
                   "service worker must load src/shared/blocking.js and src/background/general.js")
-            order = ["/src/shared/blocking.js", "/src/shared/filterlist.js", "/src/shared/lists.js",
+            order = ["/src/shared/blocking.js", "/src/shared/userfilters.js", "/src/shared/filterlist.js", "/src/shared/lists.js",
                      "/src/background/general.js", "/src/background/updater.js"]
             pos = [src.find(f) for f in order]
             check(all(p >= 0 for p in pos) and pos == sorted(pos),
@@ -152,6 +152,19 @@ def main():
         # Our MAIN-world scriptlets: generated bundle registered by blocking.contentScriptPlan.
         check("'build/scriptlets-main.js'" in bsrc and "world: 'MAIN'" in bsrc, "blocking.js must register build/scriptlets-main.js in the MAIN world")
         exists("build/scriptlets-main.js", "scriptlet bundle (run python3 tools/build.py)")
+    # Element picker: injected by the popup on click only (never registered), no network use.
+    pop = os.path.join(ROOT, "src", "popup", "popup.js")
+    if os.path.isfile(pop):
+        picker_files = re.findall(r"files: \[([^\]]*)\]", open(pop, encoding="utf-8").read())
+        names = re.findall(r"'([^']+)'", picker_files[0]) if picker_files else []
+        check(names == ["src/shared/selector.js", "src/content/picker.js"],
+              "popup.js must inject exactly src/shared/selector.js then src/content/picker.js, got %s" % names)
+        for f in names:
+            exists(f, "element picker file")
+    for f in ("src/content/picker.js", "src/shared/selector.js", "src/shared/userfilters.js"):
+        p = exists(f, "element picker / My filters source")
+        if os.path.isfile(p):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(p, encoding="utf-8").read()), "%s must not contain URLs" % f)
     sl_rules = load_json("rules/scriptlets.json")
     check(isinstance(sl_rules, dict) and sl_rules.get("version") == 1, "rules/scriptlets.json must have version 1")
     for f in ("src/scriptlets/lib.js", "src/scriptlets/runner.js"):

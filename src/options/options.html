@@ -66,6 +66,17 @@
     </section>
 
     <section class="card">
+      <h2>My filters</h2>
+      <p class="muted">Elements you hid with "Hide an element on this page" in the popup, one per line as <code>example.com##.selector</code> (the site covers its subdomains; <code>a.com,b.com##.selector</code> for several sites). You can add, edit or delete lines here. Lines starting with <code>!</code> are comments and are not kept. Filters apply on their sites whenever Ad Shield is on there, also with Ads switched off; not on sites where blocking is off. Per site only: a line without a site is rejected. Reload open tabs after a change.</p>
+      <textarea id="userfilters" rows="6" spellcheck="false" aria-label="My filters, one site##selector per line"></textarea>
+      <ul class="errors" id="uf-errors" aria-live="polite"></ul>
+      <div class="row left">
+        <button class="primary" id="uf-save">Save filters</button>
+        <span class="muted" id="uf-saved" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Twitch</h2>
       <div class="opt row">
         <div><strong>Block client-side ad requests</strong><p class="muted">Blocks edge.ads.twitch.tv and the Amazon ad script on Twitch (network rules).</p></div>
@@ -132,6 +143,7 @@
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>
   <script src="../shared/blocking.js"></script>
+  <script src="../shared/userfilters.js"></script>
   <script src="../shared/lists.js"></script>
   <script src="options.js"></script>
 </body>
