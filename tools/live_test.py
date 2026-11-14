@@ -679,10 +679,10 @@ def run_smoke(args):
         time.sleep(2.0)
         opts = cdp.evaluate(opt_sid, "({ toggles: document.querySelectorAll('input[data-key]').length,"
                                      " btoggles: document.querySelectorAll('input[data-bkey]').length,"
-                                     " lists: document.querySelectorAll('#lists li').length,"
+                                     " lists: document.querySelectorAll('#lists tr').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 5 and opts["lists"] == 3
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 7 and opts["lists"] == 3
               and opts["order"].split("\n")[0] == "site", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
