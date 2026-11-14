@@ -4,7 +4,7 @@
  */
 load('tests/lib/browser-stubs.js');
 var env = installBrowserStubs({ chrome: true });
-loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/frame.js',
+loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/blocking.js', 'src/shared/logger.js', 'src/shared/frame.js',
   'src/shared/stats.js', 'src/content/cosmetic.js');
 var ns = __TAS__;
 var cfg = ns.config;
@@ -84,4 +84,14 @@ test('bridge: settings go to the page only once storage answered; off = no toast
     assert.equal(player.children.length, 0, 'no toast while disabled');
     assert.equal(env.sentToBackground.length, sentBefore, 'no events forwarded while disabled');
   });
+});
+
+test('bridge: a site on the general allowlist is treated as switched off for the page', function () {
+  var toPageMsgs = function () { return env.messages(cfg.events.toPage).filter(function (m) { return m.type === 'settings'; }); };
+  env.changeStorage(S.STORAGE_KEY, S.defaults());
+  assert.equal(toPageMsgs()[toPageMsgs().length - 1].settings.enabled, true);
+  env.changeStorage('blocking', { allowlist: ['twitch.tv'] });
+  assert.equal(toPageMsgs()[toPageMsgs().length - 1].settings.enabled, false, 'allowlisted: page told off');
+  env.changeStorage('blocking', { allowlist: ['other.com'] });
+  assert.equal(toPageMsgs()[toPageMsgs().length - 1].settings.enabled, true, 'removed from the list: on again');
 });

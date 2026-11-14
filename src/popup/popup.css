@@ -13,3 +13,10 @@ td { padding: 3px 0; border-top: 1px solid var(--border); }
 td + td { text-align: right; font-variant-numeric: tabular-nums; width: 64px; }
 .last { margin: 0; min-height: 1.4em; }
 footer { padding-top: 2px; }
+.site-text { min-width: 0; }
+.site-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site button { margin-top: 8px; }
+.stats p { margin: 6px 0 0; }
+.twitch { display: flex; flex-direction: column; gap: 8px; }
+.twitch[hidden] { display: none; }
+.twitch h2 { margin: 4px 0 0; }

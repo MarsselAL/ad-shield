@@ -1,17 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "Twitch Ad Shield",
+  "name": "Ad Shield",
   "short_name": "Ad Shield",
   "version": "1.0.0",
-  "description": "Blocks video ads on Twitch streams by swapping to ad-free backup streams or removing ad segments. No proxies, no telemetry.",
+  "description": "Blocks ads, trackers, tracking cookies and cookie banners on all sites, and video ads on Twitch. EasyList-based. No telemetry, no remote config.",
   "minimum_chrome_version": "120",
-  "permissions": ["storage", "scripting", "declarativeNetRequest"],
-  "host_permissions": ["*://*.twitch.tv/*"],
+  "permissions": [
+    "storage",
+    "scripting",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "*://*.twitch.tv/*"
+  ],
   "background": {
     "service_worker": "src/background/service-worker.js"
   },
   "action": {
-    "default_title": "Twitch Ad Shield",
+    "default_title": "Ad Shield",
     "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -32,25 +40,65 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.twitch.tv/*"],
-      "exclude_matches": ["https://clips.twitch.tv/*"],
-      "js": ["build/main-world.js"],
+      "matches": [
+        "https://*.twitch.tv/*"
+      ],
+      "exclude_matches": [
+        "https://clips.twitch.tv/*"
+      ],
+      "js": [
+        "build/main-world.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
     },
     {
-      "matches": ["https://*.twitch.tv/*"],
-      "exclude_matches": ["https://clips.twitch.tv/*"],
-      "js": ["build/isolated-world.js"],
+      "matches": [
+        "https://*.twitch.tv/*"
+      ],
+      "exclude_matches": [
+        "https://clips.twitch.tv/*"
+      ],
+      "js": [
+        "build/isolated-world.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "declarative_net_request": {
     "rule_resources": [
-      { "id": "client_ads", "enabled": true, "path": "rules/client_ads.json" },
-      { "id": "trackers", "enabled": false, "path": "rules/trackers.json" }
+      {
+        "id": "client_ads",
+        "enabled": true,
+        "path": "rules/client_ads.json"
+      },
+      {
+        "id": "trackers",
+        "enabled": false,
+        "path": "rules/trackers.json"
+      },
+      {
+        "id": "ads_1",
+        "enabled": true,
+        "path": "rules/ads_1.json"
+      },
+      {
+        "id": "privacy_1",
+        "enabled": true,
+        "path": "rules/privacy_1.json"
+      },
+      {
+        "id": "cookies_1",
+        "enabled": true,
+        "path": "rules/cookies_1.json"
+      },
+      {
+        "id": "cookie_strip",
+        "enabled": true,
+        "path": "rules/cookie_strip.json"
+      }
     ]
   }
 }

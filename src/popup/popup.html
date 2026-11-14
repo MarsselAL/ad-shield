@@ -2,29 +2,56 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Twitch Ad Shield</title>
+  <title>Ad Shield</title>
   <link rel="stylesheet" href="../ui/common.css">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header class="row">
-    <div class="brand"><img src="../../icons/icon32.png" alt="" width="20" height="20"><h1>Twitch Ad Shield</h1></div>
-    <label class="switch" title="Turn the extension on or off">
-      <input type="checkbox" id="enabled" aria-label="Extension enabled">
+    <div class="brand"><img src="../../icons/icon32.png" alt="" width="20" height="20"><h1>Ad Shield</h1></div>
+    <label class="switch" title="Turn Ad Shield on or off everywhere">
+      <input type="checkbox" id="enabled" aria-label="Ad Shield enabled">
       <span class="track"></span>
     </label>
   </header>
 
-  <section class="card status" id="status-card">
+  <section class="card site">
     <div class="row">
-      <span class="dot" id="status-dot"></span>
-      <strong id="status-text">Checking…</strong>
+      <div class="site-text">
+        <strong id="site-host">This page</strong>
+        <p class="muted small" id="site-detail"></p>
+      </div>
+      <label class="switch" title="Blocking on this site">
+        <input type="checkbox" id="site-on" aria-label="Blocking on this site">
+        <span class="track"></span>
+      </label>
     </div>
-    <p class="muted small" id="status-detail"></p>
-    <button id="reload" class="primary" hidden>Reload tab</button>
+    <button id="site-reload" class="primary" hidden>Reload tab</button>
   </section>
 
   <section class="stats">
+    <table>
+      <thead><tr><th></th><th>This page</th></tr></thead>
+      <tbody>
+        <tr><td>Ads blocked</td><td id="g-ads">–</td></tr>
+        <tr><td>Trackers blocked</td><td id="g-trackers">–</td></tr>
+        <tr><td>Tracking cookies stripped</td><td id="g-cookies">–</td></tr>
+        <tr><td>Cookie banners handled</td><td id="g-banners">–</td></tr>
+      </tbody>
+    </table>
+    <p class="muted small" id="counts-note"></p>
+  </section>
+
+  <section id="twitch" class="twitch" hidden>
+    <h2>Twitch video ads</h2>
+    <div class="card status" id="status-card">
+      <div class="row">
+        <span class="dot" id="status-dot"></span>
+        <strong id="status-text">Checking…</strong>
+      </div>
+      <p class="muted small" id="status-detail"></p>
+      <button id="reload" class="primary" hidden>Reload tab</button>
+    </div>
     <table>
       <thead><tr><th></th><th>This tab</th><th>Lifetime</th></tr></thead>
       <tbody>
@@ -35,9 +62,8 @@
         <tr><td>Not removed / errors</td><td id="t-failures">–</td><td id="l-failures">–</td></tr>
       </tbody>
     </table>
+    <p class="last muted small" id="last-event">No events yet.</p>
   </section>
-
-  <p class="last muted small" id="last-event">No events yet.</p>
 
   <footer class="row">
     <a href="#" id="open-options">Settings</a>
@@ -46,6 +72,7 @@
 
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>
+  <script src="../shared/blocking.js"></script>
   <script src="../shared/stats.js"></script>
   <script src="popup.js"></script>
 </body>

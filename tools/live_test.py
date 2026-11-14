@@ -9,9 +9,9 @@ Extensions.loadUnpacked, because branded Chrome 137+ ignores --load-extension
 
 Modes
   --smoke
-      No Twitch traffic. Loads the extension, checks the service worker (no dynamically
-      registered content scripts, manifest content scripts present, enabled DNR rulesets,
-      on/off switch), opens the popup and options pages via chrome-extension:// URLs, runs the
+      No Twitch traffic. Loads the extension, checks the service worker (only the general
+      as-* content scripts registered, manifest Twitch content scripts present, enabled DNR
+      rulesets, testMatchOutcome for an ad / tracker / tracking-cookie request, on/off switch), opens the popup and options pages via chrome-extension:// URLs, runs the
       MAIN-world code on about:blank, collects console errors and exceptions, prints PASS/FAIL.
   --live CHANNEL [--minutes N] [--vod URL] [--switch-to CHANNEL2] [--compare-without-extension]
       Opens https://www.twitch.tv/CHANNEL in a 1920x1080 window, rejects the cookie banner
@@ -425,10 +425,37 @@ SW_STATE_JS = """
   const m = chrome.runtime.getManifest();
   return { version: m.version,
            scripts: scripts.map(x => ({ id: x.id, world: x.world, runAt: x.runAt, allFrames: x.allFrames,
-                                        persist: x.persistAcrossSessions, files: x.js.length })),
+                                        persist: x.persistAcrossSessions, files: (x.js || []).length + (x.css || []).length })),
            manifestScripts: (m.content_scripts || []).map(c => ({ world: c.world || 'ISOLATED', js: c.js || [],
                                                                   runAt: c.run_at, allFrames: !!c.all_frames })),
            rulesets, enabled: s && s.enabled };
+})()
+"""
+
+GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-site"]
+DEFAULT_RULESETS = ["ads_1", "client_ads", "cookie_strip", "cookies_1", "privacy_1"]
+
+# chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
+# which static rulesets a request would match. No request is sent.
+DNR_TEST_JS = """
+(async () => {
+  const cases = %s;
+  const out = {};
+  for (const [name, req] of Object.entries(cases)) {
+    try {
+      const r = await chrome.declarativeNetRequest.testMatchOutcome(req);
+      out[name] = r.matchedRules.map(m => m.rulesetId);
+    } catch (e) { out[name] = 'error: ' + e.message; }
+  }
+  return out;
+})()
+"""
+
+SET_BLOCKING_JS = """
+(async () => {
+  const cur = (await chrome.storage.local.get('blocking')).blocking || {};
+  await chrome.storage.local.set({ blocking: Object.assign({}, cur, %s) });
+  return true;
 })()
 """
 
@@ -505,6 +532,41 @@ def manifest_content_scripts():
     return out
 
 
+def serve_local_page(html):
+    """Serve one HTML page on 127.0.0.1 (random port) from a temporary folder; returns (url, stop)."""
+    import http.server
+    import socketserver
+    d = tempfile.mkdtemp(prefix="adshield-smoke-page-")
+    with open(os.path.join(d, "index.html"), "w", encoding="utf-8") as fh:
+        fh.write(html)
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=d, **kw)
+
+        def log_message(self, *a):
+            pass
+
+    class Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True  # an idle preconnect socket must not block shutdown()
+
+    httpd = Server(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return "http://127.0.0.1:%d/index.html" % httpd.server_address[1], httpd.shutdown
+
+
+def first_simple_selector(selectors):
+    for x in selectors:
+        if re.match(r"^[#.]-?[A-Za-z_][A-Za-z0-9_-]*$", x):
+            return x
+    return None
+
+
+def element_html(sel, label):
+    attr = 'id="%s"' % sel[1:] if sel.startswith("#") else 'class="%s"' % sel[1:]
+    return '<div %s data-t="%s">x</div>' % (attr, label)
+
+
 def run_smoke(args):
     checks = []
 
@@ -546,16 +608,31 @@ def run_smoke(args):
             st = None
             for _ in range(20):  # install handling (settings defaults, ruleset sync) is asynchronous
                 st = cdp.evaluate(sw_sid, SW_STATE_JS)
-                if st and not st.get("scripts") and st.get("rulesets") and st.get("enabled") is not None:
+                if st and len(st.get("scripts") or []) == len(GENERAL_SCRIPTS) and st.get("rulesets") and st.get("enabled") is not None:
                     break
                 time.sleep(0.25)
             report["sw_state_initial"] = st
             check("manifest version 1.0.0", st and st.get("version") == "1.0.0", st and st.get("version"))
             ids = sorted(s["id"] for s in st.get("scripts", [])) if st else None
-            check("no dynamically registered content scripts (they are static in manifest.json)", ids == [], ids)
+            check("only the general content scripts are registered (Twitch ones are static in manifest.json)",
+                  ids == GENERAL_SCRIPTS, ids)
             loaded = sorted(c["world"] for c in (st or {}).get("manifestScripts", []))
             check("loaded extension reports MAIN + ISOLATED manifest content scripts", loaded == ["ISOLATED", "MAIN"], loaded)
-            check("default rulesets: client_ads only", st and st.get("rulesets") == ["client_ads"], st and st.get("rulesets"))
+            check("default rulesets: client_ads + general", st and sorted(st.get("rulesets") or []) == DEFAULT_RULESETS,
+                  st and st.get("rulesets"))
+            with open(os.path.join(ROOT, "rules", "cookie_strip.json"), encoding="utf-8") as fh:
+                strip_host = json.load(fh)[0]["condition"]["requestDomains"][0]
+            cases = {
+                "ad": {"url": "https://securepubads.g.doubleclick.net/tag/js/gpt.js", "type": "script", "initiator": "https://example.com"},
+                "tracker": {"url": "https://www.google-analytics.com/analytics.js", "type": "script", "initiator": "https://example.com"},
+                "cookie": {"url": "https://%s/p" % strip_host, "type": "image", "initiator": "https://example.com"},
+                "plain": {"url": "https://example.com/style.css", "type": "stylesheet", "initiator": "https://example.com"},
+            }
+            dnr = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps(cases))
+            report["dnr_test"] = dnr
+            check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
+                  dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
+                  and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
 
             cdp.evaluate(sw_sid, SET_ENABLED_JS % "false")
             off = None
@@ -572,34 +649,91 @@ def run_smoke(args):
             for _ in range(20):
                 time.sleep(0.25)
                 on = cdp.evaluate(sw_sid, SW_STATE_JS)
-                if on and on["rulesets"]:
+                if on and len(on["rulesets"]) == len(DEFAULT_RULESETS) and len(on["scripts"]) == len(GENERAL_SCRIPTS):
                     break
-            check("switching ON enables client_ads again (still no registered scripts)",
-                  on and not on["scripts"] and on["rulesets"] == ["client_ads"],
+            check("switching ON enables the rulesets and general scripts again",
+                  on and sorted(x["id"] for x in on["scripts"]) == GENERAL_SCRIPTS and sorted(on["rulesets"]) == DEFAULT_RULESETS,
                   on and {"scripts": len(on["scripts"]), "rulesets": on["rulesets"]})
 
         base = "chrome-extension://%s/" % ext_id
         _, popup_sid = open_page(cdp, base + "src/popup/popup.html")
         sessions.add(popup_sid)
         time.sleep(2.0)
-        popup = cdp.evaluate(popup_sid, "({ status: document.getElementById('status-text').textContent,"
+        popup = cdp.evaluate(popup_sid, "({ site: document.getElementById('site-detail').textContent,"
                                         " enabled: document.getElementById('enabled').checked,"
                                         " rows: document.querySelectorAll('tbody tr').length,"
                                         " version: document.getElementById('version').textContent })")
         report["popup"] = popup
-        check("popup renders", popup and popup["rows"] == 5 and popup["status"] not in ("", "Checking…"), popup)
+        check("popup renders", popup and popup["rows"] == 9 and popup["site"] != "", popup)
 
         _, opt_sid = open_page(cdp, base + "src/options/options.html")
         sessions.add(opt_sid)
         time.sleep(2.0)
         opts = cdp.evaluate(opt_sid, "({ toggles: document.querySelectorAll('input[data-key]').length,"
+                                     " btoggles: document.querySelectorAll('input[data-bkey]').length,"
+                                     " lists: document.querySelectorAll('#lists li').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["order"].split("\n")[0] == "site", opts)
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 5 and opts["lists"] == 3
+              and opts["order"].split("\n")[0] == "site", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
                                     " return document.querySelectorAll('#pt-errors li').length; })()")
         check("options rejects an invalid playerType list", bad and bad >= 2, "%s error(s) shown" % bad)
+
+        # General blocking on a real http page served from 127.0.0.1 (no outside traffic): the
+        # registered generic CSS hides an EasyList ad element and a cookie-list element, a plain
+        # element stays visible, and the page script reported the page to the background.
+        with open(os.path.join(ROOT, "rules", "cosmetic", "generic.json"), encoding="utf-8") as fh:
+            gen = json.load(fh)
+        ad_sel, ck_sel = first_simple_selector(gen["ads"]), first_simple_selector(gen["cookies"])
+        page_url, stop_page = serve_local_page("<!doctype html><title>t</title><link rel=\"icon\" href=\"data:,\">" + element_html(ad_sel, "ad")
+                                               + element_html(ck_sel, "cookie") + '<div data-t="plain">x</div>')
+        try:
+            _, gp_sid = open_page(cdp, page_url)
+            sessions.add(gp_sid)
+            time.sleep(2.5)
+            vis = cdp.evaluate(gp_sid, "Object.fromEntries([...document.querySelectorAll('[data-t]')]"
+                                       ".map(e => [e.dataset.t, getComputedStyle(e).display]))")
+        finally:
+            stop_page()
+        report["cosmetic_page"] = {"selectors": [ad_sel, ck_sel], "display": vis}
+        check("generic cosmetic CSS hides an ad and a cookie-banner element, plain element visible",
+              vis and vis.get("ad") == "none" and vis.get("cookie") == "none" and vis.get("plain") == "block", vis)
+        if sw:
+            pages = cdp.evaluate(sw_sid, "chrome.storage.session.get(null).then(o => Object.keys(o).filter(k => k.startsWith('page:')).length)")
+            check("page script reported the page to the background", pages and pages >= 1, pages)
+            cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"trackers": False, "allowlist": ["allowed.example"]}))
+            dnr2 = None
+            for _ in range(20):
+                time.sleep(0.25)
+                dnr2 = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
+                    "cookie": cases["cookie"],
+                    "allowlisted": {"url": "https://allowed.example/", "type": "main_frame"}}))
+                if dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted"):
+                    break
+            report["dnr_test_trackers_off"] = dnr2
+            check("trackers off: tracker request only gets its cookies stripped; allowlist rule matches",
+                  dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted") == ["_dynamic"], dnr2)
+            cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"trackers": True, "allowlist": [], "autoRejectCookies": True}))
+            ac = None
+            for _ in range(20):
+                time.sleep(0.25)
+                ac = cdp.evaluate(sw_sid, SW_STATE_JS)
+                if ac and "as-autoconsent" in [x["id"] for x in ac["scripts"]]:
+                    break
+            check("auto-reject on registers the autoconsent content script",
+                  ac and "as-autoconsent" in [x["id"] for x in ac["scripts"]], ac and [x["id"] for x in ac["scripts"]])
+            # A page load with autoconsent running (init/rules round trip); errors show up in the
+            # final console check. No consent pop-up here, so nothing is clicked.
+            page_url2, stop_page2 = serve_local_page('<!doctype html><title>t</title><link rel="icon" href="data:,"><p>x</p>')
+            try:
+                _, ac_sid = open_page(cdp, page_url2)
+                sessions.add(ac_sid)
+                time.sleep(3.0)
+            finally:
+                stop_page2()
+            cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"autoRejectCookies": False}))
 
         # Page-script self-test on about:blank (no network): the MAIN-world files load, the
         # generated worker source runs in a real Chrome worker with fetch hooked, and after

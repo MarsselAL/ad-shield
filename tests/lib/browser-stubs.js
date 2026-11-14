@@ -137,7 +137,7 @@ function installBrowserStubs(opts) {
         onMessage: { addListener: function (fn) { env.runtimeListener = fn; } }
       },
       storage: {
-        local: { get: function (k) { var o = {}; o[k] = env.stored[k]; return Promise.resolve(o); } },
+        local: { get: function (k) { var o = {}; [].concat(k).forEach(function (x) { o[x] = env.stored[x]; }); return Promise.resolve(o); } },
         onChanged: { addListener: function (fn) { storageListeners.push(fn); } }
       }
     };
