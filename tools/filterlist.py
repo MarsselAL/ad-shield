@@ -142,6 +142,12 @@ def is_re2_safe(rx):
     for m in re.finditer(r"\{(\d+)(?:,(\d*))?\}", rx):
         if int(m.group(1)) > 20 or (m.group(2) and int(m.group(2)) > 20):
             return False
+    # Chrome compiles regexFilter with RE2 under a 2 KB memory cap. A leading ".*" followed by an
+    # alternation group or a counted repeat blows up the automaton (Chrome rejected EasyList
+    # rules like "^https?:\/\/.*\.(club|bid|...)\/.*" and ".*\/[a-z]{2,15}\.(php|jx)"), so skip them.
+    star = rx.find(".*")
+    if star != -1 and re.search(r"[({]", rx[star + 2:]):
+        return False
     try:
         re.compile(rx)
     except re.error:

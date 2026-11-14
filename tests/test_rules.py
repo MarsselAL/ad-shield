@@ -99,6 +99,9 @@ class NetworkFilters(unittest.TestCase):
             "/ads/$domain=a.com|~example.*": "wildcard-domain",
             "/(?!good)ads/": "regex",
             r"/(https?:\/\/)104\.154\..{100,}/": "regex",
+            # Chrome rejected these as over its 2 KB RE2 memory cap (ads_1 ids 2692, 3264, 3266).
+            r"/^https?:\/\/.*\.(club|bid|biz|xyz)\/.*/": "regex",
+            r"/^https?:\/\/.*\/[a-z0-9A-Z_]{2,15}\.(php|jx|jsx)/": "regex",
             "/a|b/x": "pipe-in-pattern",
             "/réclame.js": "non-ascii",
             "ad": "too-broad",

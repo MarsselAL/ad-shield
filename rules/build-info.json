@@ -24,10 +24,10 @@
     "easylist": {
       "cosmeticConverted": 24334,
       "duplicates": 0,
-      "filters": 77788,
+      "filters": 77800,
       "licence": "https://easylist.to/pages/licence.html",
-      "mergedDomains": 45692,
-      "networkConverted": 49298,
+      "mergedDomains": 45704,
+      "networkConverted": 49307,
       "skipped": {
         "bad-selector": 40,
         "cosmetic-exception-pattern": 14,
@@ -37,13 +37,13 @@
         "pipe-in-pattern": 3,
         "popup": 2969,
         "procedural-or-scriptlet": 295,
-        "regex": 12,
+        "regex": 15,
         "regex-cap": 0,
         "wildcard-domain": 240
       },
-      "skippedTotal": 4156,
+      "skippedTotal": 4159,
       "url": "https://easylist.to/easylist/easylist.txt",
-      "version": "202611132325"
+      "version": "202611140001"
     },
     "easylist-cookie": {
       "cosmeticConverted": 23192,
@@ -64,10 +64,10 @@
     "easyprivacy": {
       "cosmeticConverted": 0,
       "duplicates": 2,
-      "filters": 56631,
+      "filters": 56632,
       "licence": "https://easylist.to/pages/licence.html",
-      "mergedDomains": 47547,
-      "networkConverted": 56556,
+      "mergedDomains": 47548,
+      "networkConverted": 56557,
       "skipped": {
         "bad-domain": 2,
         "cosmetic-in-network-list": 2,
@@ -83,15 +83,15 @@
       },
       "skippedTotal": 75,
       "url": "https://easylist.to/easylist/easyprivacy.txt",
-      "version": "202611132325"
+      "version": "202611140010"
     }
   },
   "rulesets": {
     "ads_1": {
       "allow": 516,
-      "block": 3268,
-      "regex": 7,
-      "rules": 3784
+      "block": 3265,
+      "regex": 4,
+      "rules": 3781
     },
     "cookie_strip": {
       "allow": 0,
@@ -112,5 +112,5 @@
       "rules": 9239
     }
   },
-  "totalStaticRules": 14821
+  "totalStaticRules": 14818
 }
