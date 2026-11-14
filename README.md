@@ -56,18 +56,21 @@ in the automated run, so Twitch ad blocking was not yet proven there.
 3. Click **Load unpacked** and choose the folder that contains `manifest.json`.
 4. Reload tabs that were already open.
 
-## Install on another PC (Windows or Linux; also Edge or Brave)
+## Share it / install on another computer (free, no store)
 
-1. On this computer run `python3 tools/package.py`. It makes `dist/ad-shield-<version>.zip`.
-2. Copy the zip to the other PC (USB stick, cloud drive, or email it to yourself).
-3. Unzip it. You get a folder `ad-shield` that contains `manifest.json`.
-4. Open `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`), turn on
-   **Developer mode**, click **Load unpacked**, and pick the `ad-shield` folder.
-5. **Keep the folder.** The browser reads the extension from it; if you delete or move it,
-   the extension stops working.
+Ad Shield is not on the Chrome Web Store; the zip is the way to share it.
 
-To update: replace the folder contents with the new version, then click the reload icon on the
-extension's card in `chrome://extensions`.
+1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
+   `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
+   Tests, tools, docs and test results are left out.
+2. Send the zip (USB stick, cloud drive, e-mail).
+3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
+   `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`), turn on
+   **Developer mode**, **Load unpacked**, pick the `ad-shield` folder. It also covers macOS, the
+   "developer mode extensions" message at browser start (expected; close it, do not disable),
+   pinning the icon, the settings, weekly list updates, updating to a new zip (replace the folder
+   contents, keep the path, press reload on the extension card: settings are kept) and
+   uninstalling.
 
 ## How it works
 
@@ -164,15 +167,21 @@ requests itself); on Twitch tabs the Twitch count replaces it once a video ad wa
 
 ## Privacy
 
-- No proxies, no telemetry, no analytics, no remote configuration.
-- The only network requests the extension makes are plain downloads of the three filter lists
-  (`https://easylist.to/easylist/easylist.txt`, `https://easylist.to/easylist/easyprivacy.txt`,
-  `https://secure.fanboy.co.nz/fanboy-cookiemonster.txt`), once a week while "Update filter
-  lists automatically" is on, or when you press "Update now". No cookies or other data are
-  sent with them. Switch the option off to make no requests at all.
+- No telemetry, no analytics, no accounts, no remote configuration, no proxies.
+- The only network requests the extension itself makes:
+  - the weekly downloads of the three public filter lists
+    (`https://easylist.to/easylist/easylist.txt`, `https://easylist.to/easylist/easyprivacy.txt`,
+    `https://secure.fanboy.co.nz/fanboy-cookiemonster.txt`) while "Update filter lists
+    automatically" is on, or when you press "Update now". No cookies or other data are sent with
+    them. Switch the option off to stop them;
+  - on Twitch pages only, when a stream has an ad: requests to Twitch's own servers
+    (`gql.twitch.tv` for a playback token, `usher.ttvnw.net` for the playlist) for the same stream
+    as another player type ("backup stream"), sent from the Twitch page like the player's own.
+- The element picker, "My filters" and the tracking-parameter removal are fully local (no
+  requests; tracking parameters are removed by a browser rule before the page loads).
 - autoconsent is downloaded only when you run `tools/vendor_autoconsent.py`, never by the
   extension.
-- Settings and statistics stay in your browser (`chrome.storage`).
+- Settings, the allowlist, "My filters" and statistics stay in your browser (`chrome.storage`).
 
 ## Settings and on/off switch
 
@@ -207,8 +216,9 @@ Reload the tab after switching.
 
 ## Limitations
 
-- **Lists are as fresh as the last build.** There is no automatic list update (by design: no
-  remote configuration). Rebuild and reload to update.
+- **Generic hiding CSS is as fresh as the last build.** The network rules and site-specific
+  hiding update weekly (option on by default); the generic element-hiding CSS only with a new
+  zip.
 - DNR cannot express everything uBlock Origin can: pop-up blocking, list scriptlets, procedural
   cosmetic filters, `$redirect`/`$csp`, the lists' `$removeparam` (we strip our own fixed list of
   46 tracking parameters instead), and most regex filters are skipped, so
@@ -228,7 +238,8 @@ Reload the tab after switching.
   at the start or end of an ad break. Ads may still appear when no ad-free backup is available.
 - Client-side Twitch ads (`twitch-maf-ad`) have nothing to strip; only the network block rule
   applies. VODs are only stripped; there is no backup stream for VODs.
-- Not on the Chrome Web Store. `clips.twitch.tv` is excluded. No Firefox build.
+- Not on the Chrome Web Store (on purpose: shared as a free zip, see above). `clips.twitch.tv` is
+  excluded. No Firefox build.
 - Do not run another ad blocker at the same time.
 
 ## When something changes
@@ -260,10 +271,15 @@ Then bump `version` in `manifest.json` and `src/config.js`, and reload the exten
 ## Tests
 
 - `bash tests/run.sh` – offline: JavaScriptCore unit tests, `tests/test_rules.py` (converter,
-  and every generated DNR rule checked against `tests/dnr_schema.py`) and the manifest check.
+  and every generated DNR rule checked against `tests/dnr_schema.py`), `tests/test_package.py`
+  (the zip: `INSTALL.txt` and every manifest file inside, no tests / tools / docs / results) and
+  the manifest check.
 - `python3 tools/live_test.py --smoke` – starts Chrome with a temporary profile and checks the
-  extension loads, the rulesets match test requests (`testMatchOutcome`, nothing is sent) and
-  the cosmetic CSS works on a page served from 127.0.0.1. No Twitch traffic.
+  extension loads, the rulesets match test requests (`testMatchOutcome`, nothing is sent),
+  the cosmetic CSS and the element picker (click, Enter, saved, hidden again after a reload) work
+  on a page served from 127.0.0.1, and one real navigation to
+  `https://example.com/?utm_source=x&fbclid=y&keep=1` ends at `https://example.com/?keep=1`.
+  No Twitch traffic.
 - `python3 -I tools/youtube_test.py [--only ext|noext]` – **makes real requests to YouTube**:
   watches three videos for 30 s each in a fresh headless profile (consent: "Reject all") and
   reports playback, `ad-showing`, the anti-adblock element and which ad keys were served and
