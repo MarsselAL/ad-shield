@@ -1,0 +1,26 @@
+/*
+ * Ad Shield: YouTube hiding (hand-written; registered as content-script CSS for youtube.com,
+ * youtube-nocookie.com and youtubekids.com only, while Ads is on; see docs/ARCHITECTURE.md).
+ * Selectors follow EasyList easylist_specific_hide.txt and AdGuard Base (docs/research-v2.md B.4)
+ * plus the anti-adblock dialog element (B.3). One rule per selector, so a selector Chrome does not
+ * understand drops only itself. Deliberately not hidden: .ytp-ad-module (holds the Skip button),
+ * #player-ads and .video-ads (uBO keeps exceptions for them), and the dialog backdrop (it would need
+ * a body:has() selector, which Chrome re-checks on every DOM change).
+ */
+ytd-ad-slot-renderer{display:none!important}
+ytd-rich-item-renderer:has(> ytd-ad-slot-renderer){display:none!important}
+ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer){display:none!important}
+ytd-rich-item-renderer:has(> #content > ytd-display-ad-renderer){display:none!important}
+#masthead-ad{display:none!important}
+ytd-search-pyv-renderer{display:none!important}
+ytd-display-ad-renderer{display:none!important}
+ytd-in-feed-ad-layout-renderer{display:none!important}
+ytd-promoted-sparkles-web-renderer{display:none!important}
+ytd-player-legacy-desktop-watch-ads-renderer{display:none!important}
+#shorts-inner-container > .ytd-shorts:has(> .ytd-reel-video-renderer > ytd-ad-slot-renderer){display:none!important}
+ytd-enforcement-message-view-model{display:none!important}
+tp-yt-paper-dialog:has(ytd-enforcement-message-view-model){display:none!important}
+ad-slot-renderer{display:none!important}
+ytm-companion-ad-renderer{display:none!important}
+ytm-promoted-sparkles-web-renderer{display:none!important}
+.ytp-ad-progress-list{display:none!important}

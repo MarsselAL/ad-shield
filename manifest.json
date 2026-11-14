@@ -110,6 +110,11 @@
         "id": "cookie_strip",
         "enabled": true,
         "path": "rules/cookie_strip.json"
+      },
+      {
+        "id": "youtube",
+        "enabled": true,
+        "path": "rules/youtube.json"
       }
     ]
   }

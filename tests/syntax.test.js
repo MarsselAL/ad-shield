@@ -10,7 +10,8 @@ var FILES = [
   'src/content/cosmetic.js', 'src/content/bridge.js',
   'src/background/service-worker.js', 'src/popup/popup.js', 'src/options/options.js',
   'src/shared/blocking.js', 'src/background/general.js', 'src/background/autoconsent-shim.js', 'src/content/general.js',
-  'src/shared/filterlist.js', 'src/shared/lists.js', 'src/background/updater.js'
+  'src/shared/filterlist.js', 'src/shared/lists.js', 'src/background/updater.js',
+  'src/scriptlets/lib.js', 'src/scriptlets/runner.js', 'build/scriptlets-main.js'
 ];
 
 FILES.forEach(function (f) {

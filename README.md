@@ -16,6 +16,13 @@ JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configu
 - **Cookie banners: hide**: blocks consent-banner scripts and hides cookie notices.
 - **Cookie banners: auto-reject** (off by default): DuckDuckGo's autoconsent clicks "reject" /
   "only necessary" on known consent pop-ups.
+- **YouTube ads and anti-adblock walls** (on with Ads; option "Fix YouTube ads and anti-adblock
+  walls (page scripts)"): our own small page scripts ("scriptlets", `rules/scriptlets.json`)
+  remove the ad entries (`adPlacements`, `playerAds`, `adSlots`, feed and Shorts ad items) from
+  YouTube's player and feed data before the page uses it, defuse the player's anti-adblock
+  report, and, if an ad still plays, mute it, jump to its end and press Skip. Plus YouTube-only
+  hiding CSS and two network rules (`/pagead/`, `/youtubei/v1/player/ad_break`). They run on
+  youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
 - **Weekly filter-list updates** (on by default, can be switched off): downloads the three lists
   from their public addresses once a week, converts them in the browser and installs them as
@@ -74,6 +81,10 @@ General blocking (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
   snippets) as its documentation describes.
 - Allowlisted sites get one dynamic `allowAllRequests` rule and are excluded from all content
   scripts.
+- Scriptlets: `src/scriptlets/lib.js` (our own code, no GPL code) + the rules in
+  `rules/scriptlets.json` are built into `build/scriptlets-main.js`, registered in the page's
+  MAIN world at `document_start` (all frames) for the hosts named in the rules only. Shipped in
+  the package; nothing is downloaded.
 
 Twitch:
 
@@ -97,9 +108,10 @@ Twitch:
 | `privacy_curated` | 1 (45 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
+| `youtube` | 2 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,824 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,826 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.
@@ -159,7 +171,8 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 |---|---|---|
 | Enabled | on | Master switch for everything (all-sites features and Twitch). |
 | Debug logging | off | `[TAS]` debug lines in the page and extension consoles (warnings/errors always). |
-| Ads | on | Rulesets `ads_*` + EasyList element hiding. |
+| Ads | on | Rulesets `ads_*` and `youtube` + EasyList element hiding + YouTube hiding CSS. |
+| Fix YouTube ads and anti-adblock walls (page scripts) | on | MAIN-world scriptlets on YouTube hosts (`build/scriptlets-main.js`); only while Ads is on. |
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
@@ -182,9 +195,12 @@ Reload the tab after switching.
 
 - **Lists are as fresh as the last build.** There is no automatic list update (by design: no
   remote configuration). Rebuild and reload to update.
-- DNR cannot express everything uBlock Origin can: pop-up blocking, scriptlets, procedural
+- DNR cannot express everything uBlock Origin can: pop-up blocking, list scriptlets, procedural
   cosmetic filters, `$redirect`/`$csp`/`$removeparam`, and most regex filters are skipped, so
-  some sites (especially anti-adblock walls) work less well than with uBlock Origin.
+  some sites (especially anti-adblock walls) work less well than with uBlock Origin. Our own
+  scriptlets cover YouTube only; YouTube changes its data shapes often, so they can stop
+  working until a new release. Ads that YouTube stitches into the video stream (server-side,
+  "SSAP") cannot be removed: they are only muted (we do not seek, as that would skip the video).
 - Site-specific hiding is applied a moment after the page starts (it waits for the background),
   so an ad can flash briefly. It is applied in the top frame only; generic hiding runs in all
   frames.
@@ -233,6 +249,10 @@ Then bump `version` in `manifest.json` and `src/config.js`, and reload the exten
 - `python3 tools/live_test.py --smoke` – starts Chrome with a temporary profile and checks the
   extension loads, the rulesets match test requests (`testMatchOutcome`, nothing is sent) and
   the cosmetic CSS works on a page served from 127.0.0.1. No Twitch traffic.
+- `python3 -I tools/youtube_test.py [--only ext|noext]` – **makes real requests to YouTube**:
+  watches three videos for 30 s each in a fresh headless profile (consent: "Reject all") and
+  reports playback, `ad-showing`, the anti-adblock element and which ad keys were served and
+  which the page saw.
 - `python3 tools/live_test.py --live CHANNEL [--minutes N] [--vod URL] [--switch-to CH2]
   [--compare-without-extension]` – **makes real requests to Twitch.**
 

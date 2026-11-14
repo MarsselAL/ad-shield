@@ -291,6 +291,15 @@ class CuratedBuild(unittest.TestCase):
         self.assertEqual(got, ["ads_2", "ads_10", "ads_curated", "privacy_1", "privacy_2", "privacy_curated",
                                "cookies_1", "cookie_strip"])
 
+    def test_hand_written_youtube_ruleset_goes_last_and_is_never_cleaned_up(self):
+        import fnmatch
+        got = [r["id"] for r in build_rules.order_rulesets([{"id": i} for i in ("youtube", "cookie_strip", "ads_1")])]
+        self.assertEqual(got, ["ads_1", "cookie_strip", "youtube"])
+        self.assertEqual(dnr_schema.general_order_key("youtube"), (4, 0))
+        self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match("youtube"))
+        for pattern in build_rules.GENERATED_GLOBS:
+            self.assertFalse(fnmatch.fnmatch("youtube.json", os.path.basename(pattern)), pattern)
+
     def test_cleanup_globs_spare_curated_files(self):
         import fnmatch
         for pattern in build_rules.GENERATED_GLOBS:
@@ -319,7 +328,8 @@ class CuratedBuild(unittest.TestCase):
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
-                         ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip"])
+                         ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
+                          "youtube"], "the hand-written youtube ruleset is always kept, last")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])

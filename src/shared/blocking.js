@@ -24,6 +24,8 @@
   var DYNAMIC_FEATURES = ['ads', 'trackers', 'hideCookieBanners'];
   var SCRIPT_PREFIX = 'as-';
   var WEB = ['http://*/*', 'https://*/*'];
+  // Our own YouTube cosmetic CSS (rules/cosmetic/youtube.css) is registered for these sites only.
+  var YOUTUBE_CSS_HOSTS = ['youtube.com', 'youtube-nocookie.com', 'youtubekids.com'];
 
   function defaults() {
     return {
@@ -33,6 +35,7 @@
       hideCookieBanners: true,   // EasyList Cookie List network rules + cosmetic hiding
       autoRejectCookies: false,  // DuckDuckGo autoconsent: click "reject" on consent pop-ups
       autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
+      scriptlets: true,          // our page scripts (rules/scriptlets.json, e.g. YouTube); needs ads on
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -132,9 +135,10 @@
    * Category of a static ruleset id; null for rulesets this module does not own.
    * ads_N / privacy_N come from EasyList / EasyPrivacy, ads_curated / privacy_curated from our
    * own rules/curated_hosts.txt; both follow the same switch and count in the same bucket.
+   * youtube is our hand-written rules/youtube.json (two YouTube ad paths), part of Ads.
    */
   function rulesetFeature(id) {
-    if (/^ads_(\d+|curated)$/.test(id)) return 'ads';
+    if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
     if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
     if (id === 'cookie_strip') return 'stripCookies';
@@ -238,12 +242,27 @@
     return out;
   }
 
+  /** Sorted unique hosts of rules/scriptlets.json ({ rules: [{ hosts: [...] }] }); [] if malformed. */
+  function scriptletHosts(table) {
+    var seen = {};
+    var rules = table && Array.isArray(table.rules) ? table.rules : [];
+    rules.forEach(function (r) {
+      (r && Array.isArray(r.hosts) ? r.hosts : []).forEach(function (h) {
+        var n = normalizeHost(h);
+        if (n && n === h && hostPatterns(n).length) seen[n] = true;
+      });
+    });
+    return Object.keys(seen).sort();
+  }
+
   /**
    * Content scripts to register (chrome.scripting.registerContentScripts format).
    * cosmeticExcludeHosts: hosts with generic-hiding exceptions; they get the generic CSS from the
    * background instead (minus the exceptions), so the static CSS file skips them.
+   * slHosts: scriptletHosts(rules/scriptlets.json); build/scriptlets-main.js runs only there
+   * (MAIN world, every frame incl. about:blank ones), while Ads and Page scripts are both on.
    */
-  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts) {
+  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts, slHosts) {
     if (!masterEnabled) return [];
     var allow = patternsFor(b.allowlist);
     var cssExclude = allow.concat(patternsFor(cosmeticExcludeHosts));
@@ -263,6 +282,20 @@
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);
     if (b.autoRejectCookies) js('as-autoconsent', 'vendor/autoconsent/content.bundle.js', true);
+    if (b.ads) {
+      var yt = { id: 'as-css-youtube', css: ['rules/cosmetic/youtube.css'], matches: patternsFor(YOUTUBE_CSS_HOSTS), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
+      if (allow.length) yt.excludeMatches = allow.slice();
+      plan.push(yt);
+    }
+    var slm = patternsFor(slHosts);
+    if (b.ads && b.scriptlets && slm.length) {
+      var sl = {
+        id: 'as-scriptlets', js: ['build/scriptlets-main.js'], matches: slm, world: 'MAIN', allFrames: true,
+        matchOriginAsFallback: true, runAt: 'document_start', persistAcrossSessions: true
+      };
+      if (allow.length) sl.excludeMatches = allow.slice();
+      plan.push(sl);
+    }
     return plan;
   }
 
@@ -375,6 +408,8 @@
     countMatches: countMatches,
     hostPatterns: hostPatterns,
     contentScriptPlan: contentScriptPlan,
+    scriptletHosts: scriptletHosts,
+    YOUTUBE_CSS_HOSTS: YOUTUBE_CSS_HOSTS,
     hostCandidates: hostCandidates,
     cssForHost: cssForHost,
     needsGeneric: needsGeneric,

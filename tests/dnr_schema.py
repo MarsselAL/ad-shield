@@ -17,8 +17,8 @@ ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allo
 # Rulesets built from our own rules/curated_hosts.txt (tools/curated.py), in manifest order.
 CURATED_RULESETS = ("ads_curated", "privacy_curated")
 # Every general (non-Twitch) ruleset id the build may produce.
-GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$")
-_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3}
+GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$")
+_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4}
 
 RESOURCE_TYPES = {
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object",
@@ -168,7 +168,7 @@ def regex_count(rules):
 
 def general_order_key(rid):
     """Required manifest order of the general rulesets: ads_1.., ads_curated, privacy_1..,
-    privacy_curated, cookies_1.., cookie_strip."""
+    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written)."""
     if rid in _ORDER_GROUPS:
         return (_ORDER_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")

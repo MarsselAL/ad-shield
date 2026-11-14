@@ -51,11 +51,14 @@ TWITCH_RULESETS = [
 # (full or --curated-only) but never deleted by the cleanup.
 GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
 CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
-_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3}
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4}
+# Hand-written rulesets (not generated, never deleted): kept in the manifest by every build.
+HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"}]
 
 
 def ruleset_order_key(rid):
-    """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip."""
+    """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip,
+    youtube."""
     if rid in _GROUPS:
         return (_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -107,7 +110,8 @@ def curated_only(root=ROOT):
     with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
         current = json.load(fh).get("declarative_net_request", {}).get("rule_resources", [])
     twitch = {r["id"] for r in TWITCH_RULESETS}
-    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS]
+    hand = {r["id"] for r in HAND_RULESETS}
+    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS and r.get("id") not in hand]
     entries, metas, cinfo = write_curated(root)
     info_path = os.path.join(root, "rules", "build-info.json")
     info = {}
@@ -116,7 +120,7 @@ def curated_only(root=ROOT):
             info = json.load(fh)
     add_curated_info(info, metas, cinfo)
     write_build_info(info, root)
-    changed = update_manifest(order_rulesets(keep + entries), root)
+    changed = update_manifest(order_rulesets(keep + entries + HAND_RULESETS), root)
     return info, changed
 
 
@@ -343,7 +347,7 @@ def main(argv):
     entries, metas, cinfo = write_curated()
     add_curated_info(info, metas, cinfo)
     write_build_info(info)
-    changed = update_manifest(order_rulesets(rulesets + entries))
+    changed = update_manifest(order_rulesets(rulesets + entries + HAND_RULESETS))
     print_summary(info, changed)
     return 0
 

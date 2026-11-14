@@ -9,7 +9,8 @@
  *    allowlist, and the dynamic rules of updated filter lists (chrome.storage.local "listRules",
  *    written by updater.js through installLists / resetLists). A category with dynamic rules
  *    installed has its list rulesets (ads_N, privacy_N, cookies_N) disabled;
- *  - registers the cosmetic CSS / small page script / autoconsent content scripts with
+ *  - registers the cosmetic CSS / small page script / autoconsent content scripts and our MAIN-world
+ *    scriptlets (build/scriptlets-main.js, hosts from rules/scriptlets.json) with
  *    chrome.scripting.registerContentScripts (only when the plan changed);
  *  - injects per-site cosmetic CSS (chrome.scripting.insertCSS, USER origin) when the page
  *    script says hello, and counts "banner hidden" / autoconsent opt-outs per page;
@@ -209,8 +210,11 @@
   function syncScripts(st) {
     var needSite = st.settings.enabled && (st.blocking.ads || st.blocking.hideCookieBanners);
     var siteP = needSite ? loadSite().catch(function () { return null; }) : Promise.resolve(null);
-    return Promise.all([siteP, chrome.storage.local.get(SIG_KEY), chrome.scripting.getRegisteredContentScripts()]).then(function (res) {
-      var plan = B.contentScriptPlan(st.settings.enabled, st.blocking, B.cosmeticExcludeHosts(res[0]));
+    // Hosts of our packaged page-script rules (build/scriptlets-main.js runs only there).
+    var needSl = st.settings.enabled && st.blocking.ads && st.blocking.scriptlets;
+    var slP = needSl ? loadJson('rules/scriptlets.json').then(B.scriptletHosts, function () { return []; }) : Promise.resolve([]);
+    return Promise.all([siteP, chrome.storage.local.get(SIG_KEY), chrome.scripting.getRegisteredContentScripts(), slP]).then(function (res) {
+      var plan = B.contentScriptPlan(st.settings.enabled, st.blocking, B.cosmeticExcludeHosts(res[0]), res[3]);
       var sig = JSON.stringify(plan);
       var ours = (res[2] || []).filter(function (s) { return s.id.indexOf(B.SCRIPT_PREFIX) === 0; });
       if (res[1][SIG_KEY] === sig && ours.length === plan.length) return undefined;

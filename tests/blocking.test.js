@@ -4,7 +4,9 @@ var B = __TAS__.blocking;
 
 test('defaults: everything on except auto-reject; normalize never throws', function () {
   var d = B.defaults();
-  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, allowlist: [] });
+  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, scriptlets: true, allowlist: [] });
+  assert.equal(B.normalize({ scriptlets: false }).scriptlets, false);
+  assert.equal(B.normalize({ scriptlets: 1 }).scriptlets, true);
   assert.equal(B.normalize({ autoUpdateLists: false }).autoUpdateLists, false);
   assert.equal(B.normalize({ autoUpdateLists: 'no' }).autoUpdateLists, true);
   assert.deepEqual(B.normalize(null), d);
@@ -75,6 +77,12 @@ test('rulesetPlan: curated rulesets follow the Ads / Trackers switches and the m
   assert.equal(B.rulesetFeature('privacy_curated'), 'trackers');
   assert.equal(B.rulesetFeature('cookies_curated'), null);
   assert.equal(B.rulesetFeature('ads_curated_1'), null);
+  assert.equal(B.rulesetFeature('youtube'), 'ads', 'hand-written YouTube ruleset follows Ads');
+  assert.notOk(B.isListRuleset('youtube'), 'not replaced by the weekly list update');
+  var yt = B.rulesetPlan(['ads_1', 'youtube'], true, Object.assign(B.defaults(), { ads: false }));
+  assert.deepEqual(yt.disableRulesetIds, ['ads_1', 'youtube']);
+  assert.deepEqual(B.rulesetPlan(['ads_1', 'youtube'], true, B.defaults(), { ads: true }).enableRulesetIds, ['youtube']);
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 1 } }]).ads, 1);
 });
 
 test('countMatches: curated rulesets count as ads / trackers', function () {
@@ -108,7 +116,7 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(B.hostPatterns('bad_host.com'), []);
   assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), []);
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site']);
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
   assert.deepEqual(plan[0].css, ['rules/cosmetic/ads_generic.css']);
   assert.deepEqual(plan[0].excludeMatches, ['*://*.off.com/*', '*://*.exc.org/*']);
   assert.equal(plan[0].allFrames, true);
@@ -119,6 +127,36 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(ac.map(function (s) { return s.id; }), ['as-autoconsent']);
   assert.equal(ac[0].matchOriginAsFallback, true);
   assert.equal(ac[0].excludeMatches, undefined);
+});
+
+test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their hosts, allowlist excluded, follow Ads + Page scripts', function () {
+  var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
+  assert.deepEqual(hosts, ['youtube-nocookie.com', 'youtube.com', 'youtubekids.com']);
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site', 'as-css-youtube', 'as-scriptlets']);
+  var css = plan[3], sl = plan[4];
+  assert.deepEqual(css.css, ['rules/cosmetic/youtube.css']);
+  assert.deepEqual(css.matches, ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*']);
+  assert.deepEqual(css.excludeMatches, ['*://*.off.com/*'], 'YouTube CSS: allowlist only');
+  assert.deepEqual(sl.js, ['build/scriptlets-main.js']);
+  assert.equal(sl.world, 'MAIN');
+  assert.equal(sl.runAt, 'document_start');
+  assert.equal(sl.allFrames, true);
+  assert.equal(sl.matchOriginAsFallback, true);
+  assert.equal(sl.persistAcrossSessions, true);
+  assert.deepEqual(sl.matches, ['*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*']);
+  assert.deepEqual(sl.excludeMatches, ['*://*.off.com/*']);
+  var noAllow = B.contentScriptPlan(true, B.defaults(), [], hosts);
+  assert.equal(noAllow[noAllow.length - 1].excludeMatches, undefined);
+  var ids = function (p) { return p.map(function (s) { return s.id; }); };
+  assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { scriptlets: false }), [], hosts)).indexOf('as-scriptlets'), -1, 'page scripts off');
+  var noAds = ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false }), [], hosts));
+  assert.equal(noAds.indexOf('as-scriptlets'), -1, 'Ads off: no scriptlets');
+  assert.equal(noAds.indexOf('as-css-youtube'), -1, 'Ads off: no YouTube CSS');
+  assert.deepEqual(B.contentScriptPlan(false, B.defaults(), [], hosts), [], 'master switch off');
+  assert.equal(ids(B.contentScriptPlan(true, B.defaults(), [], [])).indexOf('as-scriptlets'), -1, 'no hosts (rules not loaded): nothing registered');
+  assert.deepEqual(B.scriptletHosts({ rules: [{ hosts: ['A.com', 'b.com', 'b.com', 'bad host', 5] }, null, { hosts: 'x' }] }), ['b.com']);
+  assert.deepEqual(B.scriptletHosts(null), []);
 });
 
 var SITE = {

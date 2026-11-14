@@ -1,0 +1,15 @@
+{
+  "responseContext": {"serviceTrackingParams": [{"service": "GFEEDBACK", "params": [{"key": "is_viewed_live", "value": "False"}]}]},
+  "playabilityStatus": {"status": "OK", "playableInEmbed": true},
+  "streamingData": {"expiresInSeconds": "21540", "formats": [{"itag": 18, "mimeType": "video/mp4; codecs=\"avc1.42001E, mp4a.40.2\"", "width": 320, "height": 240}],
+    "adaptiveFormats": [{"itag": 137, "mimeType": "video/mp4; codecs=\"avc1.640028\""}]},
+  "playerAds": [{"playerLegacyDesktopWatchAdsRenderer": {"playerAdParams": {"showContentThumbnail": true}, "gutParams": {"tag": "4061"}}}],
+  "adPlacements": [
+    {"adPlacementRenderer": {"config": {"adPlacementConfig": {"kind": "AD_PLACEMENT_KIND_START"}}, "renderer": {"linearAdSequenceRenderer": {}}}},
+    {"adPlacementRenderer": {"config": {"adPlacementConfig": {"kind": "AD_PLACEMENT_KIND_MILLISECONDS"}}, "renderer": {"adBreakServiceRenderer": {}}}}
+  ],
+  "adSlots": [{"adSlotRenderer": {"adSlotMetadata": {"slotId": "0:1", "slotType": "SLOT_TYPE_PLAYER_BYTES"}}}],
+  "videoDetails": {"videoId": "jNQXAC9IVRw", "title": "Me at the zoo", "lengthSeconds": "19", "author": "jawed"},
+  "playerConfig": {"audioConfig": {"loudnessDb": -1.2}},
+  "storyboards": {"playerStoryboardSpecRenderer": {"spec": "x"}}
+}

@@ -120,3 +120,23 @@ Remaining 24 reachable, all deliberate:
 | widget.intercom.io, js.driftt.com, cdn./api.onesignal.com, static./a.klaviyo.com | support chat, web push, signup forms |
 
 The site test is not run by `tests/run.sh` (it needs the network).
+
+## YouTube (2026-11-14)
+
+Run with `python3 -I tools/youtube_test.py` (headless Chrome, fresh profile, normal user agent,
+consent answered "Reject all", 30 s per video, sampled once a second). Full results:
+`results/<timestamp>-youtube/` (gitignored).
+
+| Video | Run | Played (content t) | `ad-showing` seen | Ad keys served (HTML / `/player`) | Ad keys the page saw (`ytInitialPlayerResponse` / `getPlayerResponse()`) | Wall | Page exceptions |
+|---|---|---|---|---|---|---|---|
+| jNQXAC9IVRw | ext | yes (19 s, end) | no | - / adPlacements, playerAds | none / none | no | 0 |
+| jNQXAC9IVRw | noext | yes (19 s, end) | no | - / adPlacements, playerAds | none / adPlacements, playerAds | no | 0 |
+| kJQP7kiw5Fk | ext | yes (30 s) | no | adPlacements, playerAds / - | none / none | no | 0 |
+| kJQP7kiw5Fk | noext | yes (30 s) | no | adPlacements, playerAds / - | adPlacements, playerAds / same | no | 0 |
+| 9bZkp7q19f0 | ext | yes (30 s) | no | adPlacements, playerAds / - | none / none | no | 0 |
+| 9bZkp7q19f0 | noext | yes (30 s) | no | adPlacements, playerAds / - | adPlacements, playerAds / same | no | 0 |
+
+YouTube sent ad data in both runs; with Ad Shield the page and player never saw it, and playback
+was normal. Not proven: the control run showed no actual ad (no `ad-showing`) in this headless
+profile, so "an ad that would play is removed" and the skip fallback are not demonstrated live;
+neither are feed / Shorts pruning or the anti-adblock wall (none appeared).

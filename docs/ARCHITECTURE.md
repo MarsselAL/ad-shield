@@ -26,9 +26,12 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 | `cosmetic/ads_generic.css`, `cosmetic/cookies_generic.css` | generic hiding, registered as content-script CSS (all frames). Simple `#id` / `.class` selectors grouped 100 per rule, everything else one rule per selector (an invalid selector only drops itself). |
 | `cosmetic/site.json` | site selectors per host (`ads`, `cookies`), exceptions per host, `genericExceptionHosts`, `generichide`, `elemhide` |
 | `cosmetic/generic.json` | the generic selectors again, for hosts that have exceptions (loaded only for them) |
+| `youtube.json` (hand-written) | static DNR ruleset `youtube`: blocks `\|\|youtube.com/pagead/` and `\|\|youtube.com/youtubei/v1/player/ad_break` (research-v2 B.5; never `/api/stats/` or `get_drm_license`). EasyList has both too; ours stays when the weekly update replaces `ads_N`. Toggled by Ads, counted as ads, last in the manifest; `tools/build_rules.py` keeps it (`HAND_RULESETS`), `tests/validate_manifest.py` pins its two rules. |
+| `cosmetic/youtube.css` (hand-written) | YouTube hiding, registered for YouTube hosts only (below) |
+| `scriptlets.json` (hand-written) | our scriptlet rules (below) |
 | `build-info.json` | list versions, rule counts, skipped filters by reason, `curated` host counts |
 
-Total static rules today: 14,824 (14,822 enabled by default), under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
+Total static rules today: 14,826 (14,824 enabled by default; 2 of them the hand-written `youtube` ruleset), under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
 the shared global pool is never needed; `tests/validate_manifest.py` enforces this, the regex
 limit (1,000) and the ruleset count limits.
 
@@ -36,12 +39,13 @@ limit (1,000) and the ruleset count limits.
 
 | File | World / context | Role |
 |---|---|---|
-| `src/shared/blocking.js` | background, popup, options, ISOLATED bundle, tests | Storage key `blocking` (`ads`, `trackers`, `stripCookies`, `hideCookieBanners`, `autoRejectCookies`, `autoUpdateLists`, `allowlist`), normalisation, allowlist matching, the dynamic rule id ranges of updated lists (`DYNAMIC_BASES`, `dynamicFeature`), and pure planners: `rulesetPlan` (takes the categories whose updated lists are installed), `allowlistRules`, `contentScriptPlan`, `cssForHost`, `countMatches`. |
+| `src/shared/blocking.js` | background, popup, options, ISOLATED bundle, tests | Storage key `blocking` (`ads`, `trackers`, `stripCookies`, `hideCookieBanners`, `autoRejectCookies`, `autoUpdateLists`, `scriptlets`, `allowlist`), normalisation, allowlist matching, the dynamic rule id ranges of updated lists (`DYNAMIC_BASES`, `dynamicFeature`), and pure planners: `rulesetPlan` (takes the categories whose updated lists are installed), `allowlistRules`, `contentScriptPlan`, `cssForHost`, `countMatches`. |
 | `src/shared/filterlist.js` | service worker, tests | JavaScript port of `tools/filterlist.py` + `build_rules.convert_texts` (network rules with domain merging, priorities, allow ids from 500001, RE2 safety check, regex cap, skip reasons; site-specific cosmetic data). Keeps Python semantics where they affect output (`str.strip`/`splitlines`, `json.dumps(sort_keys=True)` group keys, IDNA 2003 nameprep + punycode like Python's `idna` codec). Parity: `tests/filterlist.test.js` against `golden.json`; on the real lists of 2026-11-14 both converters gave identical rules, counts and site data (3,781 / 9,244 / 1,794 rules; jsc took about 0.3 s for all three). |
 | `src/shared/lists.js` | service worker, options, tests | Pure decisions of the list update: list URLs, version parsing (`202611140001`, `2026-11-12 20:50 UTC`, `14 Nov 2026 00:01 UTC`), sanity checks, all-or-nothing decision, dynamic ids, limits, `isDue`, `shouldRevert`, status rows. |
 | `src/background/general.js` | service worker | Owns every DNR change of the general blocker in one queue (`syncDnr`): `updateEnabledRulesets` for the general rulesets, one dynamic `allowAllRequests` rule (id 1, priority 100) for the allowlist, the dynamic rules of updated lists; `registerContentScripts` (skipped when the stored plan signature is unchanged). Handles `as-page` (inject site CSS with `insertCSS`, `origin: 'USER'`), `as-banner`, and autoconsent's messages. Site cosmetic data: `chrome.storage.local` `listSite` (updated lists) when present, else `rules/cosmetic/site.json`; other data is loaded from the package with `fetch(chrome.runtime.getURL(...))`. `installLists` / `resetLists` are the updater's entry points into the queue. |
 | `src/background/updater.js` | service worker | Weekly list update (below). The only code that makes network requests. |
 | `src/background/autoconsent-shim.js` + `vendor/autoconsent/autoconsent.cjs.js` | service worker | `module`/`exports` objects so the unmodified CommonJS build loads with `importScripts`; `general.js` uses its `evalSnippets` and `filterCompactRules`. A load failure only disables auto-reject. |
+| `src/scriptlets/lib.js`, `src/scriptlets/runner.js` -> `build/scriptlets-main.js` | MAIN, all frames, document_start, YouTube hosts only | Our scriptlets (section below). |
 | `src/content/general.js` | ISOLATED, top frame, document_start | Sends `as-page` with the host and `performance.timeOrigin`; once after `load` + 1.5 s (idle callback) checks this site's cookie selectors with `querySelector` and reports one `as-banner` if one matched. No observers, no repeating timers. |
 | `vendor/autoconsent/content.bundle.js` | ISOLATED, all frames | autoconsent, registered only while auto-reject is on. |
 
@@ -53,10 +57,81 @@ Registered content scripts (ids start with `as-`; the Twitch ones stay in `manif
 | `as-css-cookies` | `rules/cosmetic/cookies_generic.css` | all | allowlist + exception hosts |
 | `as-site` | `src/content/general.js` | top | allowlist |
 | `as-autoconsent` | `vendor/autoconsent/content.bundle.js` (`matchOriginAsFallback`) | all | allowlist |
+| `as-css-youtube` | `rules/cosmetic/youtube.css`, matches `youtube.com`, `youtube-nocookie.com`, `youtubekids.com` (`YOUTUBE_CSS_HOSTS`) | all | allowlist |
+| `as-scriptlets` | `build/scriptlets-main.js`, `world: 'MAIN'`, `matchOriginAsFallback`, matches only the hosts of `rules/scriptlets.json` | all | allowlist |
 
 Exception hosts (sites with `#@#` exceptions for generic selectors, `$generichide`, `$elemhide`)
 are excluded from the static CSS; for them the background injects the generic selectors minus
 the exceptions (none for `generichide`, nothing at all for `elemhide`).
+
+### Scriptlets (`src/scriptlets/`, `rules/scriptlets.json`)
+
+Small patches of page APIs that must run in the page's own JavaScript world before the site's
+code: what DNR and CSS cannot do (edit JSON the page receives, trap globals, neuter callbacks).
+Our own code (MIT), written from the behaviour descriptions in research-v2 A.1; no uBO / uBOL /
+AdGuard code (GPL).
+
+- **Library** `src/scriptlets/lib.js`: `set-constant`, `abort-on-property-read`,
+  `abort-on-property-write`, `json-prune`, `json-prune-fetch-response`, `json-prune-xhr-response`,
+  `prune-on-assign`, `prevent-fetch`, `prevent-setTimeout`, `prevent-promise-then-callback`,
+  `remove-attr`, `remove-class`, `youtube-ad-skip`. Each is `fn(win, args, log)` and only touches
+  `win.X`, so tests use fake windows and child frames can be patched too. Argument syntax (paths
+  with `[]`, `[-]`, leading `..`; URL / needle as substring or `/regex/`) is documented at the
+  top of the file. Patched functions are Proxies of the originals (name and length kept) and the
+  realm's `Function.prototype.toString` returns the original source for them. Every hook catches
+  its own errors and falls back to the original behaviour; the fetch / XHR pruning returns the
+  original response when nothing was removed or the body is not JSON, and otherwise a new
+  `Response` with the original status, status text, headers (minus `content-length`), `url`,
+  `type` and `redirected`. XHR: `response` / `responseText` are overridden on the instance, only
+  for requests whose URL matches.
+- **Child frames**: a page can take a clean `fetch` / `JSON` / `Promise` from a fresh
+  `about:blank` iframe before any content script runs there (research-v2 B, Risks). The runner
+  hooks `HTMLIFrameElement.prototype.contentWindow` / `contentDocument`; the first access to a
+  same-origin frame's document re-applies the scriptlets marked `fn.frames` (the fetch / XHR /
+  JSON / Promise / timer ones) to that frame, recursively. Not covered: `window.frames[i]`.
+- **Runner** `src/scriptlets/runner.js`: picks the rules whose `hosts` cover `location.hostname`
+  (host or a parent domain; `notyoutube.com` does not match `youtube.com`); `about:blank` /
+  `srcdoc` frames use `document.domain` / `self.origin`.
+- **Delivery**: `tools/build.py` checks `rules/scriptlets.json` (hosts, known scriptlet names,
+  string arguments; a bad rule fails the build) and writes `build/scriptlets-main.js` = lib +
+  runner + the rules as JSON, inside one function scope (no page globals). `general.js` loads
+  the packaged `rules/scriptlets.json`, `blocking.scriptletHosts` turns it into match patterns
+  and `contentScriptPlan` registers `as-scriptlets` (MAIN world) for those hosts only, so other
+  sites pay nothing. On while the master switch, Ads and "Fix YouTube ads and anti-adblock walls
+  (page scripts)" (`blocking.scriptlets`, default on) are on; allowlisted sites are excluded.
+  Shipped in the package only, never downloaded, no telemetry.
+- **Cost on YouTube**: one ~35 KB script per frame at document_start. `JSON.parse` /
+  `Response.json` check a few top-level keys per call; the deep feed paths walk an object only
+  when it has `responseContext` (YouTube API responses, ~1 ms per response). Matching youtubei
+  responses are additionally parsed and re-serialised once. `Promise.prototype.then` checks each
+  callback's source once (cached per function). `youtube-ad-skip`: two capture listeners
+  (`loadedmetadata`, `playing`) and one MutationObserver per player on its `class` attribute; no
+  timers, no polling. `remove-attr` / `remove-class` (not used by the YouTube rules) observe for
+  at most 10 s (or until 3 s after `load`), re-running at most every 100 ms.
+
+The YouTube rules (research-v2 B recipe 1-7 and 11):
+
+| Scriptlet | What |
+|---|---|
+| `prune-on-assign ytInitialPlayerResponse` | setter trap: the page-embedded player response loses `adPlacements`, `adSlots`, `playerAds` |
+| `prune-on-assign ytInitialData` | feed / search / watch-next / Shorts ad items removed from the initial data |
+| `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys |
+| `json-prune` (feed keys, requires `responseContext`) | `..contents.[-]...adSlotRenderer`, `..continuationItems.[-]...`, `..results.[-].adSlotRenderer`, `..contents.[-].searchPyvRenderer`, `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` |
+| `json-prune-fetch-response`, `json-prune-xhr-response` | both key sets, for `/youtubei/v1/(player\|get_watch\|next\|browse\|search\|reel/reel_watch_sequence\|reel/reel_item_watch)` |
+| `prevent-promise-then-callback onAbnormalityDetected` | the player's anti-adblock reporter callback becomes a no-op |
+| `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false` | avoids the muted-playback side effect AdGuard reports |
+| `youtube-ad-skip` (youtube.com) | `.html5-video-player.ad-showing`: mute, seek the ad to its end, click Skip; unmute after. No seek when the ad is in the content stream (same `src` as the content, or `getStatsForNerds().debug_info` starts with `SSAP`): seeking there would skip the video |
+
+Not done (research-v2 B): client-variant rotation against "fake buffering" (phase 3), text
+renaming of ad keys in unparsable bodies, `muteOnStart` / `youThereRenderer` removal, generic
+anti-adblock rules for other sites.
+
+**How to add a rule**: add an entry `{ "id", "about", "hosts": [...], "scriptlets": [[name,
+...args]] }` to `rules/scriptlets.json` (hosts: plain lowercase domains, each covers its
+subdomains), run `python3 tools/build.py` and `bash tests/run.sh`, reload the extension. New hosts
+are registered automatically (the plan signature changes). A new scriptlet goes into the table
+at the end of `lib.js` with a test in `tests/scriptlets.test.js`; set `fn.frames = true` if it
+patches window-level APIs that a child frame could hand out.
 
 ### Weekly filter-list update (`src/background/updater.js`)
 

@@ -1,0 +1,4 @@
+[
+{"action":{"type":"block"},"condition":{"urlFilter":"||youtube.com/pagead/"},"id":1,"priority":1},
+{"action":{"type":"block"},"condition":{"urlFilter":"||youtube.com/youtubei/v1/player/ad_break"},"id":2,"priority":1}
+]

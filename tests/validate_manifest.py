@@ -13,6 +13,8 @@ Checks:
     of the generated general rulesets passes tests/dnr_schema.py; the curated rulesets
     (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
     third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
+  - the hand-written youtube ruleset blocks only its two paths; the scriptlet bundle exists and the
+    scriptlet sources contain no URLs
 """
 import ast
 import hashlib
@@ -147,6 +149,16 @@ def main():
         for f in re.findall(r"'((?:rules|src|vendor)/[^']+\.(?:js|css|json))'", bsrc):
             exists(f, "registered content-script file")
         check("ALLOW_ID_BASE = 500000" in bsrc, "blocking.js ALLOW_ID_BASE must match tools/filterlist.py")
+        # Our MAIN-world scriptlets: generated bundle registered by blocking.contentScriptPlan.
+        check("'build/scriptlets-main.js'" in bsrc and "world: 'MAIN'" in bsrc, "blocking.js must register build/scriptlets-main.js in the MAIN world")
+        exists("build/scriptlets-main.js", "scriptlet bundle (run python3 tools/build.py)")
+    sl_rules = load_json("rules/scriptlets.json")
+    check(isinstance(sl_rules, dict) and sl_rules.get("version") == 1, "rules/scriptlets.json must have version 1")
+    for f in ("src/scriptlets/lib.js", "src/scriptlets/runner.js"):
+        p = exists(f, "scriptlet source")
+        if os.path.isfile(p):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(p, encoding="utf-8").read()),
+                  "%s must not contain URLs (scriptlets never fetch anything themselves)" % f)
     fl = os.path.join(ROOT, "tools", "filterlist.py")
     if os.path.isfile(fl):
         check("ALLOW_ID_BASE = 500000" in open(fl, encoding="utf-8").read(), "tools/filterlist.py ALLOW_ID_BASE changed")
@@ -231,6 +243,15 @@ def main():
         regexes += dnr_schema.regex_count(rules)
         if r.get("enabled"):
             enabled_rules += len(rules)
+        if r.get("id") == "youtube":
+            # Hand-written: only the two safe YouTube ad paths (docs/research-v2.md B.5); never
+            # /api/stats/ or get_drm_license (both break playback / "free with ads" films).
+            check(r.get("enabled") is True, "youtube ruleset must be enabled by default")
+            flt = sorted(x.get("condition", {}).get("urlFilter", "") for x in rules if isinstance(x, dict))
+            check(flt == ["||youtube.com/pagead/", "||youtube.com/youtubei/v1/player/ad_break"],
+                  "rules/youtube.json must block exactly /pagead/ and /youtubei/v1/player/ad_break, got %s" % flt)
+            check(all(x.get("action") == {"type": "block"} and set(x.get("condition", {})) == {"urlFilter"} for x in rules if isinstance(x, dict)),
+                  "rules/youtube.json: plain block rules only (no resourceTypes: main_frame is never blocked)")
         if r.get("id") in dnr_schema.CURATED_RULESETS:
             check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
             for msg in dnr_schema.curated_ruleset_errors(rules, r.get("path")):
