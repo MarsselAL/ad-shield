@@ -140,3 +140,15 @@ YouTube sent ad data in both runs; with Ad Shield the page and player never saw 
 was normal. Not proven: the control run showed no actual ad (no `ad-showing`) in this headless
 profile, so "an ad that would play is removed" and the skip fallback are not demonstrated live;
 neither are feed / Shorts pruning or the anti-adblock wall (none appeared).
+
+## v2 summary (2026-11-14)
+
+| Check | Result |
+|---|---|
+| `bash tests/run.sh` | 344 tests passed (239 before v2) |
+| `python3 tools/build.py --check` | bundles up to date |
+| `python3 -I tools/live_test.py --smoke` | pass, including the picker and removeparam checks |
+| `python3 -I tools/site_test.py --only ext` | 92% (raw 95%, 458/482), the same as before v2 |
+| `python3 -I tools/youtube_test.py` | 3/3 videos played, with no ad fields left in what the page saw (with the extension) and ad fields present (without it); no ad was served in either run, so blocking an ad was not seen live |
+
+Scores per area are in `docs/research-v2.md`, section E.

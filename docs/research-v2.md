@@ -380,6 +380,32 @@ Constraints set by the owner on 2026-11-14:
 | skip | Per-site filtering modes like uBOL's | Our allowlist already gives on/off per site, and the extra modes need optional host permissions. | | Later |
 | skip | YouTube SSAP reload trick (B, phase 3) | Complex and account-dependent, and it changes the request identity. Too fragile to build without a real account to test on. | | Later |
 
-## E. Results
+## E. Results (2026-11-14)
 
-_Filled in after the build: see docs/TESTING.md._
+What was built, all on branch `claude/adshield-v2-797f68`:
+
+| Item | Commit | Evidence |
+|---|---|---|
+| (a) Weekly list auto-update into dynamic rules, with "Update now" and "Use built-in lists" | 2e90155 | The JS port matches the Python converter exactly on the real EasyList, EasyPrivacy and Cookie List (3,781 / 9,244 / 1,794 rules), in 305 ms under jsc. A golden-file test stops the two drifting apart. |
+| (b) Own scriptlet engine and YouTube rules | cc4c221 | In live headless runs on 3 videos, the page saw no `adPlacements`/`playerAds` with the extension; without it, all three had them. The videos played. |
+| (c) Element picker and "My filters" | 35035ce | The smoke test picks an element on a local page, saves it, reloads, and the element is still hidden. |
+| (d) Tracking-parameter removal (46 names, static `removeparam` ruleset) | b795d5d | Live: `example.com/?utm_source=x&fbclid=y&keep=1` became `example.com/?keep=1`, and the allowlist still wins. |
+| (e) Free zip with INSTALL.txt (Windows Chrome/Edge/Brave and macOS) and a privacy note | 04ede16 | `tests/test_package.py` checks the zip contents. No Web Store work, per the owner. |
+
+Tests: 239 before, 344 after (`bash tests/run.sh`). `tools/build.py --check` and `live_test.py --smoke` pass.
+superadblocktest.com: 92% before and after (raw 95%, 458/482). The new features don't target what this test probes; the remaining misses are listed in TESTING.md.
+
+### Scores, my honest estimate out of 10
+
+| Area | Before | After | Why |
+|---|---|---|---|
+| Twitch | 7 | 7 | Not touched. Still unproven on a real ad break. |
+| Network blocking | 7 | 7.5 | Same 92%, plus removal of tracking parameters. |
+| Cookie banners | 7 | 7 | Unchanged. |
+| YouTube / anti-adblock | 3 | 6 | Ad fields are removed before the player sees them, and the abnormality reporter is defused. No ad was served even in the control run, so blocking an ad has not been seen live. Server-side ad insertion is only muted, the fake-buffering fix is not built, and there are no generic anti-adblock rules for other sites. |
+| List freshness | 3 | 7.5 | Weekly automatic updates with sanity checks and a fallback. The converter is proven identical; the alarm path has been tested only with a fake `chrome`, not over a real week. |
+| Install / updates | 3 | 5 | A clear free guide. Developer mode is still needed, and code updates are still manual. |
+| Custom filters / picker | 0 | 7 | New. Top frame only. |
+| Overall | about 6 | about 7 | |
+
+Still skipped, and why (see section D): procedural cosmetics, `$redirect` resources, per-site modes, the YouTube fake-buffering reload trick and the Web Store.
