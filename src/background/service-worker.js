@@ -12,6 +12,14 @@
  */
 /* global importScripts, chrome */
 importScripts('/src/config.js', '/src/shared/settings.js', '/src/shared/logger.js', '/src/shared/stats.js');
+// General blocking (all sites). The autoconsent library is optional: if it fails to load,
+// cookie pop-ups are only hidden, never auto-rejected.
+try {
+  importScripts('/src/background/autoconsent-shim.js', '/vendor/autoconsent/autoconsent.cjs.js');
+} catch (e) {
+  console.warn('[TAS] autoconsent library not loaded', e && e.message);
+}
+importScripts('/src/shared/blocking.js', '/src/background/general.js');
 
 (function () {
   'use strict';

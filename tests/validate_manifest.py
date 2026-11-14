@@ -9,16 +9,25 @@ Checks:
   - the content scripts are the build/ bundles; the service worker no longer registers scripts
   - permissions / host permissions are limited to the allowed list
   - rule ids are unique within each ruleset, rules have the required shape
+  - the Twitch rulesets (client_ads, trackers) keep their narrow twitch.tv-only shape; every rule
+    of the generated general rulesets passes tests/dnr_schema.py; static rule / regex / ruleset
+    limits hold; the general content-script files exist; vendored autoconsent is unmodified
 """
 import ast
+import hashlib
 import json
 import os
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest"}
-ALLOWED_HOSTS = {"*://*.twitch.tv/*", "*://*.ttvnw.net/*"}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dnr_schema  # noqa: E402
+
+ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback"}
+ALLOWED_HOSTS = {"*://*.twitch.tv/*", "*://*.ttvnw.net/*", "<all_urls>"}
+TWITCH_RULESETS = ["client_ads", "trackers"]
+GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^cookie_strip$")
 
 errors = []
 checks = 0
@@ -74,6 +83,9 @@ def main():
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
     check(m.get("version") == "1.0.0", "version must be 1.0.0")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
+    check(m.get("name") == "Ad Shield", "name must be Ad Shield")
+    check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")
+    check("<all_urls>" in m.get("host_permissions", []), "host_permissions must include <all_urls> (modifyHeaders, cosmetic CSS)")
     check("twitch" not in json.dumps(m.get("icons", {})).lower(), "icons must not be Twitch-branded files")
 
     perms = set(m.get("permissions", []))
@@ -102,6 +114,31 @@ def main():
                     exists(f, "importScripts file")
             check("registerContentScripts(" not in src.replace("unregisterContentScripts(", ""),
                   "service worker must not register content scripts dynamically (they are in manifest.json)")
+            check("/src/background/general.js" in src and "/src/shared/blocking.js" in src,
+                  "service worker must load src/shared/blocking.js and src/background/general.js")
+    gen = os.path.join(ROOT, "src", "background", "general.js")
+    if os.path.isfile(gen):
+        gsrc = open(gen, encoding="utf-8").read()
+        for legacy in ("tas-page-main", "tas-bridge-isolated"):
+            check(legacy not in gsrc, "general.js must not touch the Twitch script id " + legacy)
+    blk = os.path.join(ROOT, "src", "shared", "blocking.js")
+    if os.path.isfile(blk):
+        bsrc = open(blk, encoding="utf-8").read()
+        for f in re.findall(r"'((?:rules|src|vendor)/[^']+\.(?:js|css|json))'", bsrc):
+            exists(f, "registered content-script file")
+        check("ALLOW_ID_BASE = 500000" in bsrc, "blocking.js ALLOW_ID_BASE must match tools/filterlist.py")
+    fl = os.path.join(ROOT, "tools", "filterlist.py")
+    if os.path.isfile(fl):
+        check("ALLOW_ID_BASE = 500000" in open(fl, encoding="utf-8").read(), "tools/filterlist.py ALLOW_ID_BASE changed")
+    vjson = load_json("vendor/autoconsent/VERSION.json")
+    if vjson:
+        check(vjson.get("licence") == "MPL-2.0" and vjson.get("modified") is False, "autoconsent must be MPL-2.0 and unmodified")
+        for name, digest in sorted(vjson.get("sha256", {}).items()):
+            vp = exists("vendor/autoconsent/" + name, "vendored autoconsent file")
+            if os.path.isfile(vp):
+                check(hashlib.sha256(open(vp, "rb").read()).hexdigest() == digest, "vendor/autoconsent/%s was modified" % name)
+    for f in ("NOTICE.md", "rules/NOTICE.md"):
+        exists(f, "licence notice")
     bundles = load_bundles()
     check(sorted(bundles) == ["build/isolated-world.js", "build/main-world.js"],
           "tools/build.py BUNDLES must define build/main-world.js and build/isolated-world.js")
@@ -150,14 +187,32 @@ def main():
     # Rulesets
     rr = m.get("declarative_net_request", {}).get("rule_resources", [])
     ids = [r.get("id") for r in rr]
-    check(sorted(ids) == ["client_ads", "trackers"], "rulesets must be client_ads and trackers, got %s" % ids)
+    check(ids[:2] == TWITCH_RULESETS, "first rulesets must be client_ads and trackers, got %s" % ids[:2])
+    check(len(ids) == len(set(ids)), "duplicate ruleset ids")
+    general = [i for i in ids if i not in TWITCH_RULESETS]
+    check(all(GENERATED_RULESET_RE.match(i) for i in general), "unexpected ruleset ids %s" % general)
+    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip"):
+        check(want in general, "ruleset %s missing" % want)
+    check(len(ids) <= dnr_schema.MAX_NUMBER_OF_STATIC_RULESETS, "too many rulesets")
+    check(sum(1 for r in rr if r.get("enabled")) <= dnr_schema.MAX_NUMBER_OF_ENABLED_STATIC_RULESETS, "too many enabled rulesets")
+    enabled_rules = 0
+    regexes = 0
     for r in rr:
         if r.get("id") == "trackers":
             check(r.get("enabled") is False, "trackers ruleset must be disabled by default")
+        check(r.get("path") == "rules/%s.json" % r.get("id"), "ruleset %s path must be rules/<id>.json" % r.get("id"))
         rules = load_json(r.get("path", ""))
         if rules is None:
             continue
         check(isinstance(rules, list) and rules, "%s must be a non-empty list" % r.get("path"))
+        regexes += dnr_schema.regex_count(rules)
+        if r.get("enabled"):
+            enabled_rules += len(rules)
+        if r.get("id") not in TWITCH_RULESETS:
+            for msg in dnr_schema.ruleset_errors(rules, r.get("path")):
+                errors.append(msg)
+            checks_add(len(rules))
+            continue
         rule_ids = [x.get("id") for x in rules]
         check(len(rule_ids) == len(set(rule_ids)), "%s: duplicate rule ids %s" % (r.get("path"), rule_ids))
         for x in rules:
@@ -175,7 +230,15 @@ def main():
                     re.compile(cond["regexFilter"])
                 except re.error as e:
                     errors.append("%s rule %s: bad regex %s" % (r.get("path"), x.get("id"), e))
+    check(enabled_rules <= dnr_schema.GUARANTEED_MINIMUM_STATIC_RULES,
+          "enabled static rules %d exceed the guaranteed %d" % (enabled_rules, dnr_schema.GUARANTEED_MINIMUM_STATIC_RULES))
+    check(regexes <= dnr_schema.MAX_NUMBER_OF_REGEX_RULES, "%d regex rules (max %d)" % (regexes, dnr_schema.MAX_NUMBER_OF_REGEX_RULES))
     return report()
+
+
+def checks_add(n):
+    global checks
+    checks += n
 
 
 def report():

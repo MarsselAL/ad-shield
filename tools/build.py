@@ -21,8 +21,8 @@ BUNDLES = {
         "src/core/worker-source.js", "src/page/recovery.js", "src/page/page.js",
     ],
     "build/isolated-world.js": [
-        "src/config.js", "src/shared/settings.js", "src/shared/logger.js", "src/shared/frame.js",
-        "src/shared/stats.js", "src/content/cosmetic.js", "src/content/bridge.js",
+        "src/config.js", "src/shared/settings.js", "src/shared/blocking.js", "src/shared/logger.js",
+        "src/shared/frame.js", "src/shared/stats.js", "src/content/cosmetic.js", "src/content/bridge.js",
     ],
 }
 

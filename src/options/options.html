@@ -3,23 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Twitch Ad Shield – Settings</title>
+  <title>Ad Shield – Settings</title>
   <link rel="stylesheet" href="../ui/common.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <main>
     <header class="row">
-      <div class="brand"><img src="../../icons/icon48.png" alt="" width="28" height="28"><h1>Twitch Ad Shield settings</h1></div>
+      <div class="brand"><img src="../../icons/icon48.png" alt="" width="28" height="28"><h1>Ad Shield settings</h1></div>
       <span class="muted" id="version"></span>
     </header>
 
     <section class="card">
       <h2>General</h2>
       <div class="opt row">
-        <div><strong>Enabled</strong><p class="muted">Master switch. Off removes the page scripts and network rules; open Twitch tabs need a reload.</p></div>
+        <div><strong>Enabled</strong><p class="muted">Master switch for everything below, on all sites and on Twitch. Open tabs need a reload.</p></div>
         <label class="switch"><input type="checkbox" data-key="enabled" aria-label="Enabled"><span class="track"></span></label>
       </div>
+      <div class="opt row">
+        <div><strong>Debug logging</strong><p class="muted">Logs details with the prefix [TAS] in the page and extension consoles.</p></div>
+        <label class="switch"><input type="checkbox" data-key="debug" aria-label="Debug logging"><span class="track"></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>All sites</h2>
+      <div class="opt row">
+        <div><strong>Ads</strong><p class="muted">Blocks ad requests and hides ad elements (EasyList).</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="ads" aria-label="Block ads"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Trackers</strong><p class="muted">Blocks tracking and analytics requests (EasyPrivacy).</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="trackers" aria-label="Block trackers"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Strip tracking cookies</strong><p class="muted">Removes cookies from third-party requests to known tracker domains (taken from EasyPrivacy) and drops the cookies they try to set.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="stripCookies" aria-label="Strip tracking cookies"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Cookie banners: hide</strong><p class="muted">Hides cookie notices and blocks consent-banner scripts (EasyList Cookie List).</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="hideCookieBanners" aria-label="Hide cookie banners"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Cookie banners: auto-reject</strong><p class="muted">Clicks "reject" / "only necessary" on known consent pop-ups for you (DuckDuckGo autoconsent). Adds a script to every page and frame, so it is off by default.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="autoRejectCookies" aria-label="Auto-reject cookie banners"><span class="track"></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Sites where blocking is off</h2>
+      <p class="muted">One site per line, for example <code>example.com</code> (covers its subdomains). Nothing is blocked or hidden there, including the Twitch features on twitch.tv. The popup's site switch edits this list too. Reload open tabs after a change.</p>
+      <textarea id="allowlist" rows="6" spellcheck="false" aria-label="Sites where blocking is off, one per line"></textarea>
+      <ul class="errors" id="al-errors" aria-live="polite"></ul>
+      <div class="row left">
+        <button class="primary" id="al-save">Save list</button>
+        <span class="muted" id="al-saved" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Twitch</h2>
       <div class="opt row">
         <div><strong>Block client-side ad requests</strong><p class="muted">Blocks edge.ads.twitch.tv and the Amazon ad script on Twitch (network rules).</p></div>
         <label class="switch"><input type="checkbox" data-key="blockClientAds" aria-label="Block client-side ad requests"><span class="track"></span></label>
@@ -40,14 +83,10 @@
         <div><strong>Show a notice when an ad is blocked</strong><p class="muted">A small "Ad blocked – using backup stream" note in the player.</p></div>
         <label class="switch"><input type="checkbox" data-key="noticeOnAd" aria-label="Show a notice"><span class="track"></span></label>
       </div>
-      <div class="opt row">
-        <div><strong>Debug logging</strong><p class="muted">Logs details with the prefix [TAS] in the page and extension consoles.</p></div>
-        <label class="switch"><input type="checkbox" data-key="debug" aria-label="Debug logging"><span class="track"></span></label>
-      </div>
     </section>
 
     <section class="card">
-      <h2>Backup stream order</h2>
+      <h2>Twitch backup stream order</h2>
       <p class="muted">When a stream has an ad, these player types are asked for an ad-free copy, in this order. One per line. Known types: <span id="known"></span>. "autoplay" (360p) must be last.</p>
       <textarea id="playerTypes" rows="6" spellcheck="false" aria-label="Backup player types, one per line"></textarea>
       <ul class="errors" id="pt-errors" aria-live="polite"></ul>
@@ -65,10 +104,18 @@
         <span class="muted" id="reset-done" aria-live="polite"></span>
       </div>
     </section>
+
+    <section class="card">
+      <h2>Filter lists</h2>
+      <p class="muted">Built into this version (no downloads at run time, no remote configuration):</p>
+      <ul class="lists" id="lists"></ul>
+      <p class="muted">Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0. Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
+    </section>
   </main>
 
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>
+  <script src="../shared/blocking.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

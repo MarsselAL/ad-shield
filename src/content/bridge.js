@@ -8,6 +8,7 @@
  *  - shows the optional "Ad blocked" toast in the player;
  *  - drives the cosmetic module;
  *  - answers the popup's status question for this tab.
+ * A site on the general allowlist (src/shared/blocking.js) is treated as switched off.
  * Switched off (settings.enabled === false): no toast (a visible one is hidden), no cosmetic
  * DOM changes (cosmetic.setEnabled(false) undoes them), no events forwarded to the stats.
  */
@@ -27,6 +28,9 @@
 
   var doc = root.document;
   var settings = S.defaults();
+  var B = ns.blocking;
+  var rawSettings;           // last stored settings value (before the allowlist is applied)
+  var siteAllowed = false;   // this site is on the general allowlist: act as if switched off
   var log = ns.createLogger('bridge', function () { return !!settings.debug; });
   var pageHooked = false;
   var settingsLoaded = false; // stored settings read; before that only defaults are known
@@ -53,17 +57,31 @@
   cosmetic.setEnabled(settings.enabled && settings.hideStandaloneAds);
 
   function applySettings(raw) {
+    rawSettings = raw;
     settings = S.normalize(raw);
+    if (siteAllowed) settings.enabled = false;
     settingsLoaded = true;
     toPage({ type: 'settings', settings: settings });
     cosmetic.setEnabled(settings.enabled && settings.hideStandaloneAds);
     if (!settings.enabled || !settings.noticeOnAd) hideToast();
   }
 
+  function applyBlocking(raw) {
+    var was = siteAllowed;
+    siteAllowed = !!B && B.isAllowlisted(root.location.hostname, B.normalize(raw).allowlist);
+    if (was !== siteAllowed && settingsLoaded) applySettings(rawSettings);
+  }
+
   try {
-    chrome.storage.local.get(S.STORAGE_KEY).then(function (r) { applySettings(r && r[S.STORAGE_KEY]); }, function () {});
+    var keys = B ? [S.STORAGE_KEY, B.STORAGE_KEY] : [S.STORAGE_KEY];
+    chrome.storage.local.get(keys).then(function (r) {
+      if (B) applyBlocking(r && r[B.STORAGE_KEY]);
+      applySettings(r && r[S.STORAGE_KEY]);
+    }, function () {});
     chrome.storage.onChanged.addListener(function (changes, area) {
-      if (area === 'local' && changes[S.STORAGE_KEY]) applySettings(changes[S.STORAGE_KEY].newValue);
+      if (area !== 'local') return;
+      if (B && changes[B.STORAGE_KEY]) applyBlocking(changes[B.STORAGE_KEY].newValue);
+      if (changes[S.STORAGE_KEY]) applySettings(changes[S.STORAGE_KEY].newValue);
     });
   } catch (e) {
     log.warn('storage unavailable', e && e.message);

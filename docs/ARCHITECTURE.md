@@ -1,5 +1,80 @@
 # Architecture
 
+Ad Shield has two independent parts: the **general blocker** (all sites; first section) and the
+**Twitch video-ad module** (the rest of this document, unchanged). Both are switched by
+`settings.enabled`; a site on the general allowlist is off for both.
+
+## General blocker (all sites)
+
+### Build time (`tools/`, Python 3 standard library, run by hand)
+
+| File | Role |
+|---|---|
+| `tools/build_rules.py` | Downloads EasyList, EasyPrivacy and the EasyList Cookie List with `curl` (`--proto =https`) into a fresh `tempfile.mkdtemp()` folder (or `--lists DIR`), converts them, writes `rules/*.json`, `rules/cosmetic/*`, `rules/build-info.json` and the `rule_resources` list in `manifest.json`. |
+| `tools/filterlist.py` | Our converter (pure functions). Network filters: `\|\|`, `\|`, `^`, `*` patterns pass through to `urlFilter` (same syntax in DNR); `$third-party`/`first-party` -> `domainType`; resource types and `~type` -> `resourceTypes` / `excludedResourceTypes`; `domain=` -> `initiatorDomains` / `excludedInitiatorDomains` (IDN -> punycode); `match-case`; `important` (priority 3); `@@` -> `allow` (priority 2), `@@...$document` -> `allowAllRequests`; simple RE2-safe `/regex/` (capped at 200 per list). Plain `\|\|host^` filters with identical options are merged into `requestDomains` lists of 1,000 hosts. Block rule ids start at 1, allow rule ids at 500001 (`ALLOW_ID_BASE`, mirrored in `src/shared/blocking.js`) so counts can ignore allow matches. Rulesets are split at 30,000 rules. Cosmetic: `##` / `#@#`, `$generichide` / `$elemhide` for `\|\|host^`. Everything else raises `Skip(reason)` and is counted. |
+| `tools/vendor_autoconsent.py` | Downloads the pinned `@duckduckgo/autoconsent` npm tarball (17.2.0), checks its sha512 against the registry's integrity value, copies four files unmodified into `vendor/autoconsent/` and records their sha256 in `VERSION.json` (the validator re-checks them). |
+
+### Generated data (`rules/`, committed)
+
+| File | Used by |
+|---|---|
+| `ads_N.json`, `privacy_N.json`, `cookies_N.json` | static DNR rulesets, toggled by Ads / Trackers / Cookie banners (hide) |
+| `cookie_strip.json` | static `modifyHeaders` ruleset: removes `cookie` (request) and `set-cookie` (response) for `domainType: thirdParty` requests to hosts from EasyPrivacy `\|\|host^$third-party` filters (cap 10,000; 3,791 today). Same priority as block rules, so a blocked request stays blocked and an exception (`allow`, priority 2) also stops stripping. |
+| `cosmetic/ads_generic.css`, `cosmetic/cookies_generic.css` | generic hiding, registered as content-script CSS (all frames). Simple `#id` / `.class` selectors grouped 100 per rule, everything else one rule per selector (an invalid selector only drops itself). |
+| `cosmetic/site.json` | site selectors per host (`ads`, `cookies`), exceptions per host, `genericExceptionHosts`, `generichide`, `elemhide` |
+| `cosmetic/generic.json` | the generic selectors again, for hosts that have exceptions (loaded only for them) |
+| `build-info.json` | list versions, rule counts, skipped filters by reason |
+
+Total enabled static rules today: 14,825, under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
+the shared global pool is never needed; `tests/validate_manifest.py` enforces this, the regex
+limit (1,000) and the ruleset count limits.
+
+### Run time
+
+| File | World / context | Role |
+|---|---|---|
+| `src/shared/blocking.js` | background, popup, options, ISOLATED bundle, tests | Storage key `blocking` (`ads`, `trackers`, `stripCookies`, `hideCookieBanners`, `autoRejectCookies`, `allowlist`), normalisation, allowlist matching, and pure planners: `rulesetPlan`, `allowlistRules`, `contentScriptPlan`, `cssForHost`, `countMatches`. |
+| `src/background/general.js` | service worker | Applies the plan on install/startup/settings change: `updateEnabledRulesets` for the general rulesets, one dynamic `allowAllRequests` rule (priority 100) for the allowlist, `registerContentScripts` (skipped when the stored plan signature is unchanged). Handles `as-page` (inject site CSS with `insertCSS`, `origin: 'USER'`), `as-banner`, and autoconsent's messages. Loads `rules/cosmetic/*.json` and autoconsent's rules lazily with `fetch(chrome.runtime.getURL(...))`, i.e. from the package only. |
+| `src/background/autoconsent-shim.js` + `vendor/autoconsent/autoconsent.cjs.js` | service worker | `module`/`exports` objects so the unmodified CommonJS build loads with `importScripts`; `general.js` uses its `evalSnippets` and `filterCompactRules`. A load failure only disables auto-reject. |
+| `src/content/general.js` | ISOLATED, top frame, document_start | Sends `as-page` with the host and `performance.timeOrigin`; once after `load` + 1.5 s (idle callback) checks this site's cookie selectors with `querySelector` and reports one `as-banner` if one matched. No observers, no repeating timers. |
+| `vendor/autoconsent/content.bundle.js` | ISOLATED, all frames | autoconsent, registered only while auto-reject is on. |
+
+Registered content scripts (ids start with `as-`; the Twitch ones stay in `manifest.json`):
+
+| Id | What | Frames | Excluded |
+|---|---|---|---|
+| `as-css-ads` | `rules/cosmetic/ads_generic.css` | all | allowlist + exception hosts |
+| `as-css-cookies` | `rules/cosmetic/cookies_generic.css` | all | allowlist + exception hosts |
+| `as-site` | `src/content/general.js` | top | allowlist |
+| `as-autoconsent` | `vendor/autoconsent/content.bundle.js` (`matchOriginAsFallback`) | all | allowlist |
+
+Exception hosts (sites with `#@#` exceptions for generic selectors, `$generichide`, `$elemhide`)
+are excluded from the static CSS; for them the background injects the generic selectors minus
+the exceptions (none for `generichide`, nothing at all for `elemhide`).
+
+### autoconsent protocol (from its `docs/api.md` and `lib/messages.ts`)
+
+| Content script sends | Background does |
+|---|---|
+| `init` | replies `initResp` via `tabs.sendMessage(tabId, …, {frameId})` with `rules: {autoconsent: [], compact: filterCompactRules(rules, {url, mainFrame})}` and a config with `autoAction: 'optOut'`, prehide and cosmetic rules on, heuristics and the popup MutationObserver off. `enabled: false` when auto-reject is off, the master switch is off or the tab's site is allowlisted. |
+| `eval` (`snippetId`) | `scripting.executeScript({world: 'MAIN', func: evalSnippets[snippetId]})` in that frame, replies `evalResp {id, result}`; unknown snippet: `result: false`. No string is ever evaluated. |
+| `autoconsentDone` | counts one rejected banner for the page |
+| `cmpDetected`, `popupFound`, `optOutResult`, `selfTestResult`, `report`, … | ignored (autoAction is set, so no `optOut` command is needed) |
+| `runtime.connect({name: 'instance-…'})` | accepted and closed at once |
+
+### Counts
+
+The popup calls `declarativeNetRequest.getMatchedRules({tabId, minTimeStamp: page start})`
+(needs `declarativeNetRequestFeedback`; 20 calls per 10 min, so once per popup open, at most
+every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_*`/`client_ads` -> ads,
+`privacy_*`/`trackers` -> trackers, `cookie_strip` -> cookies stripped, `cookies_*` -> banners;
+rule ids >= 500000 (allow rules) and the dynamic allowlist rule are ignored. Banners also add the
+page's `hidden` and `rejected` counts from `chrome.storage.session` key `page:<tabId>`. The badge
+is Chrome's own action count (`setExtensionActionOptions({displayActionCountAsBadgeText: true})`).
+`onRuleMatchedDebug` was not used: it wakes the service worker for every matched request.
+
+## Twitch video-ad module
+
 Twitch Ad Shield is plain JavaScript loaded as classic scripts; there is no bundler. Every file
 attaches what it exports to one namespace object, `__TAS__`, on its global (window, isolated
 world, service worker, or the jsc test shell). In the page's MAIN world, `page.js` copies the
