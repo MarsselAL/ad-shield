@@ -345,6 +345,50 @@ test('prevent-setTimeout: needle and delay', function () {
   assert.ok(win.setTimeout !== base);
 });
 
+test('adjust-setTimeout: matching source and delay shortened; others untouched; looks native', function () {
+  var FP = { toString: Function.prototype.toString };
+  var win = fakeWin('www.youtube.com');
+  win.Function = { prototype: FP };
+  var base = win.setTimeout;
+  run(win, 'adjust-setTimeout', ['[native code]', '17000', '0.001']);
+  assert.ok(win.setTimeout !== base, 'wrapped');
+  var bound = function () {}.bind(null);
+  win.setTimeout(bound, 17000);
+  assert.equal(win.timers[0].ms, 17, '17000 * 0.001');
+  assert.ok(win.timers[0].fn === bound, 'same callback');
+  win.setTimeout(bound, 5000);
+  assert.equal(win.timers[1].ms, 5000, 'other delay untouched');
+  win.setTimeout(function () { return 'page code'; }, 17000);
+  assert.equal(win.timers[2].ms, 17000, 'non-matching source untouched');
+  win.setTimeout('x()', 17000);
+  assert.equal(win.timers[3].ms, 17000, 'string callback that does not match');
+  assert.equal(FP.toString.call(win.setTimeout), FP.toString.call(base), 'toString shows the original');
+  assert.equal(win.setTimeout.name, base.name);
+  // any delay, default factor 0.05, string callback, clamping
+  var w2 = fakeWin('x.com');
+  run(w2, 'adjust-setTimeout', ['tick', '']);
+  w2.setTimeout('tick()', 1000);
+  w2.setTimeout(function tick() {}, 200);
+  assert.deepEqual(w2.timers.map(function (t) { return t.ms; }), [50, 10]);
+  var w3 = fakeWin('x.com');
+  run(w3, 'adjust-setTimeout', ['', '100', '500']);
+  run(w3, 'adjust-setTimeout', ['', '7', '0']);
+  w3.setTimeout(function () {}, 100);
+  w3.setTimeout(function () {}, 7);
+  assert.deepEqual(w3.timers.map(function (t) { return t.ms; }), [5000, 0.007], 'factor clamped to 50 / 0.001');
+  var w4 = fakeWin('x.com');
+  var b4 = w4.setTimeout;
+  run(w4, 'adjust-setTimeout', ['x', 'abc']);
+  assert.ok(w4.setTimeout === b4, 'bad delay: not wrapped');
+  assert.notOk(L.scriptlets['adjust-setTimeout'].frames, 'not re-applied to child frames');
+});
+
+test('rules: adjust-setTimeout for the 17 s fake-buffering delay on youtube.com', function () {
+  var hits = R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'adjust-setTimeout'; });
+  assert.deepEqual(hits, [['adjust-setTimeout', '[native code]', '17000', '0.001']]);
+  assert.equal(R.pick(RULES, 'example.com').length, 0);
+});
+
 test('prevent-promise-then-callback: the onAbnormalityDetected callback becomes a no-op', function () {
   var win = fakeWin();
   run(win, 'prevent-promise-then-callback', ['onAbnormalityDetected']);
@@ -567,6 +611,185 @@ test('youtube-ad-skip: ad-showing mutes, seeks to the end, clicks Skip; restores
   playerEl.classList.remove('ad-showing');
   observers[0].cb([]);
   assert.equal(video.muted, true, 'viewer mute kept');
+});
+
+// ------------------------------------------------------------------ YouTube anti-adblock dialog
+test('youtube.css: the enforcement dialog is not hidden (hiding left its scroll lock and pauses on)', function () {
+  var css = readFile('rules/cosmetic/youtube.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  css.split('\n').forEach(function (line) {
+    if (/enforcement-message|tp-yt-paper-dialog|iron-overlay-backdrop/.test(line)) {
+      assert.notOk(/display\s*:\s*none/.test(line), 'still hidden: ' + line);
+    }
+  });
+  assert.ok(/ytd-enforcement-message-view-model\{animation:as-yt-enf 1ms\}/.test(css), 'detection hook for youtube-enforcement-dismiss');
+  assert.ok(/@keyframes as-yt-enf\{/.test(css), 'hook keyframes');
+});
+
+/** A YouTube-like page: enforcement dialog (opened), backdrop, scroll lock, a player with a video. */
+function enforcementPage(opts) {
+  opts = opts || {};
+  var listeners = {};
+  var page = { closes: 0, plays: 0, removed: 0, now: 1000, listeners: listeners };
+  page.html = fakeEl('HTML', {}, []); page.html.style = { overflow: 'hidden' };
+  page.body = fakeEl('BODY', { 'no-scroll': '' }, ['no-scroll']); page.body.style = { overflow: 'hidden' };
+  page.app = fakeEl('YTD-APP', { 'no-scroll': '' }, []);
+  page.dialog = { opened: true, close: function () { page.closes++; page.dialog.opened = false; } };
+  page.backdrop = fakeEl('TP-YT-IRON-OVERLAY-BACKDROP', {}, ['opened']);
+  page.backdrop.opened = true;
+  page.backdrop.close = function () { page.backdrop.opened = false; page.backdrop.classList.remove('opened'); };
+  page.enf = fakeEl('YTD-ENFORCEMENT-MESSAGE-VIEW-MODEL');
+  page.enf.closest = function (sel) { return sel === 'tp-yt-paper-dialog' ? page.dialog : null; };
+  page.inDom = opts.inDom !== false;
+  page.player = fakeEl('DIV', {}, ['html5-video-player']);
+  page.video = {
+    tagName: 'VIDEO', ended: false,
+    closest: function (sel) { return sel === '.html5-video-player' ? page.player : null; },
+    play: function () { page.plays++; return Promise.reject(new Error('NotAllowedError')); }
+  };
+  var doc = {
+    documentElement: page.html, body: page.body,
+    addEventListener: function (type, fn, capture) { assert.equal(capture, true, type + ' capture'); listeners[type] = fn; },
+    querySelector: function (sel) {
+      if (sel === 'ytd-enforcement-message-view-model') return page.inDom ? page.enf : null;
+      if (sel === 'ytd-app') return page.app;
+      return null;
+    },
+    querySelectorAll: function (sel) { return sel === 'tp-yt-iron-overlay-backdrop' ? [page.backdrop] : []; }
+  };
+  var win = fakeWin('www.youtube.com', { document: doc });
+  win.navigator = opts.navigator !== undefined ? opts.navigator : { userActivation: { isActive: false } };
+  win.Date = { now: function () { return page.now; } };
+  if (opts.mediaSession) {
+    function MediaSession() { this.handlers = {}; }
+    MediaSession.prototype.setActionHandler = function setActionHandler(action, fn) { this.handlers[action] = fn; };
+    page.MediaSession = MediaSession;
+    win.navigator.mediaSession = new MediaSession();
+  }
+  page.win = win;
+  page.pause = function () { listeners.pause({ target: page.video }); };
+  run(win, 'youtube-enforcement-dismiss', []);
+  return page;
+}
+
+test('youtube-enforcement-dismiss: dialog shown -> close(), backdrop closed, scroll lock cleared', function () {
+  var p = enforcementPage();
+  assert.equal(typeof p.listeners.animationstart, 'function', 'animationstart hook');
+  p.listeners.animationstart({ animationName: 'something-else', target: p.enf });
+  assert.equal(p.closes, 0, 'other animations ignored');
+  assert.equal(p.html.style.overflow, 'hidden', 'nothing unlocked before enforcement');
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  assert.equal(p.closes, 1, 'dialog.close() called');
+  assert.equal(p.backdrop.opened, false, 'backdrop closed');
+  assert.equal(p.html.style.overflow, '', 'html overflow lock cleared');
+  assert.equal(p.body.style.overflow, '', 'body overflow lock cleared');
+  assert.notOk(p.body.hasAttribute('no-scroll'), 'body no-scroll attribute removed');
+  assert.notOk(p.body.classList.contains('no-scroll'), 'body no-scroll class removed');
+  assert.notOk(p.app.hasAttribute('no-scroll'), 'ytd-app no-scroll removed');
+  // a dialog without close(): removed instead
+  var q = enforcementPage();
+  var removed = 0;
+  q.dialog.close = undefined;
+  q.dialog.remove = function () { removed++; };
+  q.listeners.animationstart({ animationName: 'as-yt-enf', target: q.enf });
+  assert.equal(removed, 1, 'dialog removed when it has no close()');
+  // throwing page objects never escape
+  var r = enforcementPage();
+  r.dialog.close = function () { throw new Error('boom'); };
+  r.listeners.animationstart({ animationName: 'as-yt-enf', target: r.enf });
+  r.listeners.animationstart({ animationName: 'as-yt-enf', target: null });
+});
+
+test('youtube-enforcement-dismiss: involuntary pause after enforcement -> play(); user pauses kept', function () {
+  var p = enforcementPage();
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  p.pause();
+  assert.equal(p.plays, 1, 'resumed (rejected play() promise is caught)');
+  p.win.navigator.userActivation.isActive = true;
+  p.pause();
+  assert.equal(p.plays, 1, 'user pause (click, space, k): no resume');
+  p.win.navigator.userActivation.isActive = false;
+  p.video.ended = true;
+  p.pause();
+  assert.equal(p.plays, 1, 'ended video: no resume');
+  p.video.ended = false;
+  p.player.classList.add('ad-showing');
+  p.pause();
+  assert.equal(p.plays, 1, 'ad playing: no resume');
+  p.player.classList.remove('ad-showing');
+  p.listeners.pause({ target: { tagName: 'VIDEO', ended: false, closest: function () { return null; }, play: function () { p.plays++; } } });
+  assert.equal(p.plays, 1, 'video outside a player: no resume');
+  // no fight: a few resumes per window, then it stops until the window has passed
+  for (var i = 0; i < 10; i++) p.pause();
+  assert.ok(p.plays <= 4, 'throttled: ' + p.plays);
+  var capped = p.plays;
+  p.now += 60000;
+  p.pause();
+  assert.equal(p.plays, capped + 1, 'resumes again later');
+});
+
+test('youtube-enforcement-dismiss: no enforcement seen or no userActivation -> no play()', function () {
+  var p = enforcementPage({ inDom: false });
+  p.pause();
+  assert.equal(p.plays, 0, 'no enforcement: pause untouched');
+  assert.equal(p.closes, 0);
+  assert.equal(p.html.style.overflow, 'hidden', 'no enforcement: page scroll state untouched');
+  var q = enforcementPage({ navigator: {} });
+  q.listeners.animationstart({ animationName: 'as-yt-enf', target: q.enf });
+  q.pause();
+  assert.equal(q.closes, 1, 'dialog still dismissed');
+  assert.equal(q.plays, 0, 'without navigator.userActivation we cannot tell a user pause: no resume');
+});
+
+test('youtube-enforcement-dismiss: without the CSS hook, the pause finds the dialog, dismisses it and resumes', function () {
+  var p = enforcementPage();
+  p.pause();
+  assert.equal(p.closes, 1, 'dialog found on pause and closed');
+  assert.equal(p.body.style.overflow, '', 'lock cleared');
+  assert.equal(p.plays, 1, 'resumed');
+  p.html.style.overflow = 'hidden'; // e.g. a later, unrelated modal
+  p.pause();
+  assert.equal(p.closes, 1, 'closed dialog not closed again');
+  assert.equal(p.html.style.overflow, 'hidden', 'later pauses do not touch other modals\' locks');
+});
+
+test('youtube-enforcement-dismiss: pauses from media keys / headphones / PiP (media session) are not resumed', function () {
+  var p = enforcementPage({ mediaSession: true });
+  var ms = p.win.navigator.mediaSession;
+  assert.notOk(Object.prototype.hasOwnProperty.call(ms, 'setActionHandler'), 'patched on the prototype, not the instance');
+  var native = p.MediaSession.prototype.setActionHandler;
+  var calls = [];
+  var pageHandler = function (details) { calls.push(details.action); p.pause(); };
+  ms.setActionHandler('pause', pageHandler);
+  ms.setActionHandler('enterpictureinpicture', function () {});
+  ms.setActionHandler('play', null);
+  assert.equal(ms.handlers.play, null, 'null (unset) passed through');
+  assert.ok(ms.handlers.pause !== pageHandler, 'pause handler wrapped');
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  ms.handlers.pause({ action: 'pause' });
+  assert.deepEqual(calls, ['pause'], 'page handler still runs');
+  assert.equal(p.plays, 0, 'media-key pause: no resume');
+  p.now += 2000;
+  p.pause();
+  assert.equal(p.plays, 1, 'a pause 2 s after the media action, no activation: resumed');
+  ['stop', 'seekto', 'previoustrack', 'nexttrack'].forEach(function (action) {
+    ms.setActionHandler(action, function () {});
+    p.now += 60000;
+    ms.handlers[action]({ action: action });
+    p.pause();
+    assert.equal(p.plays, 1, action + ': no resume');
+  });
+  assert.equal(native.name, 'setActionHandler', 'wrapper keeps the name (Proxy of the original)');
+  // no mediaSession at all: still sets up
+  enforcementPage({ navigator: { userActivation: { isActive: false } } });
+});
+
+test('rules: youtube-enforcement-dismiss runs on youtube.com only', function () {
+  function names(host) { return R.pick(RULES, host).map(function (s) { return s[0]; }); }
+  assert.ok(names('www.youtube.com').indexOf('youtube-enforcement-dismiss') !== -1, 'www.youtube.com');
+  assert.ok(names('m.youtube.com').indexOf('youtube-enforcement-dismiss') !== -1, 'm.youtube.com');
+  ['example.com', 'notyoutube.com', 'www.youtube-nocookie.com'].forEach(function (h) {
+    assert.equal(names(h).indexOf('youtube-enforcement-dismiss'), -1, h);
+  });
 });
 
 // ------------------------------------------------------------------ the generated bundle

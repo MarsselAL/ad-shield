@@ -483,6 +483,36 @@ var asScriptlets = (function () {
   }
   preventSetTimeout.frames = true;
 
+  /**
+   * adjust-setTimeout(needle, delay, factor): timers whose callback source matches needle (and
+   * whose delay equals delay; '' = any) are scheduled with delay * factor (factor clamped to
+   * 0.001-50, default 0.05). Not re-applied to child frames: it changes timing, not data, and the
+   * YouTube use (the 17 s "fake buffering" wait) runs in the top page.
+   */
+  function adjustSetTimeout(win, args, log) {
+    var match = makeMatcher(args[0]);
+    var delay = args[1] !== undefined && args[1] !== '' ? Number(args[1]) : null;
+    if (delay !== null && isNaN(delay)) return;
+    var factor = args[2] !== undefined && args[2] !== '' ? Number(args[2]) : 0.05;
+    if (isNaN(factor)) factor = 0.05;
+    factor = Math.min(50, Math.max(0.001, factor));
+    wrap(win, win, 'setTimeout', function (t, self, a) {
+      try {
+        var d = Number(a[1] || 0);
+        if (delay === null || d === delay) {
+          var fn = a[0];
+          var src = typeof fn === 'function' ? fnSource(fn) : String(fn);
+          if (match(src)) {
+            a = arraySlice.call(a);
+            a[1] = d * factor;
+            log('adjust-setTimeout', d + ' -> ' + a[1]);
+          }
+        }
+      } catch (e) { /* schedule as asked */ }
+      return reflectApply(t, self, a);
+    });
+  }
+
   /** prevent-promise-then-callback(needle): then() callbacks whose source matches become no-ops. */
   function preventPromiseThen(win, args, log) {
     if (!args[0]) return;
@@ -640,6 +670,154 @@ var asScriptlets = (function () {
     doc.addEventListener('playing', onMedia, true);
   }
 
+  // ------------------------------------------------------------------ YouTube anti-adblock dialog
+  /**
+   * youtube-enforcement-dismiss: YouTube's anti-adblock dialog (ytd-enforcement-message-view-model
+   * inside a modal tp-yt-paper-dialog) locks page scrolling and pauses the video while it is open.
+   * Hiding it with CSS leaves all of that in place, so this closes it instead: close() on the
+   * dialog (Polymer then releases its scroll lock and backdrop; remove() if there is no close()),
+   * close any opened tp-yt-iron-overlay-backdrop, clear overflow:hidden on html / body and the
+   * no-scroll attribute / class on html / body / ytd-app. After an enforcement dialog was seen on
+   * the page, a player video that pauses without user activation (not ended, no ad showing) is
+   * resumed, at most RESUME_MAX times per RESUME_WINDOW ms so we never fight the page in a loop.
+   * Event-driven: a capture listener for animationstart (rules/cosmetic/youtube.css gives the
+   * element a 1 ms animation 'as-yt-enf') and one for pause (also finds the dialog when the CSS
+   * hook is missing). No MutationObserver, no timers except one delayed re-check of the lock.
+   * Pauses within MEDIA_ACTION_GRACE ms of a navigator.mediaSession action handler call (media
+   * keys, headphones, picture-in-picture) are the viewer's and are not resumed.
+   */
+  var ENFORCEMENT = 'ytd-enforcement-message-view-model';
+  var ENFORCEMENT_ANIMATION = 'as-yt-enf';
+  var RESUME_MAX = 3;
+  var RESUME_WINDOW = 10000;
+  var MEDIA_ACTION_GRACE = 1500; // ms after a media-session action in which a pause is the viewer's
+
+  function youtubeEnforcementDismiss(win, args, log) {
+    var doc = win.document;
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    var seen = false;
+    var resumes = [];
+
+    function now() {
+      try { return win.Date && typeof win.Date.now === 'function' ? win.Date.now() : Date.now(); } catch (e) { return Date.now(); }
+    }
+
+    function unlock() {
+      try {
+        [doc.documentElement, doc.body].forEach(function (el) {
+          var s = el && el.style;
+          if (!s) return;
+          if (s.overflow === 'hidden') s.overflow = '';
+          if (s.overflowY === 'hidden') s.overflowY = '';
+        });
+        [doc.documentElement, doc.body, doc.querySelector('ytd-app')].forEach(function (el) {
+          if (!el) return;
+          if (typeof el.hasAttribute === 'function' && el.hasAttribute('no-scroll')) el.removeAttribute('no-scroll');
+          if (el.classList && el.classList.contains('no-scroll')) el.classList.remove('no-scroll');
+        });
+      } catch (e) { /* leave the page alone */ }
+    }
+
+    function closeBackdrops() {
+      try {
+        var list = doc.querySelectorAll('tp-yt-iron-overlay-backdrop');
+        for (var i = 0; i < list.length; i++) {
+          var b = list[i];
+          if (!(b.opened === true || (b.classList && b.classList.contains('opened')))) continue;
+          if (typeof b.close === 'function') b.close();
+          else if (typeof b.remove === 'function') b.remove();
+        }
+      } catch (e) { /* leave it */ }
+    }
+
+    /** Close the dialog around enf if it is open; true when something was closed. */
+    function closeDialog(enf) {
+      try {
+        var dlg = typeof enf.closest === 'function' ? enf.closest('tp-yt-paper-dialog') : null;
+        if (!dlg || dlg.opened === false) return false;
+        if (typeof dlg.close === 'function') dlg.close();
+        else if (typeof dlg.remove === 'function') dlg.remove();
+        else return false;
+        log('youtube-enforcement-dismiss', 'dialog closed');
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function handle(enf) {
+      try {
+        if (!enf) return;
+        var first = !seen;
+        seen = true;
+        if (closeDialog(enf) || first) {
+          closeBackdrops();
+          unlock();
+          // Polymer may finish closing asynchronously; check the lock once more.
+          if (typeof win.setTimeout === 'function') win.setTimeout(unlock, 500);
+        }
+      } catch (e) { /* leave the page alone */ }
+    }
+
+    // Media keys, headphones and picture-in-picture buttons reach the page through
+    // navigator.mediaSession action handlers, without user activation: note when one runs, so the
+    // pause it causes is the viewer's and is not undone.
+    var lastMediaAction = -Infinity;
+    var MEDIA_ACTIONS = { pause: 1, play: 1, stop: 1, seekto: 1, previoustrack: 1, nexttrack: 1 };
+    try {
+      var ms = win.navigator && win.navigator.mediaSession;
+      if (isObj(ms)) {
+        var proto = Object.getPrototypeOf(ms);
+        var owner = proto && hasOwn.call(proto, 'setActionHandler') ? proto : ms;
+        wrap(win, owner, 'setActionHandler', function (t, self, a) {
+          try {
+            var handler = a[1];
+            if (typeof handler === 'function' && hasOwn.call(MEDIA_ACTIONS, String(a[0]))) {
+              a = arraySlice.call(a);
+              a[1] = function () {
+                lastMediaAction = now();
+                return reflectApply(handler, this, arguments);
+              };
+            }
+          } catch (e) { /* register as asked */ }
+          return reflectApply(t, self, a);
+        });
+      }
+    } catch (e) { /* no media session */ }
+
+    function resume(v, player) {
+      if (v.ended || (player.classList && player.classList.contains('ad-showing'))) return;
+      if (now() - lastMediaAction < MEDIA_ACTION_GRACE) return; // media key / headphones / PiP
+      var nav = win.navigator;
+      var ua = nav && nav.userActivation;
+      if (!ua || ua.isActive) return; // a user pause (click, space, k), or we cannot tell
+      var t = now();
+      resumes = resumes.filter(function (x) { return t - x < RESUME_WINDOW; });
+      if (resumes.length >= RESUME_MAX) { log('youtube-enforcement-dismiss', 'resume throttled'); return; }
+      resumes.push(t);
+      var p = v.play();
+      if (p && typeof p.then === 'function') p.then(noop, noop);
+      log('youtube-enforcement-dismiss', 'resumed');
+    }
+
+    doc.addEventListener('animationstart', function (e) {
+      try {
+        if (e && e.animationName === ENFORCEMENT_ANIMATION) handle(e.target);
+      } catch (err) { /* not ours */ }
+    }, true);
+
+    doc.addEventListener('pause', function (e) {
+      try {
+        var v = e && e.target;
+        if (!v || v.tagName !== 'VIDEO' || typeof v.closest !== 'function') return;
+        var player = v.closest('.html5-video-player');
+        if (!player) return;
+        handle(doc.querySelector(ENFORCEMENT));
+        if (seen) resume(v, player);
+      } catch (err) { /* leave the video alone */ }
+    }, true);
+  }
+
   // ------------------------------------------------------------------ child frames
   /**
    * Call onFrame(childWindow) once per document of every same-origin iframe the page reaches via
@@ -689,10 +867,12 @@ var asScriptlets = (function () {
       'prune-on-assign': pruneOnAssign,
       'prevent-fetch': preventFetch,
       'prevent-setTimeout': preventSetTimeout,
+      'adjust-setTimeout': adjustSetTimeout,
       'prevent-promise-then-callback': preventPromiseThen,
       'remove-attr': removeAttr,
       'remove-class': removeClass,
-      'youtube-ad-skip': youtubeAdSkip
+      'youtube-ad-skip': youtubeAdSkip,
+      'youtube-enforcement-dismiss': youtubeEnforcementDismiss
     },
     protectFrames: protectFrames,
     makePruner: makePruner,

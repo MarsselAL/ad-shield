@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "about": "Ad Shield's own scriptlet rules (MIT). Each rule: hosts (each covers its subdomains) and scriptlets ([name, ...string args]) from src/scriptlets/lib.js. Built into build/scriptlets-main.js by tools/build.py; shipped in the package, never downloaded. Object paths and URL patterns: docs/research-v2.md section B.",
+  "about": "Ad Shield's own scriptlet rules (MIT). Each rule: hosts (each covers its subdomains) and scriptlets ([name, ...string args]) from src/scriptlets/lib.js. Built into build/scriptlets-main.js by tools/build.py; shipped in the package, never downloaded. Object paths and URL patterns: docs/research-v2.md section B. The YouTube anti-adblock dialog is closed by youtube-enforcement-dismiss, not hidden by CSS (hiding kept its scroll lock and pauses).",
   "rules": [
     {
       "id": "youtube",
-      "about": "Ad data removed before the player sees it: the page-embedded player response and initial data (setter traps), every JSON.parse / Response.json (player keys always; feed and Shorts ad items only in API responses, which have responseContext), and the youtubei fetch / XHR responses. Plus the onAbnormalityDetected reporter defused and the web_streaming_watch flag off (research B recipe 1-7).",
+      "about": "Ad data removed before the player sees it: the page-embedded player response and initial data (setter traps), every JSON.parse / Response.json (player keys always; feed and Shorts ad items only in API responses, which have responseContext), and the youtubei fetch / XHR responses. Plus the onAbnormalityDetected reporter defused the web_streaming_watch flag off (research B recipe 1-7), and the 17 s \"fake buffering\" wait of flagged accounts (a native-code callback scheduled with setTimeout 17000) cut to 17 ms (research B section 1).",
       "hosts": [
         "youtube.com",
         "youtube-nocookie.com",
@@ -48,18 +48,27 @@
           "set-constant",
           "ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch",
           "false"
+        ],
+        [
+          "adjust-setTimeout",
+          "[native code]",
+          "17000",
+          "0.001"
         ]
       ]
     },
     {
       "id": "youtube-skip",
-      "about": "Fallback for ads that still play (e.g. server-side inserted): mute, jump to the end of the ad, click Skip; unmute afterwards (research B recipe 11).",
+      "about": "Fallbacks: for ads that still play (e.g. server-side inserted) mute, jump to the end of the ad, click Skip, unmute afterwards (research B recipe 11); and close YouTube's anti-adblock dialog properly (close() releases its scroll lock and backdrop) and resume a video it paused without the viewer (B.3); pauses from media keys, headphones or picture-in-picture (media session actions) are left alone.",
       "hosts": [
         "youtube.com"
       ],
       "scriptlets": [
         [
           "youtube-ad-skip"
+        ],
+        [
+          "youtube-enforcement-dismiss"
         ]
       ]
     }
