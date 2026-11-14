@@ -433,7 +433,7 @@ SW_STATE_JS = """
 """
 
 GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-site"]
-DEFAULT_RULESETS = ["ads_1", "client_ads", "cookie_strip", "cookies_1", "privacy_1"]
+DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated"]
 
 # chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
 # which static rulesets a request would match. No request is sent.
@@ -627,12 +627,20 @@ def run_smoke(args):
                 "tracker": {"url": "https://www.google-analytics.com/analytics.js", "type": "script", "initiator": "https://example.com"},
                 "cookie": {"url": "https://%s/p" % strip_host, "type": "image", "initiator": "https://example.com"},
                 "plain": {"url": "https://example.com/style.css", "type": "stylesheet", "initiator": "https://example.com"},
+                "curated_ad": {"url": "https://ads.tiktok.com/i18n/pixel/events.js", "type": "script", "initiator": "https://example.com"},
+                "curated_tracker": {"url": "https://kochava.com/v1/cpi/click", "type": "xmlhttprequest", "initiator": "https://example.com"},
+                "curated_first_party": {"url": "https://ads.tiktok.com/i18n/pixel/events.js", "type": "script", "initiator": "https://www.tiktok.com"},
+                "curated_never": {"url": "https://cmp.quantcast.com/choice.js", "type": "script", "initiator": "https://example.com"},
             }
             dnr = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps(cases))
             report["dnr_test"] = dnr
             check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
                   dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
                   and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
+            check("testMatchOutcome: curated hosts blocked third-party only; [never] host (excluded) not blocked by them",
+                  dnr and "ads_curated" in dnr.get("curated_ad", []) and "privacy_curated" in dnr.get("curated_tracker", [])
+                  and "ads_curated" not in dnr.get("curated_first_party", [])
+                  and not any(x in ("ads_curated", "privacy_curated") for x in dnr.get("curated_never", [])), dnr)
 
             cdp.evaluate(sw_sid, SET_ENABLED_JS % "false")
             off = None

@@ -6,10 +6,15 @@ List (converter: tools/filterlist.py, our own code).
                                                     temporary folder, then convert
     python3 -I tools/build_rules.py --lists DIR     use DIR/easylist.txt, DIR/easyprivacy.txt,
                                                     DIR/easylist-cookie.txt (offline rebuild)
+    python3 -I tools/build_rules.py --curated-only  only rebuild the curated rulesets from
+                                                    rules/curated_hosts.txt (no download; the
+                                                    other generated files stay as they are)
 
 Writes (all committed, so the extension works offline and needs no remote config):
     rules/ads_N.json, rules/privacy_N.json, rules/cookies_N.json   DNR block/allow rulesets
     rules/cookie_strip.json                                        DNR modifyHeaders ruleset
+    rules/ads_curated.json, rules/privacy_curated.json             DNR block rulesets from our own
+                                                                   rules/curated_hosts.txt (tools/curated.py)
     rules/cosmetic/ads_generic.css, rules/cosmetic/cookies_generic.css
     rules/cosmetic/generic.json, rules/cosmetic/site.json          cosmetic data for the worker
     rules/build-info.json                                          list versions, counts, skips
@@ -27,6 +32,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import curated as C  # noqa: E402
 import filterlist as F  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +47,77 @@ TWITCH_RULESETS = [
     {"id": "client_ads", "enabled": True, "path": "rules/client_ads.json"},
     {"id": "trackers", "enabled": False, "path": "rules/trackers.json"},
 ]
-GENERATED_GLOBS = ["rules/ads_*.json", "rules/privacy_*.json", "rules/cookies_*.json"]
+# Numbered rulesets only: ads_curated.json / privacy_curated.json are rewritten by every build
+# (full or --curated-only) but never deleted by the cleanup.
+GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
+CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3}
+
+
+def ruleset_order_key(rid):
+    """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip."""
+    if rid in _GROUPS:
+        return (_GROUPS[rid], 0)
+    prefix, _, rest = rid.rpartition("_")
+    if prefix not in _GROUPS:
+        raise ValueError("unknown generated ruleset id %r" % rid)
+    return (_GROUPS[prefix], float("inf") if rest == "curated" else int(rest))
+
+
+def order_rulesets(entries):
+    return sorted(entries, key=lambda r: ruleset_order_key(r["id"]))
+
+
+def read_curated(root=ROOT):
+    """Parse and check rules/curated_hosts.txt. Raises curated.CuratedError."""
+    with open(os.path.join(root, C.SOURCE), encoding="utf-8") as fh:
+        return C.build_curated(fh.read())
+
+
+def write_curated(root=ROOT):
+    """Write rules/ads_curated.json and rules/privacy_curated.json.
+    Returns (rule_resources entries, {ruleset id: counts}, build-info `curated` entry)."""
+    rules, cinfo = read_curated(root)
+    entries, metas = [], {}
+    for rid in CURATED_IDS:
+        rs = rules[rid]
+        write_rules(os.path.join(root, "rules", rid + ".json"), rs)
+        entries.append({"id": rid, "enabled": True, "path": "rules/%s.json" % rid})
+        metas[rid] = {"rules": len(rs), "block": len(rs), "allow": 0, "regex": 0}
+    return entries, metas, cinfo
+
+
+def add_curated_info(info, metas, cinfo):
+    info.setdefault("rulesets", {}).update(metas)
+    info["curated"] = cinfo
+    info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
+    return info
+
+
+def write_build_info(info, root=ROOT):
+    with open(os.path.join(root, "rules", "build-info.json"), "w", encoding="utf-8") as fh:
+        json.dump(info, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def curated_only(root=ROOT):
+    """Regenerate only the curated rulesets, the manifest rule_resources and the `curated` entry of
+    rules/build-info.json. Nothing is downloaded; the other generated files are not touched."""
+    read_curated(root)  # fail before writing anything
+    with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
+        current = json.load(fh).get("declarative_net_request", {}).get("rule_resources", [])
+    twitch = {r["id"] for r in TWITCH_RULESETS}
+    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS]
+    entries, metas, cinfo = write_curated(root)
+    info_path = os.path.join(root, "rules", "build-info.json")
+    info = {}
+    if os.path.isfile(info_path):
+        with open(info_path, encoding="utf-8") as fh:
+            info = json.load(fh)
+    add_curated_info(info, metas, cinfo)
+    write_build_info(info, root)
+    changed = update_manifest(order_rulesets(keep + entries), root)
+    return info, changed
 
 
 def download(dest):
@@ -197,13 +273,37 @@ def update_manifest(rulesets, root=ROOT):
     return True
 
 
+def print_summary(info, changed):
+    for rid, v in info["rulesets"].items():
+        print("%-16s %6d rules (%d allow, %d regex)" % (rid, v["rules"], v["allow"], v["regex"]))
+    for k, v in info.get("lists", {}).items():
+        print("%-16s %6d filters, %d skipped" % (k, v["filters"], v["skippedTotal"]))
+    c = info["curated"]
+    print("curated          ads %d hosts (%d excluded), trackers %d hosts (%d excluded), never %d" % (
+        c["ads"]["hosts"], c["ads"]["exclusions"], c["trackers"]["hosts"], c["trackers"]["exclusions"], c["never"]))
+    print("total static rules", info["totalStaticRules"], "| manifest", "updated" if changed else "unchanged")
+
+
 def main(argv):
     lists_dir = None
+    if len(argv) == 2 and argv[1] == "--curated-only":
+        try:
+            info, changed = curated_only()
+        except C.CuratedError as e:
+            print("ERROR", e)
+            return 1
+        print_summary(info, changed)
+        return 0
     if len(argv) == 3 and argv[1] == "--lists":
         lists_dir = os.path.abspath(argv[2])
     elif len(argv) != 1:
         print(__doc__)
         return 2
+    try:
+        read_curated()  # fail before downloading or deleting anything
+    except C.CuratedError as e:
+        print("ERROR", e)
+        return 1
     if lists_dir is None:
         lists_dir = tempfile.mkdtemp(prefix="adshield-lists-")
         download(lists_dir)
@@ -212,15 +312,11 @@ def main(argv):
         for f in glob.glob(os.path.join(ROOT, pattern)):
             os.remove(f)
     rulesets, info = convert(lists_dir)
-    with open(os.path.join(ROOT, "rules", "build-info.json"), "w", encoding="utf-8") as fh:
-        json.dump(info, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    changed = update_manifest(rulesets)
-    for rid, v in info["rulesets"].items():
-        print("%-14s %6d rules (%d allow, %d regex)" % (rid, v["rules"], v["allow"], v["regex"]))
-    for k, v in info["lists"].items():
-        print("%-16s %6d filters, %d skipped" % (k, v["filters"], v["skippedTotal"]))
-    print("total static rules", info["totalStaticRules"], "| manifest", "updated" if changed else "unchanged")
+    entries, metas, cinfo = write_curated()
+    add_curated_info(info, metas, cinfo)
+    write_build_info(info)
+    changed = update_manifest(order_rulesets(rulesets + entries))
+    print_summary(info, changed)
     return 0
 
 

@@ -85,9 +85,19 @@
         "path": "rules/ads_1.json"
       },
       {
+        "id": "ads_curated",
+        "enabled": true,
+        "path": "rules/ads_curated.json"
+      },
+      {
         "id": "privacy_1",
         "enabled": true,
         "path": "rules/privacy_1.json"
+      },
+      {
+        "id": "privacy_curated",
+        "enabled": true,
+        "path": "rules/privacy_curated.json"
       },
       {
         "id": "cookies_1",

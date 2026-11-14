@@ -57,6 +57,30 @@ test('rulesetPlan: features map to generated rulesets, Twitch rulesets untouched
   assert.equal(off.disableRulesetIds.length, 5);
 });
 
+test('rulesetPlan: curated rulesets follow the Ads / Trackers switches and the master switch', function () {
+  var ids = ['client_ads', 'trackers', 'ads_1', 'ads_curated', 'privacy_1', 'privacy_curated', 'cookies_1', 'cookie_strip'];
+  var all = B.rulesetPlan(ids, true, B.defaults());
+  assert.deepEqual(all.enableRulesetIds, ['ads_1', 'ads_curated', 'privacy_1', 'privacy_curated', 'cookies_1', 'cookie_strip']);
+  assert.deepEqual(all.disableRulesetIds, []);
+  var noAds = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { ads: false }));
+  assert.deepEqual(noAds.disableRulesetIds, ['ads_1', 'ads_curated']);
+  var noTrackers = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { trackers: false }));
+  assert.deepEqual(noTrackers.disableRulesetIds, ['privacy_1', 'privacy_curated']);
+  var off = B.rulesetPlan(ids, false, B.defaults());
+  assert.deepEqual(off.enableRulesetIds, []);
+  assert.equal(off.disableRulesetIds.length, 6);
+  assert.equal(B.rulesetFeature('ads_curated'), 'ads');
+  assert.equal(B.rulesetFeature('privacy_curated'), 'trackers');
+  assert.equal(B.rulesetFeature('cookies_curated'), null);
+  assert.equal(B.rulesetFeature('ads_curated_1'), null);
+});
+
+test('countMatches: curated rulesets count as ads / trackers', function () {
+  var m = function (rulesetId, ruleId) { return { rule: { rulesetId: rulesetId, ruleId: ruleId }, tabId: 1 }; };
+  var c = B.countMatches([m('ads_curated', 1), m('ads_curated', 1), m('privacy_curated', 1), m('ads_1', 2)]);
+  assert.deepEqual(c, { ads: 3, trackers: 1, cookies: 0, banners: 0 });
+});
+
 test('allowlistRules: one allowAllRequests rule above all static priorities', function () {
   assert.deepEqual(B.allowlistRules(true, []), []);
   assert.deepEqual(B.allowlistRules(false, ['a.com']), []);

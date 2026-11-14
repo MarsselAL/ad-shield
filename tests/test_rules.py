@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import dnr_schema  # noqa: E402
 import filterlist as F  # noqa: E402
 import build_rules  # noqa: E402
+import curated as C  # noqa: E402
 
 
 def rules_of(lines):
@@ -196,6 +197,159 @@ class CosmeticFilters(unittest.TestCase):
         self.assertIn("div > .c{display:none!important}", lines)
 
 
+def curated(text):
+    return C.build_curated(text)
+
+
+class CuratedHosts(unittest.TestCase):
+    BASIC = "[ads]\n# c\nb.ads.com\n\na.ads.com\n[trackers]\nquantcast.com\n-cmp.quantcast.com\nt.example\n[never]\ncmp.quantcast.com\ncdn.example\n"
+
+    def test_sections_hosts_sorted_and_comments_ignored(self):
+        p = C.parse_curated(self.BASIC)
+        self.assertEqual(p["ads"], {"hosts": ["a.ads.com", "b.ads.com"], "exclusions": []})
+        self.assertEqual(p["trackers"], {"hosts": ["quantcast.com", "t.example"], "exclusions": ["cmp.quantcast.com"]})
+        self.assertEqual(p["never"], ["cdn.example", "cmp.quantcast.com"])
+
+    def test_rule_shape(self):
+        rules, info = curated(self.BASIC)
+        self.assertEqual(sorted(rules), ["ads_curated", "privacy_curated"])
+        self.assertEqual(rules["ads_curated"], [{
+            "id": 1, "priority": 1, "action": {"type": "block"},
+            "condition": {"requestDomains": ["a.ads.com", "b.ads.com"], "domainType": "thirdParty"}}])
+        self.assertEqual(rules["privacy_curated"][0]["condition"], {
+            "requestDomains": ["quantcast.com", "t.example"], "domainType": "thirdParty",
+            "excludedRequestDomains": ["cmp.quantcast.com"]})
+        for rs in rules.values():
+            self.assertEqual(dnr_schema.ruleset_errors(rs), [])
+            self.assertEqual(dnr_schema.curated_ruleset_errors(rs), [])
+            self.assertLess(rs[0]["id"], F.ALLOW_ID_BASE)
+            self.assertNotIn("resourceTypes", rs[0]["condition"])
+        self.assertEqual(info, {"source": "rules/curated_hosts.txt", "never": 2,
+                                "ads": {"hosts": 2, "exclusions": 0},
+                                "trackers": {"hosts": 2, "exclusions": 1}})
+
+    def test_never_covered_by_exclusion_is_ok_but_uncovered_overlap_fails(self):
+        curated(self.BASIC)  # cmp.quantcast.com is excluded -> fine
+        for text in ("[ads]\nx.com\n[trackers]\nt.com\n[never]\nx.com\n",
+                     "[ads]\nx.com\n[trackers]\nt.com\n[never]\nsub.x.com\n",
+                     "[ads]\nx.com\n-other.x.com\n[trackers]\nt.com\n[never]\nsub.x.com\n",
+                     # an exclusion in the other section does not help
+                     "[ads]\nx.com\n[trackers]\nt.com\n-sub.t.com\n[never]\nsub.x.com\n"):
+            with self.assertRaisesRegex(C.CuratedError, "never"):
+                curated(text)
+        # a never host above a blocked host is not blocked by it
+        curated("[ads]\na.x.com\n[trackers]\nt.com\n[never]\nx.com\n")
+
+    def test_invalid_hosts(self):
+        for bad in ("Ads.com", "ads..com", "-x.com.", "ads.com/path", "ads com", "réclame.fr",
+                    "localhost", "*.ads.com", "ads.com.", "a_b.com", "-bad-.com", "xn--zz.com",
+                    "x" * 64 + ".com"):
+            with self.assertRaises(C.CuratedError, msg=bad):
+                C.parse_curated("[ads]\n%s\n[trackers]\nt.com\n" % bad)
+        C.parse_curated("[ads]\nxn--bcher-kva.example\n[trackers]\nt.com\n")  # punycode is fine
+
+    def test_duplicates_rejected(self):
+        for text in ("[ads]\na.com\na.com\n[trackers]\nt.com\n",
+                     "[ads]\na.com\n[trackers]\na.com\n",
+                     "[ads]\na.com\n-x.a.com\n-x.a.com\n[trackers]\nt.com\n",
+                     "[ads]\na.com\n[trackers]\nt.com\n[never]\nn.com\nn.com\n",
+                     "[ads]\na.com\n[ads]\nb.com\n[trackers]\nt.com\n"):
+            with self.assertRaisesRegex(C.CuratedError, "duplicate", msg=text):
+                C.parse_curated(text)
+
+    def test_structure_errors(self):
+        cases = {
+            "[ads]\na.com\n[trackers]\nt.com\n[cosmetic]\nc.com\n": "unknown section",
+            "a.com\n[ads]\nb.com\n[trackers]\nt.com\n": "before any section",
+            "[ads]\n[trackers]\nt.com\n": "no hosts",
+            "[ads]\na.com\n": "trackers",
+            "[ads]\na.com\n[trackers]\nt.com\n[never]\n-n.com\n": "exclusion",
+            "[ads]\na.com\n-b.com\n[trackers]\nt.com\n": "excludes nothing",
+            "[ads]\na.com\n-a.com\n[trackers]\nt.com\n": "excludes nothing",
+        }
+        for text, msg in cases.items():
+            with self.assertRaisesRegex(C.CuratedError, msg, msg=text):
+                curated(text)
+
+    def test_error_names_the_line(self):
+        with self.assertRaisesRegex(C.CuratedError, "line 3"):
+            C.parse_curated("[ads]\na.com\nBAD.com\n[trackers]\nt.com\n")
+
+    def test_the_real_list_builds(self):
+        with open(os.path.join(ROOT, "rules", "curated_hosts.txt"), encoding="utf-8") as fh:
+            rules, info = curated(fh.read())
+        self.assertGreater(info["ads"]["hosts"], 10)
+        self.assertGreater(info["trackers"]["hosts"], 10)
+        self.assertGreater(info["never"], 0)
+
+
+class CuratedBuild(unittest.TestCase):
+    def test_ruleset_order(self):
+        ids = ["cookie_strip", "privacy_curated", "cookies_1", "ads_curated", "privacy_2", "ads_10", "ads_2", "privacy_1"]
+        got = [r["id"] for r in build_rules.order_rulesets([{"id": i} for i in ids])]
+        self.assertEqual(got, ["ads_2", "ads_10", "ads_curated", "privacy_1", "privacy_2", "privacy_curated",
+                               "cookies_1", "cookie_strip"])
+
+    def test_cleanup_globs_spare_curated_files(self):
+        import fnmatch
+        for pattern in build_rules.GENERATED_GLOBS:
+            name = os.path.basename(pattern)
+            self.assertFalse(fnmatch.fnmatch("ads_curated.json", name), pattern)
+            self.assertFalse(fnmatch.fnmatch("privacy_curated.json", name), pattern)
+        self.assertTrue(any(fnmatch.fnmatch("ads_12.json", os.path.basename(p)) for p in build_rules.GENERATED_GLOBS))
+
+    def test_curated_only_touches_only_curated_outputs(self):
+        root = tempfile.mkdtemp(prefix="adshield-test-curated-")
+        os.makedirs(os.path.join(root, "rules"))
+        rr = [{"id": "client_ads", "enabled": True, "path": "rules/client_ads.json"},
+              {"id": "trackers", "enabled": False, "path": "rules/trackers.json"}] + [
+             {"id": i, "enabled": True, "path": "rules/%s.json" % i} for i in ("ads_1", "privacy_1", "cookies_1", "cookie_strip")]
+        with open(os.path.join(root, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"name": "x", "declarative_net_request": {"rule_resources": rr}}, fh)
+        old_info = {"lists": {"easylist": {"version": "7"}}, "rulesets": {"ads_1": {"rules": 5}, "privacy_1": {"rules": 3}},
+                    "totalStaticRules": 8}
+        with open(os.path.join(root, "rules", "build-info.json"), "w", encoding="utf-8") as fh:
+            json.dump(old_info, fh)
+        with open(os.path.join(root, "rules", "ads_1.json"), "w", encoding="utf-8") as fh:
+            fh.write("SENTINEL")
+        with open(os.path.join(root, "rules", "curated_hosts.txt"), "w", encoding="utf-8") as fh:
+            fh.write(CuratedHosts.BASIC)
+        build_rules.curated_only(root)
+        with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
+            m = json.load(fh)
+        self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
+                         ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip"])
+        for r in m["declarative_net_request"]["rule_resources"][2:]:
+            self.assertIs(r["enabled"], True)
+            self.assertEqual(r["path"], "rules/%s.json" % r["id"])
+        with open(os.path.join(root, "rules", "ads_1.json"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "SENTINEL")
+        with open(os.path.join(root, "rules", "build-info.json"), encoding="utf-8") as fh:
+            info = json.load(fh)
+        self.assertEqual(info["lists"], old_info["lists"])
+        self.assertEqual(info["curated"]["trackers"], {"hosts": 2, "exclusions": 1})
+        self.assertEqual(info["rulesets"]["ads_curated"]["rules"], 1)
+        self.assertEqual(info["totalStaticRules"], 10)
+        for rid in ("ads_curated", "privacy_curated"):
+            with open(os.path.join(root, "rules", rid + ".json"), encoding="utf-8") as fh:
+                self.assertEqual(dnr_schema.curated_ruleset_errors(json.load(fh)), [])
+        # Running it again changes nothing.
+        before = open(os.path.join(root, "manifest.json"), encoding="utf-8").read()
+        build_rules.curated_only(root)
+        self.assertEqual(open(os.path.join(root, "manifest.json"), encoding="utf-8").read(), before)
+
+    def test_curated_only_fails_on_bad_list_without_writing(self):
+        root = tempfile.mkdtemp(prefix="adshield-test-curated-bad-")
+        os.makedirs(os.path.join(root, "rules"))
+        with open(os.path.join(root, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump({"declarative_net_request": {"rule_resources": []}}, fh)
+        with open(os.path.join(root, "rules", "curated_hosts.txt"), "w", encoding="utf-8") as fh:
+            fh.write("[ads]\nx.com\n[trackers]\nt.com\n[never]\nx.com\n")
+        with self.assertRaises(C.CuratedError):
+            build_rules.curated_only(root)
+        self.assertFalse(os.path.exists(os.path.join(root, "rules", "ads_curated.json")))
+
+
 class Schema(unittest.TestCase):
     def test_schema_rejects_bad_rules(self):
         bad = [
@@ -218,6 +372,38 @@ class Schema(unittest.TestCase):
         self.assertTrue(dnr_schema.ruleset_errors([bad[2], bad[2]]))
         ok = {"id": 3, "priority": 2, "action": {"type": "allow"}, "condition": {"urlFilter": "|https://x.com/a^", "domainType": "thirdParty"}}
         self.assertEqual(dnr_schema.rule_errors(ok), [])
+
+    def test_curated_shape_check_rejects_deviations(self):
+        good = {"id": 1, "priority": 1, "action": {"type": "block"},
+                "condition": {"requestDomains": ["a.com", "b.com"], "domainType": "thirdParty", "excludedRequestDomains": ["x.a.com"]}}
+        self.assertEqual(dnr_schema.curated_ruleset_errors([good]), [])
+        changes = [
+            lambda r: r["condition"].update(resourceTypes=["script"]),
+            lambda r: r["condition"].update(resourceTypes=["main_frame"]),
+            lambda r: r["condition"].update(domainType="firstParty"),
+            lambda r: r["condition"].pop("domainType"),
+            lambda r: r.update(priority=2),
+            lambda r: r.update(id=F.ALLOW_ID_BASE + 1),
+            lambda r: r.update(action={"type": "allow"}),
+            lambda r: r["condition"].update(requestDomains=["b.com", "a.com"]),
+            lambda r: r["condition"].update(requestDomains=["com", "a.com"]),
+            lambda r: r["condition"].update(excludedRequestDomains=["y.other.com"]),
+            lambda r: r["condition"].update(urlFilter="/ads"),
+        ]
+        for i, change in enumerate(changes):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.curated_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.curated_ruleset_errors([good, dict(good, id=2)]))
+        self.assertTrue(dnr_schema.curated_ruleset_errors([]))
+
+    def test_general_ruleset_ids_and_order(self):
+        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated"):
+            self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
+        for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
+            self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
+        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip"]
+        self.assertEqual(sorted(reversed(ids), key=dnr_schema.general_order_key), ids)
 
 
 class GeneratedData(unittest.TestCase):
@@ -291,6 +477,16 @@ class GeneratedData(unittest.TestCase):
                         self.assertFalse(h == d or h.endswith("." + d), (rid, r["id"], d))
                 for w in words:
                     self.assertNotIn(w, c.get("urlFilter") or c.get("regexFilter") or "", (rid, r["id"]))
+
+    def test_curated_rulesets(self):
+        ids = [r["id"] for r in self.manifest["declarative_net_request"]["rule_resources"]]
+        for rid in dnr_schema.CURATED_RULESETS:
+            self.assertIn(rid, ids)
+            self.assertEqual(dnr_schema.curated_ruleset_errors(self.rulesets[rid]), [], rid)
+            self.assertEqual(self.info["rulesets"][rid]["rules"], 1)
+        self.assertEqual(self.info["curated"]["ads"]["hosts"], len(self.rulesets["ads_curated"][0]["condition"]["requestDomains"]))
+        self.assertEqual(self.info["curated"]["trackers"]["hosts"],
+                         len(self.rulesets["privacy_curated"][0]["condition"]["requestDomains"]))
 
     def test_cosmetic_files(self):
         cdir = os.path.join(ROOT, "rules", "cosmetic")

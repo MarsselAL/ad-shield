@@ -505,10 +505,14 @@
   }
 
   // ---------------------------------------------------------------- rulesets
-  /** Category of a static ruleset id; null for rulesets this module does not own. */
+  /**
+   * Category of a static ruleset id; null for rulesets this module does not own.
+   * ads_N / privacy_N come from EasyList / EasyPrivacy, ads_curated / privacy_curated from our
+   * own rules/curated_hosts.txt; both follow the same switch and count in the same bucket.
+   */
   function rulesetFeature(id) {
-    if (/^ads_\d+$/.test(id)) return 'ads';
-    if (/^privacy_\d+$/.test(id)) return 'trackers';
+    if (/^ads_(\d+|curated)$/.test(id)) return 'ads';
+    if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
     if (id === 'cookie_strip') return 'stripCookies';
     return null;

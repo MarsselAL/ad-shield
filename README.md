@@ -55,7 +55,8 @@ General blocking (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
 - `tools/build_rules.py` downloads the three lists with `curl` into a fresh temporary folder and
   converts them with our own converter (`tools/filterlist.py`) into static DNR rulesets in
   `rules/` (`ads_1`, `privacy_1`, `cookies_1`, `cookie_strip`) and cosmetic data in
-  `rules/cosmetic/`. The output is committed, so the extension works offline. Lists are updated
+  `rules/cosmetic/`. It also turns our own hand-written host list `rules/curated_hosts.txt` into
+  `ads_curated` and `privacy_curated` (`--curated-only` rebuilds just those, offline). The output is committed, so the extension works offline. Lists are updated
   only by rebuilding and shipping a new version.
 - Generic element hiding is a CSS file registered as a content script: no JavaScript runs for it.
   Site-specific hiding: a tiny page script (top frame only) says hello, and the background
@@ -82,13 +83,15 @@ Twitch:
 
 | Ruleset | Rules | Of which allow | Source |
 |---|---|---|---|
-| `ads_1` | 3,784 | 516 | EasyList |
+| `ads_1` | 3,781 | 516 | EasyList |
+| `ads_curated` | 1 (44 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `privacy_1` | 9,239 | 842 | EasyPrivacy |
+| `privacy_curated` | 1 (45 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,825 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,824 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.

@@ -10,8 +10,9 @@ Checks:
   - permissions / host permissions are limited to the allowed list
   - rule ids are unique within each ruleset, rules have the required shape
   - the Twitch rulesets (client_ads, trackers) keep their narrow twitch.tv-only shape; every rule
-    of the generated general rulesets passes tests/dnr_schema.py; static rule / regex / ruleset
-    limits hold; the general content-script files exist; vendored autoconsent is unmodified
+    of the generated general rulesets passes tests/dnr_schema.py; the curated rulesets
+    (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
+    third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
 """
 import ast
 import hashlib
@@ -27,7 +28,7 @@ import dnr_schema  # noqa: E402
 ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback"}
 ALLOWED_HOSTS = {"*://*.twitch.tv/*", "*://*.ttvnw.net/*", "<all_urls>"}
 TWITCH_RULESETS = ["client_ads", "trackers"]
-GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^cookie_strip$")
+GENERATED_RULESET_RE = dnr_schema.GENERATED_RULESET_RE
 
 errors = []
 checks = 0
@@ -191,8 +192,11 @@ def main():
     check(len(ids) == len(set(ids)), "duplicate ruleset ids")
     general = [i for i in ids if i not in TWITCH_RULESETS]
     check(all(GENERATED_RULESET_RE.match(i) for i in general), "unexpected ruleset ids %s" % general)
-    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip"):
+    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip") + dnr_schema.CURATED_RULESETS:
         check(want in general, "ruleset %s missing" % want)
+    if all(GENERATED_RULESET_RE.match(i) for i in general):
+        check(general == sorted(general, key=dnr_schema.general_order_key),
+              "general rulesets out of order (ads_N, ads_curated, privacy_N, privacy_curated, cookies_N, cookie_strip): %s" % general)
     check(len(ids) <= dnr_schema.MAX_NUMBER_OF_STATIC_RULESETS, "too many rulesets")
     check(sum(1 for r in rr if r.get("enabled")) <= dnr_schema.MAX_NUMBER_OF_ENABLED_STATIC_RULESETS, "too many enabled rulesets")
     enabled_rules = 0
@@ -208,6 +212,10 @@ def main():
         regexes += dnr_schema.regex_count(rules)
         if r.get("enabled"):
             enabled_rules += len(rules)
+        if r.get("id") in dnr_schema.CURATED_RULESETS:
+            check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
+            for msg in dnr_schema.curated_ruleset_errors(rules, r.get("path")):
+                errors.append(msg)
         if r.get("id") not in TWITCH_RULESETS:
             for msg in dnr_schema.ruleset_errors(rules, r.get("path")):
                 errors.append(msg)

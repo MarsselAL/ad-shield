@@ -20,6 +20,18 @@
     "genericExceptionHosts": 1227,
     "generichide": 155
   },
+  "curated": {
+    "ads": {
+      "exclusions": 0,
+      "hosts": 53
+    },
+    "never": 23,
+    "source": "rules/curated_hosts.txt",
+    "trackers": {
+      "exclusions": 1,
+      "hosts": 47
+    }
+  },
   "lists": {
     "easylist": {
       "cosmeticConverted": 24334,
@@ -93,6 +105,12 @@
       "regex": 4,
       "rules": 3781
     },
+    "ads_curated": {
+      "allow": 0,
+      "block": 1,
+      "regex": 0,
+      "rules": 1
+    },
     "cookie_strip": {
       "allow": 0,
       "block": 4,
@@ -110,7 +128,13 @@
       "block": 8397,
       "regex": 6,
       "rules": 9239
+    },
+    "privacy_curated": {
+      "allow": 0,
+      "block": 1,
+      "regex": 0,
+      "rules": 1
     }
   },
-  "totalStaticRules": 14818
+  "totalStaticRules": 14820
 }
