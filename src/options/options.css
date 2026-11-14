@@ -18,7 +18,11 @@ textarea {
 }
 .errors { color: var(--bad); margin: 0 0 8px; padding-left: 18px; }
 .errors:empty { display: none; }
-.lists { margin: 4px 0 8px; padding-left: 18px; }
-.lists li { margin: 2px 0; }
+.lists { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.lists th, .lists td { text-align: left; padding: 4px 6px 4px 0; border-top: 1px solid var(--border); vertical-align: top; }
+.lists th { font-weight: 600; border-top: 0; }
+.lists td.bad { color: var(--bad); }
+#lists-last { font-size: 12px; margin: 2px 0 8px; }
+button:disabled { opacity: 0.5; cursor: default; }
 code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 input:disabled + .track { opacity: 0.5; }

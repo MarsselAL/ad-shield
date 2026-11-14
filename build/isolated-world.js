@@ -400,6 +400,11 @@
   var ALLOWLIST_RULE_ID = 1;
   var ALLOWLIST_PRIORITY = 100;     // above every static rule (static priorities are 1..4)
   var TWITCH_RULESETS = ['client_ads', 'trackers'];
+  // Dynamic rules from the weekly list update (src/background/updater.js): rule id = base +
+  // static id, so block rules sit at base+1.. and allow rules at base+500001.. (ALLOW_ID_BASE).
+  var DYNAMIC_BASES = { ads: 1000000, trackers: 2000000, hideCookieBanners: 3000000 };
+  var DYNAMIC_SPAN = 1000000;
+  var DYNAMIC_FEATURES = ['ads', 'trackers', 'hideCookieBanners'];
   var SCRIPT_PREFIX = 'as-';
   var WEB = ['http://*/*', 'https://*/*'];
 
@@ -410,6 +415,7 @@
       stripCookies: true,        // remove Cookie / Set-Cookie on third-party tracker requests
       hideCookieBanners: true,   // EasyList Cookie List network rules + cosmetic hiding
       autoRejectCookies: false,  // DuckDuckGo autoconsent: click "reject" on consent pop-ups
+      autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -518,15 +524,47 @@
     return null;
   }
 
-  /** { enableRulesetIds, disableRulesetIds } for the general rulesets among `ids`. */
-  function rulesetPlan(ids, masterEnabled, b) {
+  /** True for the rulesets generated from the lists (ads_N, privacy_N, cookies_N), which the
+   * weekly update replaces with dynamic rules; not the curated ones or cookie_strip. */
+  function isListRuleset(id) {
+    return /^(ads|privacy|cookies)_\d+$/.test(id);
+  }
+
+  /**
+   * { enableRulesetIds, disableRulesetIds } for the general rulesets among `ids`.
+   * dynamic: { ads, trackers, hideCookieBanners } -> true when that category's updated lists are
+   * installed as dynamic rules; its list rulesets are then disabled (curated / cookie_strip stay).
+   */
+  function rulesetPlan(ids, masterEnabled, b, dynamic) {
     var enable = [], disable = [];
+    var dyn = dynamic || {};
     (ids || []).forEach(function (id) {
       var f = rulesetFeature(id);
       if (!f) return;
-      (masterEnabled && b[f] ? enable : disable).push(id);
+      var on = masterEnabled && b[f] && !(isListRuleset(id) && dyn[f]);
+      (on ? enable : disable).push(id);
     });
     return { enableRulesetIds: enable, disableRulesetIds: disable };
+  }
+
+  /** Feature ('ads' | 'trackers' | 'hideCookieBanners') owning a dynamic rule id, or null. */
+  function dynamicFeature(ruleId) {
+    if (typeof ruleId !== 'number') return null;
+    for (var i = 0; i < DYNAMIC_FEATURES.length; i++) {
+      var base = DYNAMIC_BASES[DYNAMIC_FEATURES[i]];
+      if (ruleId > base && ruleId < base + DYNAMIC_SPAN) return DYNAMIC_FEATURES[i];
+    }
+    return null;
+  }
+
+  /** Dynamic rule ids -> { ads: n, trackers: n, hideCookieBanners: n } (installed rule counts). */
+  function dynamicCounts(ruleIds) {
+    var c = { ads: 0, trackers: 0, hideCookieBanners: 0 };
+    (ruleIds || []).forEach(function (id) {
+      var f = dynamicFeature(id);
+      if (f) c[f]++;
+    });
+    return c;
   }
 
   /** Dynamic rules for the allowlist: one allowAllRequests rule covering every listed site. */
@@ -546,7 +584,17 @@
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {
       var r = m && m.rule;
-      if (!r || typeof r.ruleId !== 'number' || r.ruleId >= ALLOW_ID_BASE) return;
+      if (!r || typeof r.ruleId !== 'number') return;
+      if (r.rulesetId === '_dynamic') {
+        // Updated lists (allowlist rule 1 and allow-rule ranges are not counted).
+        var df = dynamicFeature(r.ruleId);
+        if (!df || r.ruleId - DYNAMIC_BASES[df] >= ALLOW_ID_BASE) return;
+        if (df === 'ads') c.ads++;
+        else if (df === 'trackers') c.trackers++;
+        else c.banners++;
+        return;
+      }
+      if (r.ruleId >= ALLOW_ID_BASE) return;
       var id = r.rulesetId;
       if (id === 'client_ads') { c.ads++; return; }
       if (id === 'trackers') { c.trackers++; return; }
@@ -690,6 +738,12 @@
     ALLOW_ID_BASE: ALLOW_ID_BASE,
     ALLOWLIST_RULE_ID: ALLOWLIST_RULE_ID,
     TWITCH_RULESETS: TWITCH_RULESETS,
+    DYNAMIC_BASES: DYNAMIC_BASES,
+    DYNAMIC_SPAN: DYNAMIC_SPAN,
+    DYNAMIC_FEATURES: DYNAMIC_FEATURES,
+    isListRuleset: isListRuleset,
+    dynamicFeature: dynamicFeature,
+    dynamicCounts: dynamicCounts,
     SCRIPT_PREFIX: SCRIPT_PREFIX,
     defaults: defaults,
     normalize: normalize,

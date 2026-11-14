@@ -1,0 +1,41 @@
+[Adblock Plus 2.0]
+! Version: 202611100010
+! Title: EasyPrivacy (test fixture)
+! Licence: https://easylist.to/pages/licence.html
+!
+||trk.example^$third-party
+||trk2.example^$third-party
+||sub.trk.example^$third-party
+||Pixel.Example^$third-party
+||pixel2.example^
+||pixel3.example^$image
+||stats.example^$third-party,domain=~stats-home.example
+||count.example^$important,third-party
+||beacon.example^$ping
+||beacon2.example^$beacon,third-party
+||ws.example^$websocket
+||ana.example/collect?
+/analytics.js$script
+/analytics.js$script
+/analytics.js$script,third-party
+/track/*$image,domain=news.example
+/pixel.gif?
+-tracking-pixel-
+||x.example/t.gif$match-case
+/^https?:\/\/[a-z0-9]{10}\.cloudfront\.net\/t\//$script
+/(?=x)t/
+||stats.example^$redirect=noop.js
+||stats.example^$removeparam=fbclid
+||stats.example^$csp=default-src 'self'
+||stats.example^$method=post
+||ünïcode-track.example^$third-party
+||bad..host^$third-party
+@@||trk.example/ok.js$script
+@@||trk.example/consent.js
+@@||trk3.example^$third-party
+@@||allow-doc.example^$document
+@@||news.example^$generichide
+example.com##.tracker
+example.com#@#.tracker
+##.tracking-banner
+t

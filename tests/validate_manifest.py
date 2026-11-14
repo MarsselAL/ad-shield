@@ -25,7 +25,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dnr_schema  # noqa: E402
 
-ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback"}
+# alarms: weekly filter-list update; unlimitedStorage: the updated lists' rules and site data
+# (~5 MB) next to the 10 MB default quota.
+ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback", "alarms",
+                       "unlimitedStorage"}
 ALLOWED_HOSTS = {"*://*.twitch.tv/*", "*://*.ttvnw.net/*", "<all_urls>"}
 TWITCH_RULESETS = ["client_ads", "trackers"]
 GENERATED_RULESET_RE = dnr_schema.GENERATED_RULESET_RE
@@ -117,11 +120,27 @@ def main():
                   "service worker must not register content scripts dynamically (they are in manifest.json)")
             check("/src/background/general.js" in src and "/src/shared/blocking.js" in src,
                   "service worker must load src/shared/blocking.js and src/background/general.js")
+            order = ["/src/shared/blocking.js", "/src/shared/filterlist.js", "/src/shared/lists.js",
+                     "/src/background/general.js", "/src/background/updater.js"]
+            pos = [src.find(f) for f in order]
+            check(all(p >= 0 for p in pos) and pos == sorted(pos),
+                  "service worker must load %s in this order" % ", ".join(order))
     gen = os.path.join(ROOT, "src", "background", "general.js")
     if os.path.isfile(gen):
         gsrc = open(gen, encoding="utf-8").read()
         for legacy in ("tas-page-main", "tas-bridge-isolated"):
             check(legacy not in gsrc, "general.js must not touch the Twitch script id " + legacy)
+    upd = os.path.join(ROOT, "src", "shared", "lists.js")
+    if os.path.isfile(upd):
+        urls = sorted(set(re.findall(r"https?://[^'\"\s]+", open(upd, encoding="utf-8").read())))
+        check(urls == ["https://easylist.to/easylist/easylist.txt", "https://easylist.to/easylist/easyprivacy.txt",
+                       "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"],
+              "src/shared/lists.js may only name the three list URLs, got %s" % urls)
+    for bg_file in ("general.js", "updater.js", "service-worker.js"):
+        bp = os.path.join(ROOT, "src", "background", bg_file)
+        if os.path.isfile(bp):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(bp, encoding="utf-8").read().split("*/", 1)[1]),
+                  "src/background/%s must not contain URLs in code (fetches only via lists.js)" % bg_file)
     blk = os.path.join(ROOT, "src", "shared", "blocking.js")
     if os.path.isfile(blk):
         bsrc = open(blk, encoding="utf-8").read()

@@ -1,0 +1,33 @@
+[Adblock Plus 2.0]
+! Title: EasyList Cookie List (test fixture)
+! Last modified: 2026-11-10 08:30 UTC
+! License: http://creativecommons.org/licenses/by/3.0/
+!
+||cmp.example^$script
+||cmp2.example^$script,third-party
+||consent.example^$third-party
+/cookie-notice.js$script
+/cookieconsent.min.js
+/gdpr/banner.js$script,domain=~gdpr.example
+@@||cmp.example/required.js$script
+@@||needed.example^$document
+##.cookie-bar
+##.cookie-bar
+###cookie-notice
+##.consent-banner
+##div[aria-label="cookie consent"]
+b.com##.consent
+b.com,c.com##.consent-popup
+a.com##.side-ad
+a.com#@#.cookie-bar
+f.example#@#.consent-banner
+#@#.never-hide
+##.never-hide
+example.*##.cookie-wild
+c.com##.x:has-text(cookie)
+c.com#?#.x:-abp-has(.cookie)
+c.com##+js(set-cookie, consent, true)
+müller.example##.cookie-idn
+@@||cookie-page.example^$elemhide
+@@||cookie-gh.example^$generichide
+||cmp3.example^$redirect=noop.js

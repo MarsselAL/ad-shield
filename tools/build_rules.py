@@ -142,16 +142,22 @@ def write_rules(path, rules):
         fh.write("\n]\n")
 
 
-def convert(lists_dir, root=ROOT):
-    info = {"lists": {}, "rulesets": {}, "cosmetic": {}, "cookieStrip": {}}
+def convert_texts(texts):
+    """Pure conversion of the three lists. texts: {list key: file text}. Returns a dict:
+    lists      {key: build-info entry without url, plus "rules" (block ids from 1, allow ids
+               from ALLOW_ID_BASE + 1, before splitting into rulesets)}
+    site       the rules/cosmetic/site.json object
+    generic    {"ads": [...], "cookies": [...]} generic selectors (rules/cosmetic/generic.json)
+    cosmetic   {"ads": CosmeticCollector, "cookies": CosmeticCollector} (finished)
+    exceptions {host: set(selectors)}; cookieDomains: EasyPrivacy ||host^$third-party hosts.
+    src/shared/filterlist.js ports this function; tests/fixtures/lists/golden.json (written by
+    tools/make_golden.py) keeps the two in step."""
+    out = {"lists": {}}
     cosmetic = {"ads": F.CosmeticCollector(), "cookies": F.CosmeticCollector()}
     generichide, elemhide = set(), set()
-    rulesets = []
     cookie_domains = []
-    for key, name, url, prefix, category in LISTS:
-        path = os.path.join(lists_dir, name)
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
+    for key, _name, _url, _prefix, category in LISTS:
+        lines = texts[key].splitlines()
         skipped = collections.Counter()
         parsed = []
         n_filters = n_cos = 0
@@ -185,6 +191,52 @@ def convert(lists_dir, root=ROOT):
                 skipped[str(e)] += 1
         rules, st = F.build_network_rules(parsed)
         skipped["regex-cap"] += st["regex-cap"]
+        out["lists"][key] = {
+            "version": header_value(lines, "Version") or header_value(lines, "Last modified"),
+            "licence": header_value(lines, "Licence") or header_value(lines, "License"),
+            "filters": n_filters,
+            "networkConverted": len(parsed),
+            "cosmeticConverted": n_cos,
+            "mergedDomains": st["merged-domains"],
+            "duplicates": st["duplicates"],
+            "skipped": dict(sorted(skipped.items())),
+            "skippedTotal": sum(skipped.values()),
+            "rules": rules,
+        }
+    exceptions = {}
+    for c in cosmetic.values():
+        c.finish()
+        for h, sels in c.exceptions.items():
+            exceptions.setdefault(h, set()).update(sels)
+    generic_all = set(cosmetic["ads"].generic) | set(cosmetic["cookies"].generic)
+    generic_exc_hosts = sorted(h for h, sels in exceptions.items() if sels & generic_all)
+    out["site"] = {
+        "v": 1,
+        "ads": {h: s for h, s in sorted(cosmetic["ads"].site.items())},
+        "cookies": {h: s for h, s in sorted(cosmetic["cookies"].site.items())},
+        "exceptions": {h: sorted(s) for h, s in sorted(exceptions.items())},
+        "genericExceptionHosts": generic_exc_hosts,
+        "generichide": sorted(generichide),
+        "elemhide": sorted(elemhide),
+    }
+    out["generic"] = {"ads": cosmetic["ads"].generic, "cookies": cosmetic["cookies"].generic}
+    out["cosmetic"] = cosmetic
+    out["exceptions"] = exceptions
+    out["cookieDomains"] = cookie_domains
+    return out
+
+
+def convert(lists_dir, root=ROOT):
+    texts = {}
+    for key, name, _url, _prefix, _category in LISTS:
+        with open(os.path.join(lists_dir, name), encoding="utf-8") as fh:
+            texts[key] = fh.read()
+    conv = convert_texts(texts)
+    info = {"lists": {}, "rulesets": {}, "cosmetic": {}, "cookieStrip": {}}
+    rulesets = []
+    for key, name, url, prefix, category in LISTS:
+        entry = dict(conv["lists"][key])
+        rules = entry.pop("rules")
         chunks = F.split_rulesets(rules)
         for i, chunk in enumerate(chunks):
             rid = "%s_%d" % (prefix, i + 1)
@@ -196,19 +248,10 @@ def convert(lists_dir, root=ROOT):
                 "allow": sum(1 for r in chunk if r["id"] >= F.ALLOW_ID_BASE),
                 "regex": sum(1 for r in chunk if "regexFilter" in r["condition"]),
             }
-        info["lists"][key] = {
-            "url": url,
-            "version": header_value(lines, "Version") or header_value(lines, "Last modified"),
-            "licence": header_value(lines, "Licence") or header_value(lines, "License"),
-            "filters": n_filters,
-            "networkConverted": len(parsed),
-            "cosmeticConverted": n_cos,
-            "mergedDomains": st["merged-domains"],
-            "duplicates": st["duplicates"],
-            "skipped": dict(sorted(skipped.items())),
-            "skippedTotal": sum(skipped.values()),
-        }
+        entry["url"] = url
+        info["lists"][key] = entry
 
+    cookie_domains = conv["cookieDomains"]
     strip, n_strip = F.cookie_strip_rules(cookie_domains, COOKIE_STRIP_CAP)
     write_rules(os.path.join(root, "rules", "cookie_strip.json"), strip)
     rulesets.append({"id": "cookie_strip", "enabled": True, "path": "rules/cookie_strip.json"})
@@ -216,32 +259,17 @@ def convert(lists_dir, root=ROOT):
     info["cookieStrip"] = {"candidates": len(set(cookie_domains)), "cap": COOKIE_STRIP_CAP, "domains": n_strip}
 
     # Cosmetic data
+    cosmetic = conv["cosmetic"]
+    site = conv["site"]
     cdir = os.path.join(root, "rules", "cosmetic")
     os.makedirs(cdir, exist_ok=True)
-    exceptions = {}
-    for c in cosmetic.values():
-        c.finish()
-        for h, sels in c.exceptions.items():
-            exceptions.setdefault(h, set()).update(sels)
-    generic_all = set(cosmetic["ads"].generic) | set(cosmetic["cookies"].generic)
-    generic_exc_hosts = sorted(h for h, sels in exceptions.items() if sels & generic_all)
     for cat, c in cosmetic.items():
         with open(os.path.join(cdir, "%s_generic.css" % cat), "w", encoding="utf-8") as fh:
             fh.write("/* GENERATED by tools/build_rules.py from %s; see rules/NOTICE.md */\n" %
                      ("EasyList" if cat == "ads" else "the EasyList Cookie List"))
             fh.write(F.generic_css(c.generic))
     with open(os.path.join(cdir, "generic.json"), "w", encoding="utf-8") as fh:
-        json.dump({"ads": cosmetic["ads"].generic, "cookies": cosmetic["cookies"].generic}, fh,
-                  separators=(",", ":"), ensure_ascii=False)
-    site = {
-        "v": 1,
-        "ads": {h: s for h, s in sorted(cosmetic["ads"].site.items())},
-        "cookies": {h: s for h, s in sorted(cosmetic["cookies"].site.items())},
-        "exceptions": {h: sorted(s) for h, s in sorted(exceptions.items())},
-        "genericExceptionHosts": generic_exc_hosts,
-        "generichide": sorted(generichide),
-        "elemhide": sorted(elemhide),
-    }
+        json.dump(conv["generic"], fh, separators=(",", ":"), ensure_ascii=False)
     with open(os.path.join(cdir, "site.json"), "w", encoding="utf-8") as fh:
         json.dump(site, fh, separators=(",", ":"), ensure_ascii=False)
     for cat, c in cosmetic.items():
@@ -250,10 +278,10 @@ def convert(lists_dir, root=ROOT):
             "siteHosts": len(c.site),
             "siteSelectors": sum(len(v) for v in c.site.values()),
         }
-    info["cosmetic"]["exceptionHosts"] = len(exceptions)
-    info["cosmetic"]["genericExceptionHosts"] = len(generic_exc_hosts)
-    info["cosmetic"]["generichide"] = len(generichide)
-    info["cosmetic"]["elemhide"] = len(elemhide)
+    info["cosmetic"]["exceptionHosts"] = len(conv["exceptions"])
+    info["cosmetic"]["genericExceptionHosts"] = len(site["genericExceptionHosts"])
+    info["cosmetic"]["generichide"] = len(site["generichide"])
+    info["cosmetic"]["elemhide"] = len(site["elemhide"])
     info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
     return rulesets, info
 

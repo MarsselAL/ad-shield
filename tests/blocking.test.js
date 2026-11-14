@@ -4,7 +4,9 @@ var B = __TAS__.blocking;
 
 test('defaults: everything on except auto-reject; normalize never throws', function () {
   var d = B.defaults();
-  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, allowlist: [] });
+  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, allowlist: [] });
+  assert.equal(B.normalize({ autoUpdateLists: false }).autoUpdateLists, false);
+  assert.equal(B.normalize({ autoUpdateLists: 'no' }).autoUpdateLists, true);
   assert.deepEqual(B.normalize(null), d);
   assert.deepEqual(B.normalize('x'), d);
   var n = B.normalize({ ads: false, trackers: 'no', allowlist: ['B.com', 'b.com', 'bad host', 5, 'https://www.x.org/p'], extra: 1 });
@@ -159,4 +161,41 @@ test('popupSite', function () {
   assert.equal(B.popupSite({ url: 'https://www.news.org/a', enabled: true, allowlist: ['news.org'] }).on, false);
   assert.equal(B.popupSite({ url: 'chrome://extensions' }).web, false);
   assert.includes(B.popupSite({ url: 'https://a.com/', enabled: false }).detail, 'switched off');
+});
+
+test('rulesetPlan: updated (dynamic) categories disable only their list rulesets', function () {
+  var ids = ['client_ads', 'trackers', 'ads_1', 'ads_2', 'ads_curated', 'privacy_1', 'privacy_curated', 'cookies_1', 'cookie_strip'];
+  var p = B.rulesetPlan(ids, true, B.defaults(), { ads: true, hideCookieBanners: true });
+  assert.deepEqual(p.enableRulesetIds, ['ads_curated', 'privacy_1', 'privacy_curated', 'cookie_strip']);
+  assert.deepEqual(p.disableRulesetIds, ['ads_1', 'ads_2', 'cookies_1']);
+  var all = B.rulesetPlan(ids, true, B.defaults(), { ads: true, trackers: true, hideCookieBanners: true });
+  assert.deepEqual(all.enableRulesetIds, ['ads_curated', 'privacy_curated', 'cookie_strip']);
+  var none = B.rulesetPlan(ids, true, B.defaults(), {});
+  assert.deepEqual(none, B.rulesetPlan(ids, true, B.defaults()), 'no dynamic = old behaviour');
+  var off = B.rulesetPlan(ids, false, B.defaults(), { ads: true });
+  assert.deepEqual(off.enableRulesetIds, []);
+  var adsOff = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { ads: false }), {});
+  assert.deepEqual(adsOff.disableRulesetIds, ['ads_1', 'ads_2', 'ads_curated']);
+  assert.ok(B.isListRuleset('cookies_3'));
+  assert.notOk(B.isListRuleset('ads_curated'));
+  assert.notOk(B.isListRuleset('cookie_strip'));
+});
+
+test('dynamic id ranges: base + static id; allowlist rule 1 belongs to no category', function () {
+  assert.equal(B.dynamicFeature(1), null);
+  assert.equal(B.dynamicFeature(1000000), null);
+  assert.equal(B.dynamicFeature(1000001), 'ads');
+  assert.equal(B.dynamicFeature(1500001), 'ads');
+  assert.equal(B.dynamicFeature(2000005), 'trackers');
+  assert.equal(B.dynamicFeature(3999999), 'hideCookieBanners');
+  assert.equal(B.dynamicFeature(4000001), null);
+  assert.deepEqual(B.dynamicCounts([1, 1000001, 1500001, 3000002]), { ads: 2, trackers: 0, hideCookieBanners: 1 });
+});
+
+test('countMatches: _dynamic matches counted by id range, allow ranges and the allowlist ignored', function () {
+  var d = function (ruleId) { return { rule: { rulesetId: '_dynamic', ruleId: ruleId }, tabId: 1 }; };
+  var c = B.countMatches([d(1), d(1000001), d(1000002), d(1500001), d(2000010), d(2500010), d(3000003), d(3500003), d(9000000)]);
+  assert.deepEqual(c, { ads: 2, trackers: 1, cookies: 0, banners: 1 });
+  var s = B.countMatches([{ rule: { rulesetId: 'ads_1', ruleId: 500001 } }, { rule: { rulesetId: 'ads_1', ruleId: 3 } }]);
+  assert.equal(s.ads, 1, 'static allow rules still ignored');
 });

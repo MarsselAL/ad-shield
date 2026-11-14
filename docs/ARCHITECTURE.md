@@ -13,6 +13,7 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 | `tools/build_rules.py` | Downloads EasyList, EasyPrivacy and the EasyList Cookie List with `curl` (`--proto =https`) into a fresh `tempfile.mkdtemp()` folder (or `--lists DIR`), converts them, writes `rules/*.json`, `rules/cosmetic/*`, `rules/build-info.json` and the `rule_resources` list in `manifest.json`. Every build also builds the two curated rulesets from `rules/curated_hosts.txt` (checked before anything is downloaded or deleted). `--curated-only` rebuilds just those: `ads_curated.json`, `privacy_curated.json`, the manifest `rule_resources` and the `curated` / ruleset entries of `build-info.json`, with no download and without touching the other generated files. The cleanup of old output removes only numbered rulesets (`ads_[0-9]*.json`, ...). Manifest order: `client_ads`, `trackers`, `ads_N`, `ads_curated`, `privacy_N`, `privacy_curated`, `cookies_N`, `cookie_strip`. |
 | `tools/curated.py` | Parser and rule generator for `rules/curated_hosts.txt` (pure functions). Sections `[ads]`, `[trackers]`, `[never]`; `#` comments; `-host` excludes a host (and its subdomains) from its section. Hosts must be lowercase ASCII/punycode with at least two labels; duplicates, unknown sections, empty sections and exclusions that exclude nothing are errors. The build fails if a `[never]` host is equal to or under a blocked host and not covered by an exclusion of that section. Each blocked section becomes one rule: id 1, priority 1, `block`, `requestDomains` (sorted), `domainType: thirdParty`, `excludedRequestDomains` when there are exclusions, no `resourceTypes` (so `main_frame` is never blocked). |
 | `tools/filterlist.py` | Our converter (pure functions). Network filters: `\|\|`, `\|`, `^`, `*` patterns pass through to `urlFilter` (same syntax in DNR); `$third-party`/`first-party` -> `domainType`; resource types and `~type` -> `resourceTypes` / `excludedResourceTypes`; `domain=` -> `initiatorDomains` / `excludedInitiatorDomains` (IDN -> punycode); `match-case`; `important` (priority 3); `@@` -> `allow` (priority 2), `@@...$document` -> `allowAllRequests`; simple RE2-safe `/regex/` (capped at 200 per list). Plain `\|\|host^` filters with identical options are merged into `requestDomains` lists of 1,000 hosts. Block rule ids start at 1, allow rule ids at 500001 (`ALLOW_ID_BASE`, mirrored in `src/shared/blocking.js`) so counts can ignore allow matches. Rulesets are split at 30,000 rules. Cosmetic: `##` / `#@#`, `$generichide` / `$elemhide` for `\|\|host^`. Everything else raises `Skip(reason)` and is counted. |
+| `tools/make_golden.py` | Writes `tests/fixtures/lists/golden.json`: what `build_rules.convert_texts` (the pure part of the build) makes of the fixture lists in `tests/fixtures/lists/`. `tests/test_rules.py` checks the golden equals the current Python output and `tests/filterlist.test.js` checks the JavaScript port produces exactly the same, so the two converters cannot drift. Rerun it (and port the change) after any converter change. |
 | `tools/vendor_autoconsent.py` | Downloads the pinned `@duckduckgo/autoconsent` npm tarball (17.2.0), checks its sha512 against the registry's integrity value, copies four files unmodified into `vendor/autoconsent/` and records their sha256 in `VERSION.json` (the validator re-checks them). |
 
 ### Generated data (`rules/`, committed)
@@ -35,8 +36,11 @@ limit (1,000) and the ruleset count limits.
 
 | File | World / context | Role |
 |---|---|---|
-| `src/shared/blocking.js` | background, popup, options, ISOLATED bundle, tests | Storage key `blocking` (`ads`, `trackers`, `stripCookies`, `hideCookieBanners`, `autoRejectCookies`, `allowlist`), normalisation, allowlist matching, and pure planners: `rulesetPlan`, `allowlistRules`, `contentScriptPlan`, `cssForHost`, `countMatches`. |
-| `src/background/general.js` | service worker | Applies the plan on install/startup/settings change: `updateEnabledRulesets` for the general rulesets, one dynamic `allowAllRequests` rule (priority 100) for the allowlist, `registerContentScripts` (skipped when the stored plan signature is unchanged). Handles `as-page` (inject site CSS with `insertCSS`, `origin: 'USER'`), `as-banner`, and autoconsent's messages. Loads `rules/cosmetic/*.json` and autoconsent's rules lazily with `fetch(chrome.runtime.getURL(...))`, i.e. from the package only. |
+| `src/shared/blocking.js` | background, popup, options, ISOLATED bundle, tests | Storage key `blocking` (`ads`, `trackers`, `stripCookies`, `hideCookieBanners`, `autoRejectCookies`, `autoUpdateLists`, `allowlist`), normalisation, allowlist matching, the dynamic rule id ranges of updated lists (`DYNAMIC_BASES`, `dynamicFeature`), and pure planners: `rulesetPlan` (takes the categories whose updated lists are installed), `allowlistRules`, `contentScriptPlan`, `cssForHost`, `countMatches`. |
+| `src/shared/filterlist.js` | service worker, tests | JavaScript port of `tools/filterlist.py` + `build_rules.convert_texts` (network rules with domain merging, priorities, allow ids from 500001, RE2 safety check, regex cap, skip reasons; site-specific cosmetic data). Keeps Python semantics where they affect output (`str.strip`/`splitlines`, `json.dumps(sort_keys=True)` group keys, IDNA 2003 nameprep + punycode like Python's `idna` codec). Parity: `tests/filterlist.test.js` against `golden.json`; on the real lists of 2026-11-14 both converters gave identical rules, counts and site data (3,781 / 9,244 / 1,794 rules; jsc took about 0.3 s for all three). |
+| `src/shared/lists.js` | service worker, options, tests | Pure decisions of the list update: list URLs, version parsing (`202611140001`, `2026-11-12 20:50 UTC`, `14 Nov 2026 00:01 UTC`), sanity checks, all-or-nothing decision, dynamic ids, limits, `isDue`, `shouldRevert`, status rows. |
+| `src/background/general.js` | service worker | Owns every DNR change of the general blocker in one queue (`syncDnr`): `updateEnabledRulesets` for the general rulesets, one dynamic `allowAllRequests` rule (id 1, priority 100) for the allowlist, the dynamic rules of updated lists; `registerContentScripts` (skipped when the stored plan signature is unchanged). Handles `as-page` (inject site CSS with `insertCSS`, `origin: 'USER'`), `as-banner`, and autoconsent's messages. Site cosmetic data: `chrome.storage.local` `listSite` (updated lists) when present, else `rules/cosmetic/site.json`; other data is loaded from the package with `fetch(chrome.runtime.getURL(...))`. `installLists` / `resetLists` are the updater's entry points into the queue. |
+| `src/background/updater.js` | service worker | Weekly list update (below). The only code that makes network requests. |
 | `src/background/autoconsent-shim.js` + `vendor/autoconsent/autoconsent.cjs.js` | service worker | `module`/`exports` objects so the unmodified CommonJS build loads with `importScripts`; `general.js` uses its `evalSnippets` and `filterCompactRules`. A load failure only disables auto-reject. |
 | `src/content/general.js` | ISOLATED, top frame, document_start | Sends `as-page` with the host and `performance.timeOrigin`; once after `load` + 1.5 s (idle callback) checks this site's cookie selectors with `querySelector` and reports one `as-banner` if one matched. No observers, no repeating timers. |
 | `vendor/autoconsent/content.bundle.js` | ISOLATED, all frames | autoconsent, registered only while auto-reject is on. |
@@ -54,6 +58,54 @@ Exception hosts (sites with `#@#` exceptions for generic selectors, `$generichid
 are excluded from the static CSS; for them the background injects the generic selectors minus
 the exceptions (none for `generichide`, nothing at all for `elemhide`).
 
+### Weekly filter-list update (`src/background/updater.js`)
+
+- **When**: a `chrome.alarms` alarm `as-lists-weekly` (every 7 days) while `autoUpdateLists` (option
+  "Update filter lists automatically", default on) and the master switch are on; on install,
+  startup and settings changes the alarm is (re)created and, if a check is due (`lists.isDue`: the
+  last check is a week old, or, before the first check, the lists in use are a week old), a one-shot
+  `as-lists-soon` alarm runs it a minute later. Off: both alarms are cleared and nothing is fetched;
+  the lists in use stay until "Use built-in lists". "Update now" on the options page always runs.
+- **Requests**: `GET` of the three URLs in `lists.js` (the ones `tools/build_rules.py` uses), https
+  only, `credentials: 'omit'`, `cache: 'no-cache'`, 60 s timeout (`AbortController`), 15 MB cap
+  (read as a stream). No other requests, nothing sent, no telemetry, no remote config.
+- **Checks (all or nothing)**: all three must download (HTTP 200), have a `! Version:` or
+  `! Last modified:` header, convert to at least 60 % of the packaged rule count of that list
+  (`build-info.json`), and not be older than the version in use; at least one must be newer (else
+  "Already up to date"). Regex rules `isRegexSupported` rejects are dropped. All three categories
+  together (plus the allowlist rule) must fit `MAX_NUMBER_OF_DYNAMIC_RULES` (Chrome 121+: 30,000
+  "safe" rules; Chrome 120: `MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES`, 5,000, so updates do not fit
+  there), `MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES` and `MAX_NUMBER_OF_REGEX_RULES`; today about
+  14,800 rules, 11 regex, none unsafe. All or nothing because the site cosmetic data merges all
+  three lists (exceptions, `generichide`), so a partial update would mix versions; any failure
+  keeps everything in use and records the error per list.
+- **Install**: rule id = category base + static id: ads 1,000,001+ (allow 1,500,001+), trackers
+  2,000,001+ (2,500,001+), cookie banners 3,000,001+ (3,500,001+); id 1 stays the allowlist.
+  `general.installLists` replaces all three categories in **one atomic `updateDynamicRules`**, then
+  stores `listRules`, `listSite`, `lists`; if Chrome refuses, nothing is stored and the previous
+  dynamic rules stay. While a category's dynamic rules are installed, its list rulesets (`ads_N`,
+  `privacy_N`, `cookies_N`) are disabled; `ads_curated`, `privacy_curated`, `cookie_strip`,
+  `client_ads` and `trackers` are never touched (cookie stripping keeps the packaged host list).
+  Order inside `syncDnr`: static rulesets of categories that stay/become static are enabled first,
+  then the dynamic update, then the rulesets of categories now dynamic are disabled, so there is no
+  gap without rules.
+- **Switched-off categories**: the converted rules are stored in `chrome.storage.local`
+  `listRules` (~3.7 MB; `unlimitedStorage` gives headroom next to the 10 MB default quota).
+  Ads / Trackers / Cookie banners (hide) off, or the master switch off, removes that category's
+  dynamic rules; switching it on re-adds them from storage, with no download and no re-conversion.
+  Chose this over caching the raw lists (~4.5 MB) because re-adding is then a plain copy and the
+  stored rules are exactly what passed the checks.
+- **Cosmetic**: the updated site-specific data (`listSite`, shape of `site.json`) replaces
+  `rules/cosmetic/site.json` for the `as-page` CSS and the static-CSS exclusions. Generic hiding
+  (`*_generic.css`, `generic.json`) is **not** updated and stays from the package; hosts whose
+  exceptions hide packaged generic selectors are kept in `genericExceptionHosts`.
+- **Extension update**: `onInstalled` with reason `update` falls back to the packaged lists
+  (`resetLists`) when a packaged list version is newer than the updated one.
+- **Metadata** `chrome.storage.local` `lists`: `{source: 'packaged'|'updated', lastCheck,
+  lastResult: {ok, message, at}, lists: {<key>: {version, fetchedAt, rules, ok, error}}}`.
+- **Messages** (only from extension pages: `sender.id` is ours, the URL is ours, and no tab or the
+  options page): `as-lists-status`, `as-lists-update-now`, `as-lists-reset` ("Use built-in lists").
+
 ### autoconsent protocol (from its `docs/api.md` and `lib/messages.ts`)
 
 | Content script sends | Background does |
@@ -70,7 +122,9 @@ The popup calls `declarativeNetRequest.getMatchedRules({tabId, minTimeStamp: pag
 (needs `declarativeNetRequestFeedback`; 20 calls per 10 min, so once per popup open, at most
 every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_N`/`ads_curated`/`client_ads` -> ads,
 `privacy_N`/`privacy_curated`/`trackers` -> trackers, `cookie_strip` -> cookies stripped, `cookies_*` -> banners;
-rule ids >= 500000 (allow rules) and the dynamic allowlist rule are ignored. Banners also add the
+rule ids >= 500000 (allow rules) are ignored. Matches of updated lists (`rulesetId: '_dynamic'`)
+are grouped by id range (1,000,001+ ads, 2,000,001+ trackers, 3,000,001+ banners; the allow halves
+of each range and the allowlist rule id 1 are ignored). Banners also add the
 page's `hidden` and `rejected` counts from `chrome.storage.session` key `page:<tabId>`. The badge
 is Chrome's own action count (`setExtensionActionOptions({displayActionCountAsBadgeText: true})`).
 `onRuleMatchedDebug` was not used: it wakes the service worker for every matched request.

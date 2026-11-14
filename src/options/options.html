@@ -107,15 +107,28 @@
 
     <section class="card">
       <h2>Filter lists</h2>
-      <p class="muted">Built into this version (no downloads at run time, no remote configuration):</p>
-      <ul class="lists" id="lists"></ul>
-      <p class="muted">Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0. Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
+      <div class="opt row">
+        <div><strong>Update filter lists automatically</strong><p class="muted">Once a week, downloads EasyList, EasyPrivacy and the EasyList Cookie List from their public addresses (easylist.to, secure.fanboy.co.nz) and converts them in the browser. Nothing else is sent or downloaded. Off: the lists in use stay until you choose "Use built-in lists".</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="autoUpdateLists" aria-label="Update filter lists automatically"><span class="track"></span></label>
+      </div>
+      <table class="lists" aria-label="Filter lists in use">
+        <thead><tr><th>List</th><th>Version</th><th>Updated</th><th>Rules</th><th>Status</th></tr></thead>
+        <tbody id="lists"></tbody>
+      </table>
+      <p class="muted" id="lists-last" aria-live="polite"></p>
+      <div class="row left">
+        <button class="primary" id="lists-update">Update now</button>
+        <button id="lists-reset">Use built-in lists</button>
+        <span class="muted" id="lists-result" aria-live="polite"></span>
+      </div>
+      <p class="muted">Updates replace the network rules and the site-specific element hiding; the generic element-hiding CSS stays as built into this version. Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0 (cookie list: CC BY 3.0). Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
     </section>
   </main>
 
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>
   <script src="../shared/blocking.js"></script>
+  <script src="../shared/lists.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -1,0 +1,232 @@
+[Adblock Plus 2.0]
+! Version: 202611100000
+! Title: EasyList (test fixture)
+! Last modified: 10 Nov 2026 00:00 UTC
+! Licence: https://easylist.to/pages/licence.html
+!
+! Synthetic fixture for the converter parity test (tests/filterlist.test.js, tests/test_rules.py).
+! Every line shape below is handled or skipped by tools/filterlist.py and src/shared/filterlist.js.
+!
+! -------- plain host filters (merged into requestDomains)
+||ads.example^
+||banner.example^
+||sub.ads.example^
+||Upper.Example^
+||cdn.adhost.example^
+||adhost.example^
+||adhost.example^
+||tp-only.example^$third-party
+||tp-only2.example^$3p
+||fp-only.example^$~third-party
+||fp-only2.example^$first-party
+||fp-neg.example^$~first-party
+||script-only.example^$script
+||script-only2.example^$script
+||img-css.example^$image,stylesheet
+||img-css2.example^$stylesheet,image
+||xhr.example^$xmlhttprequest,third-party
+||xhr2.example^$xhr,3p
+||frames.example^$subdocument
+||frames2.example^$frame
+||mixed.example^$~script,~image
+||imp.example^$important
+||imp2.example^$important,third-party
+||case.example^$match-case
+||bad_host-.example^
+||-bad.example^
+||under_score.example^
+||trailing.example.^
+||xn--bcher-kva.example^
+||münchen-ads.example^
+||*.wild.example^
+||ads.example^$domain=site.example
+||ads2.example^$domain=site.example
+||ads3.example^$domain=other.example|site.example
+! -------- url patterns
+/banner/ad-
+/ads/banner.$image,script,domain=a.com|~b.a.com|c.com
+-ad-banner.
+&ad_type=
+||ads.example.com/x^$~script,~third-party,match-case
+||track.example/pixel.gif|
+|https://ads.example/full|
+|http://*.adserver.example/
+||*/ads/x
+||**/ads/y
+***/ads/z
+/ads.js$script,domain=news.example
+/ads.js$script,domain=news.example
+/ads.js$domain=news.example,script
+/promo/*$image,font,media,websocket,ping,object,other
+/promo2/*$css,beacon
+/popup-mixed/$popup,script
+/popup-neg/$~popup
+/typeneg/$~xhr,~stylesheet
+/both/$script,~image
+/empty-opt/$script=
+/from-opt/$from=a.example|~b.a.example
+/doc-mixed/$document,script
+/ad/$domain=example.*|real.example
+/ad2/$domain=münchen.example
+/ad3/$domain=a.example|~b.a.example|c.example
+/ad4/$domain=A.Example
+/ad5/$domain= a.example | b.example
+/ad6/$domain=|a.example|
+/ad7/$domain=a.example,domain=b.example
+/ad8/$domain=~x.example,domain=y.example
+/ad9/$~match-case
+/ad10/$~important
+/ad11/$1p
+/ad12/$~3p
+||imp.example/path$important,script
+$third-party,domain=only.example
+*$image,domain=only2.example
+|$domain=only3.example
+ab$domain=only4.example
+/x^$script
+/a$b$script
+/price$5/
+/caps/$SCRIPT,Third-Party
+! -------- regex filters
+/^https?:\/\/[a-z]{8}\.com\/ad\//$script
+/ad[0-9]+\.js$/
+/^https?:\/\/cdn\.[a-z]+\.example\/[0-9]{3,6}\//
+/\.example\/ads?\//$third-party
+/(?!good)ads/
+/(?<=x)ads/
+/(https?:\/\/)104\.154\..{100,}/
+/^https?:\/\/.*\.(club|bid|biz|xyz)\/.*/
+/^https?:\/\/.*\/[a-z0-9A-Z_]{2,15}\.(php|jx|jsx)/
+/ads\1x/
+/unbalanced(/
+/rég/
+/[a-z]{1,25}ad/
+/[a-z]{25}ad/
+/a{3,}b/
+/ad.*end/
+/averyveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryveryverylongregexpattern/
+/\d+\.gif/$image
+/x\/y/$match-case
+! -------- exceptions
+@@||ads.example/ok.js$script
+@@||good.example^$document
+@@||good2.example^$document,third-party
+@@||ok.example^
+@@||ok2.example^
+@@||ok3.example^$important
+@@/allowed/path.js$important
+@@||site.example^$elemhide
+@@||news.example^$generichide
+@@||news2.example^$ghide
+@@||news3.example^$ehide
+@@||news4.example^$specifichide
+@@||News5.Example^$generichide
+@@||x.example/path$generichide
+@@||y.example^$generichide,script
+@@||z.example^$generichide,domain=a.example
+@@/regex-ok\.js/$script
+@@||doc.example/page$document
+@@||doc2.example^$document,subdocument
+! -------- skipped options
+||x.example^$popup
+||x.example^$document
+||x.example^$doc
+||x.example^$csp=script-src 'none'
+||x.example/a.js$redirect=noop.js
+||x.example/a.js$redirect-rule=noop.js
+||x.example^$removeparam=utm
+||x.example^$rewrite=abp-resource:blank-js
+||x.example^$frobnicate
+||x.example^$constructor
+||x.example^$toString
+||x.example^$__proto__
+||x.example^$generichide
+||x.example^$genericblock
+||x.example^$badfilter
+||x.example^$domain=
+||x.example^$~domain=a.example
+||x.example^$domain=~example.*
+||x.example^$domain=/regex/
+||x.example^$all
+||x.example^$header=via:1.1 google
+/a|b/x
+/réclame.js
+ad
+$third-party
+*
+||
+|*
+the ad
+tab	ad
+/ad/$domain=bad host.example
+/ad/$domain=-bad.example
+/ad/$domain=a..b.example
+! -------- cosmetic
+##.ad-banner
+##.ad-banner
+###ad-top
+##div[id^="ad-"]
+##.sponsored > .label
+##.generic-excepted
+##.generic-excepted2
+a.com##.side-ad
+a.com,b.com##.side-ad
+A.Com##.upper-host
+~c.a.com,a.com##.neg-host
+~d.example##.generic-with-neg
+a.com#@#.ad-banner
+a.com#@#.generic-excepted
+e.example#@#.generic-excepted2
+#@#.global-exception
+##.global-exception
+münchen.example##.idn-host
+example.*##.wild-host
+example.*,real.example##.wild-mixed
+~example.*##.wild-neg
+site.example#?#.x:-abp-has(.ad)
+site.example##.x:has-text(Ad)
+site.example##+js(abort-on-property-read, ads)
+site.example##^script:has-text(ad)
+site.example#$#abort-on-property-read ads
+site.example#%#//scriptlet('abort')
+site.example#$?#.x { display: none }
+site.example##.x:style(display: none)
+site.example##.a{color:red}
+site.example##.b;
+site.example##div[class="unclosed
+site.example##.c)
+site.example##.d(
+site.example##[data-x="a;b"]
+site.example##[data-x='{x}']
+site.example##.e\{
+site.example##
+site.example##   
+site.example##.f:matches-css(display: block)
+site.example##.g:upward(2)
+site.example##.h:remove()
+site.example##.i:xpath(//div)
+site.example##.UPPER:Has-Text(x)
+site.example## .spaced 
+[$domain=x.example]##.adguard-modifier
+host.example##div > [id*="ad"]
+host.example##.ad, .ad2
+host.example##.ad-ünicode
+host.example##.ad-😀
+! -------- not cosmetic (look like it but are network)
+||x.example/#ad
+/path##hash
+example.com$x##.y
+! -------- IDN edge cases (IDNA 2003 nameprep, as Python's idna codec)
+/idn1/$domain=MÜNCHEN.example
+/idn2/$domain=straße.example
+/idn3/$domain=ｆｕｌｌ.example
+/idn4/$domain=soft­hyphen.example
+/idn5/$domain=مثال.example
+/idn6/$domain=aمثال.example
+/idn7/$domain=a。idn.example
+/idn8/$domain=δοκιμή.example
+/idn9/$domain=例え.テスト
+/idn10/$domain=üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü.example
+/idn11/$domain=priv.example
+фирма.example##.idn-cosmetic
+||реклама.example^

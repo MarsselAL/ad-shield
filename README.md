@@ -17,6 +17,10 @@ JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configu
 - **Cookie banners: auto-reject** (off by default): DuckDuckGo's autoconsent clicks "reject" /
   "only necessary" on known consent pop-ups.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
+- **Weekly filter-list updates** (on by default, can be switched off): downloads the three lists
+  from their public addresses once a week, converts them in the browser and installs them as
+  dynamic rules; "Update now" and "Use built-in lists" on the options page. The generic
+  element-hiding CSS stays as built into the extension.
 
 **On Twitch** (unchanged): when a stream playlist contains an ad, the extension asks Twitch for
 the same stream with a different player type (a "backup stream") and plays that copy if it has
@@ -56,8 +60,12 @@ General blocking (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
   converts them with our own converter (`tools/filterlist.py`) into static DNR rulesets in
   `rules/` (`ads_1`, `privacy_1`, `cookies_1`, `cookie_strip`) and cosmetic data in
   `rules/cosmetic/`. It also turns our own hand-written host list `rules/curated_hosts.txt` into
-  `ads_curated` and `privacy_curated` (`--curated-only` rebuilds just those, offline). The output is committed, so the extension works offline. Lists are updated
-  only by rebuilding and shipping a new version.
+  `ads_curated` and `privacy_curated` (`--curated-only` rebuilds just those, offline). The output is committed, so the extension works offline.
+- Weekly updates: the background downloads the same three lists, converts them with a
+  JavaScript port of the converter (`src/shared/filterlist.js`, checked against the Python output
+  by a golden-file test) and installs them as dynamic rules in place of `ads_N` / `privacy_N` /
+  `cookies_N` (all three or none; sanity checks on versions and rule counts). The site-specific
+  hiding data is replaced too; the generic hiding CSS is not.
 - Generic element hiding is a CSS file registered as a content script: no JavaScript runs for it.
   Site-specific hiding: a tiny page script (top frame only) says hello, and the background
   injects that site's CSS with `chrome.scripting.insertCSS`. No MutationObserver, no polling.
@@ -133,10 +141,13 @@ requests itself); on Twitch tabs the Twitch count replaces it once a video ad wa
 ## Privacy
 
 - No proxies, no telemetry, no analytics, no remote configuration.
-- The background service worker makes no network requests; it only reads files from the
-  extension package.
-- The filter lists are downloaded only when you run `tools/build_rules.py` (and autoconsent only
-  with `tools/vendor_autoconsent.py`), never by the extension.
+- The only network requests the extension makes are plain downloads of the three filter lists
+  (`https://easylist.to/easylist/easylist.txt`, `https://easylist.to/easylist/easyprivacy.txt`,
+  `https://secure.fanboy.co.nz/fanboy-cookiemonster.txt`), once a week while "Update filter
+  lists automatically" is on, or when you press "Update now". No cookies or other data are
+  sent with them. Switch the option off to make no requests at all.
+- autoconsent is downloaded only when you run `tools/vendor_autoconsent.py`, never by the
+  extension.
 - Settings and statistics stay in your browser (`chrome.storage`).
 
 ## Settings and on/off switch
@@ -153,6 +164,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
+| Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
 | Block client-side ad requests | on | DNR ruleset `client_ads`: `edge.ads.twitch.tv` and Amazon's `apstag.js`, only for requests from twitch.tv pages. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |

@@ -15,7 +15,7 @@ function flush() {
 var BASE = 'chrome-extension://test-id/';
 var manifest = JSON.parse(readFile('manifest.json'));
 var calls = { rulesets: [], dynamic: [], registered: [], unregistered: [], css: [], exec: [], toTabs: [], actionOptions: [] };
-var local = {}, session = {}, registered = [];
+var local = {}, session = {}, registered = [], dynamicRules = [], failDynamic = false;
 var storageListeners = [], messageListeners = [];
 
 function area(store, name) {
@@ -48,7 +48,13 @@ globalThis.chrome = {
   storage: { local: area(local, 'local'), session: area(session, 'session'), onChanged: { addListener: function (fn) { storageListeners.push(fn); } } },
   declarativeNetRequest: {
     updateEnabledRulesets: function (o) { calls.rulesets.push(o); return Promise.resolve(); },
-    updateDynamicRules: function (o) { calls.dynamic.push(o); return Promise.resolve(); },
+    updateDynamicRules: function (o) {
+      calls.dynamic.push(o);
+      if (failDynamic && o.addRules.some(function (r) { return r.id > 1; })) return Promise.reject(new Error('quota'));
+      dynamicRules = dynamicRules.filter(function (r) { return o.removeRuleIds.indexOf(r.id) === -1; }).concat(o.addRules);
+      return Promise.resolve();
+    },
+    getDynamicRules: function () { return Promise.resolve(dynamicRules.slice()); },
     setExtensionActionOptions: function (o) { calls.actionOptions.push(o); return Promise.resolve(); }
   },
   scripting: {
@@ -75,7 +81,7 @@ globalThis.fetch = function (url) {
   return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(readFile(path))); } });
 };
 
-loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js',
+loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js', 'src/shared/lists.js',
   'src/background/autoconsent-shim.js', 'vendor/autoconsent/autoconsent.cjs.js', 'src/background/general.js');
 var B = __TAS__.blocking;
 var SITE = JSON.parse(readFile('rules/cosmetic/site.json'));
@@ -217,6 +223,85 @@ test('messages from other extensions or without a tab are ignored', function () 
     return send({ type: 'as-page', host: 'www.1news.co.nz' }, { tab: undefined });
   }).then(function () {
     assert.equal(calls.css.length, before);
+  });
+});
+
+
+// ------------------------------------------------------------------ updated lists (dynamic rules)
+function dynRule(id) { return { id: id, priority: 1, action: { type: 'block' }, condition: { requestDomains: ['d' + id + '.example'] } }; }
+function dynIds(f) { return dynamicRules.filter(function (r) { return B.dynamicFeature(r.id) === f; }).map(function (r) { return r.id; }); }
+function lastPlan() { return calls.rulesets[calls.rulesets.length - 1]; }
+var STORED = { ads: [dynRule(1000001), dynRule(1500001)], trackers: [dynRule(2000001)], hideCookieBanners: [dynRule(3000001)] };
+var META = { source: 'updated', lastCheck: 1, lists: {} };
+
+test('installLists: dynamic rules in one call, list rulesets off, curated / cookie_strip stay on, then stored', function () {
+  return chrome.storage.local.set({ settings: __TAS__.settings.defaults(), blocking: B.defaults() }).then(flush).then(function () {
+    var before = calls.dynamic.length;
+    return __TAS__.general.installLists({ rules: STORED, site: Object.assign({}, SITE, { ads: { 'fresh.example': ['.fresh-ad'] } }), meta: META }).then(function (res) {
+      assert.ok(res.ok);
+      var adding = calls.dynamic.slice(before).filter(function (c) { return c.addRules.length > 1; });
+      assert.equal(adding.length, 1, 'one atomic updateDynamicRules');
+      assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+      assert.deepEqual(dynIds('trackers'), [2000001]);
+      var p = lastPlan();
+      assert.deepEqual(p.disableRulesetIds.slice().sort(), ['ads_1', 'cookies_1', 'privacy_1']);
+      assert.deepEqual(p.enableRulesetIds.slice().sort(), ['ads_curated', 'cookie_strip', 'privacy_curated']);
+      assert.deepEqual(local.listRules, STORED);
+      assert.deepEqual(local.lists, META);
+    });
+  });
+});
+
+test('page hello uses the updated site data from storage', function () {
+  return send({ type: 'as-page', host: 'www.fresh.example', t: 5 }, { tab: { id: 11, url: 'https://www.fresh.example/' } }).then(function () {
+    assert.includes(calls.css[calls.css.length - 1].css, '.fresh-ad{display:none!important}');
+  });
+});
+
+test('Trackers off removes only the tracker dynamic rules (and privacy_N stays off); on again re-adds them', function () {
+  return setBlocking({ trackers: false }).then(function () {
+    assert.deepEqual(dynIds('trackers'), []);
+    assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+    assert.ok(lastPlan().disableRulesetIds.indexOf('privacy_1') !== -1);
+    return setBlocking({ trackers: true });
+  }).then(function () {
+    assert.deepEqual(dynIds('trackers'), [2000001]);
+    assert.ok(lastPlan().disableRulesetIds.indexOf('privacy_1') !== -1, 'privacy_1 stays off: dynamic rules active');
+  });
+});
+
+test('master switch off removes every dynamic list rule; on restores them from storage', function () {
+  return chrome.storage.local.set({ settings: Object.assign(__TAS__.settings.defaults(), { enabled: false }) }).then(flush).then(function () {
+    assert.equal(dynamicRules.length, 0);
+    return chrome.storage.local.set({ settings: __TAS__.settings.defaults() }).then(flush);
+  }).then(function () {
+    assert.equal(dynamicRules.length, 4);
+  });
+});
+
+test('Chrome refuses new rules: previous dynamic rules and storage kept, installLists rejects', function () {
+  failDynamic = true;
+  var other = { ads: [dynRule(1000009)], trackers: [], hideCookieBanners: [] };
+  return __TAS__.general.installLists({ rules: other, site: SITE, meta: { source: 'updated', x: 1 } }).then(function () {
+    throw new Error('should reject');
+  }, function (e) {
+    failDynamic = false;
+    assert.includes(e.message, 'quota');
+    assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+    assert.deepEqual(local.listRules, STORED);
+    assert.deepEqual(lastPlan().disableRulesetIds.slice().sort(), ['ads_1', 'cookies_1', 'privacy_1']);
+  });
+});
+
+test('resetLists: static list rulesets enabled before the dynamic rules go, storage cleared', function () {
+  var n = calls.rulesets.length;
+  return __TAS__.general.resetLists({ source: 'packaged', lists: {} }).then(function () {
+    assert.equal(dynamicRules.filter(function (r) { return r.id !== 1; }).length, 0);
+    var first = calls.rulesets[n];
+    assert.deepEqual(first.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated']);
+    assert.equal(local.listRules, undefined);
+    assert.equal(local.listSite, undefined);
+    assert.equal(local.lists.source, 'packaged');
   });
 });
 

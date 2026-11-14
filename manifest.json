@@ -9,7 +9,9 @@
     "storage",
     "scripting",
     "declarativeNetRequest",
-    "declarativeNetRequestFeedback"
+    "declarativeNetRequestFeedback",
+    "alarms",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>",

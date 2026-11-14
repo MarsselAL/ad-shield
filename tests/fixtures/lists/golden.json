@@ -1,0 +1,1639 @@
+{
+ "generic": {
+  "ads": [
+   ".ad-banner",
+   "#ad-top",
+   "div[id^=\"ad-\"]",
+   ".sponsored > .label",
+   ".generic-excepted",
+   ".generic-excepted2",
+   ".generic-with-neg"
+  ],
+  "cookies": [
+   ".cookie-bar",
+   "#cookie-notice",
+   ".consent-banner",
+   "div[aria-label=\"cookie consent\"]"
+  ]
+ },
+ "lists": {
+  "easylist": {
+   "cosmeticConverted": 34,
+   "duplicates": 2,
+   "filters": 215,
+   "licence": "https://easylist.to/pages/licence.html",
+   "mergedDomains": 32,
+   "networkConverted": 103,
+   "rules": [
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "firstParty",
+      "requestDomains": [
+       "fp-only.example",
+       "fp-only2.example"
+      ]
+     },
+     "id": 1,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "xhr.example",
+       "xhr2.example"
+      ],
+      "resourceTypes": [
+       "xmlhttprequest"
+      ]
+     },
+     "id": 2,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "fp-neg.example",
+       "tp-only.example",
+       "tp-only2.example"
+      ]
+     },
+     "id": 3,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedResourceTypes": [
+       "image",
+       "script"
+      ],
+      "requestDomains": [
+       "mixed.example"
+      ]
+     },
+     "id": 4,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "other.example",
+       "site.example"
+      ],
+      "requestDomains": [
+       "ads3.example"
+      ]
+     },
+     "id": 5,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "site.example"
+      ],
+      "requestDomains": [
+       "ads.example",
+       "ads2.example"
+      ]
+     },
+     "id": 6,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "img-css.example",
+       "img-css2.example"
+      ],
+      "resourceTypes": [
+       "image",
+       "stylesheet"
+      ]
+     },
+     "id": 7,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "script-only.example",
+       "script-only2.example"
+      ],
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 8,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "frames.example",
+       "frames2.example"
+      ],
+      "resourceTypes": [
+       "sub_frame"
+      ]
+     },
+     "id": 9,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "adhost.example",
+       "ads.example",
+       "banner.example",
+       "trailing.example",
+       "under_score.example",
+       "upper.example",
+       "xn--bcher-kva.example"
+      ]
+     },
+     "id": 10,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "imp2.example"
+      ]
+     },
+     "id": 11,
+     "priority": 3
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "imp.example"
+      ]
+     },
+     "id": 12,
+     "priority": 3
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "isUrlFilterCaseSensitive": true,
+      "urlFilter": "||case.example^"
+     },
+     "id": 13,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "||bad_host-.example^"
+     },
+     "id": 14,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "||-bad.example^"
+     },
+     "id": 15,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "*.wild.example^"
+     },
+     "id": 16,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "/banner/ad-"
+     },
+     "id": 17,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedInitiatorDomains": [
+       "b.a.com"
+      ],
+      "initiatorDomains": [
+       "a.com",
+       "c.com"
+      ],
+      "resourceTypes": [
+       "image",
+       "script"
+      ],
+      "urlFilter": "/ads/banner."
+     },
+     "id": 18,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "-ad-banner."
+     },
+     "id": 19,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "&ad_type="
+     },
+     "id": 20,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "firstParty",
+      "excludedResourceTypes": [
+       "script"
+      ],
+      "isUrlFilterCaseSensitive": true,
+      "urlFilter": "||ads.example.com/x^"
+     },
+     "id": 21,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "||track.example/pixel.gif|"
+     },
+     "id": 22,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "|https://ads.example/full|"
+     },
+     "id": 23,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "|http://*.adserver.example/"
+     },
+     "id": 24,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "*/ads/x"
+     },
+     "id": 25,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "*/ads/y"
+     },
+     "id": 26,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "*/ads/z"
+     },
+     "id": 27,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "news.example"
+      ],
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/ads.js"
+     },
+     "id": 28,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "font",
+       "image",
+       "media",
+       "object",
+       "other",
+       "ping",
+       "websocket"
+      ],
+      "urlFilter": "/promo/*"
+     },
+     "id": 29,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "ping",
+       "stylesheet"
+      ],
+      "urlFilter": "/promo2/*"
+     },
+     "id": 30,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "popup-mixed",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 31,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "popup-neg"
+     },
+     "id": 32,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedResourceTypes": [
+       "stylesheet",
+       "xmlhttprequest"
+      ],
+      "regexFilter": "typeneg"
+     },
+     "id": 33,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "both",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 34,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "empty-opt",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 35,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedInitiatorDomains": [
+       "b.a.example"
+      ],
+      "initiatorDomains": [
+       "a.example"
+      ],
+      "regexFilter": "from-opt"
+     },
+     "id": 36,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "doc-mixed",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 37,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "real.example"
+      ],
+      "regexFilter": "ad"
+     },
+     "id": 38,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "xn--mnchen-3ya.example"
+      ],
+      "regexFilter": "ad2"
+     },
+     "id": 39,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedInitiatorDomains": [
+       "b.a.example"
+      ],
+      "initiatorDomains": [
+       "a.example",
+       "c.example"
+      ],
+      "regexFilter": "ad3"
+     },
+     "id": 40,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "a.example"
+      ],
+      "regexFilter": "ad4"
+     },
+     "id": 41,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "a.example",
+       "b.example"
+      ],
+      "regexFilter": "ad5"
+     },
+     "id": 42,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "a.example"
+      ],
+      "regexFilter": "ad6"
+     },
+     "id": 43,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "b.example"
+      ],
+      "regexFilter": "ad7"
+     },
+     "id": 44,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedInitiatorDomains": [
+       "x.example"
+      ],
+      "initiatorDomains": [
+       "y.example"
+      ],
+      "regexFilter": "ad8"
+     },
+     "id": 45,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "firstParty",
+      "regexFilter": "ad11"
+     },
+     "id": 46,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "firstParty",
+      "regexFilter": "ad12"
+     },
+     "id": 47,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "||imp.example/path"
+     },
+     "id": 48,
+     "priority": 3
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "initiatorDomains": [
+       "only.example"
+      ]
+     },
+     "id": 49,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "only2.example"
+      ],
+      "resourceTypes": [
+       "image"
+      ]
+     },
+     "id": 50,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "only3.example"
+      ]
+     },
+     "id": 51,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "only4.example"
+      ],
+      "urlFilter": "ab"
+     },
+     "id": 52,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/a$b"
+     },
+     "id": 53,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "price$5"
+     },
+     "id": 54,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "regexFilter": "caps",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 55,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "^https?:\\/\\/[a-z]{8}\\.com\\/ad\\/",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 56,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "ad[0-9]+\\.js$"
+     },
+     "id": 57,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "^https?:\\/\\/cdn\\.[a-z]+\\.example\\/[0-9]{3,6}\\/"
+     },
+     "id": 58,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "regexFilter": "\\.example\\/ads?\\/"
+     },
+     "id": 59,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "a{3,}b"
+     },
+     "id": 60,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "ad.*end"
+     },
+     "id": 61,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "\\d+\\.gif",
+      "resourceTypes": [
+       "image"
+      ]
+     },
+     "id": 62,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "isUrlFilterCaseSensitive": true,
+      "regexFilter": "x\\/y"
+     },
+     "id": 63,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "||x.example/#ad"
+     },
+     "id": 64,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "/path##hash"
+     },
+     "id": 65,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "example.com$x##.y"
+     },
+     "id": 66,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "xn--mnchen-3ya.example"
+      ],
+      "regexFilter": "idn1"
+     },
+     "id": 67,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "strasse.example"
+      ],
+      "regexFilter": "idn2"
+     },
+     "id": 68,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "full.example"
+      ],
+      "regexFilter": "idn3"
+     },
+     "id": 69,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "softhyphen.example"
+      ],
+      "regexFilter": "idn4"
+     },
+     "id": 70,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "xn--mgbh0fb.example"
+      ],
+      "regexFilter": "idn5"
+     },
+     "id": 71,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "a.idn.example"
+      ],
+      "regexFilter": "idn7"
+     },
+     "id": 72,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "xn--jxalpdlp.example"
+      ],
+      "regexFilter": "idn8"
+     },
+     "id": 73,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "xn--r8jz45g.xn--zckzah"
+      ],
+      "regexFilter": "idn9"
+     },
+     "id": 74,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "requestDomains": [
+       "ok.example",
+       "ok2.example"
+      ]
+     },
+     "id": 500001,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "requestDomains": [
+       "ok3.example"
+      ]
+     },
+     "id": 500002,
+     "priority": 4
+    },
+    {
+     "action": {
+      "type": "allowAllRequests"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "good2.example"
+      ],
+      "resourceTypes": [
+       "main_frame",
+       "sub_frame"
+      ]
+     },
+     "id": 500003,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allowAllRequests"
+     },
+     "condition": {
+      "requestDomains": [
+       "doc2.example",
+       "good.example"
+      ],
+      "resourceTypes": [
+       "main_frame",
+       "sub_frame"
+      ]
+     },
+     "id": 500004,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "||ads.example/ok.js"
+     },
+     "id": 500005,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "urlFilter": "/allowed/path.js"
+     },
+     "id": 500006,
+     "priority": 4
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "regexFilter": "regex-ok\\.js",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 500007,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allowAllRequests"
+     },
+     "condition": {
+      "resourceTypes": [
+       "main_frame",
+       "sub_frame"
+      ],
+      "urlFilter": "||doc.example/page"
+     },
+     "id": 500008,
+     "priority": 2
+    }
+   ],
+   "skipped": {
+    "bad-domain": 7,
+    "bad-option": 1,
+    "bad-selector": 5,
+    "cosmetic-exception-pattern": 3,
+    "cosmetic-option-on-block": 1,
+    "document-block": 2,
+    "empty-selector": 2,
+    "non-ascii": 3,
+    "option:all": 1,
+    "option:badfilter": 1,
+    "option:csp": 1,
+    "option:genericblock": 1,
+    "option:header": 1,
+    "option:redirect": 1,
+    "option:redirect-rule": 1,
+    "option:removeparam": 1,
+    "option:rewrite": 1,
+    "option:unknown": 7,
+    "pipe-in-pattern": 1,
+    "popup": 1,
+    "procedural-or-scriptlet": 13,
+    "regex": 11,
+    "regex-cap": 0,
+    "too-broad": 6,
+    "whitespace": 2,
+    "wildcard-domain": 4
+   },
+   "skippedTotal": 78,
+   "version": "202611100000"
+  },
+  "easylist-cookie": {
+   "cosmeticConverted": 15,
+   "duplicates": 0,
+   "filters": 28,
+   "licence": "http://creativecommons.org/licenses/by/3.0/",
+   "mergedDomains": 4,
+   "networkConverted": 8,
+   "rules": [
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "cmp2.example"
+      ],
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 1,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "consent.example"
+      ]
+     },
+     "id": 2,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "cmp.example"
+      ],
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 3,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/cookie-notice.js"
+     },
+     "id": 4,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "/cookieconsent.min.js"
+     },
+     "id": 5,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "excludedInitiatorDomains": [
+       "gdpr.example"
+      ],
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/gdpr/banner.js"
+     },
+     "id": 6,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "allowAllRequests"
+     },
+     "condition": {
+      "requestDomains": [
+       "needed.example"
+      ],
+      "resourceTypes": [
+       "main_frame",
+       "sub_frame"
+      ]
+     },
+     "id": 500001,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "||cmp.example/required.js"
+     },
+     "id": 500002,
+     "priority": 2
+    }
+   ],
+   "skipped": {
+    "option:redirect": 1,
+    "procedural-or-scriptlet": 3,
+    "regex-cap": 0,
+    "wildcard-domain": 1
+   },
+   "skippedTotal": 5,
+   "version": "2026-11-10 08:30 UTC"
+  },
+  "easyprivacy": {
+   "cosmeticConverted": 1,
+   "duplicates": 1,
+   "filters": 36,
+   "licence": "https://easylist.to/pages/licence.html",
+   "mergedDomains": 12,
+   "networkConverted": 25,
+   "rules": [
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "excludedInitiatorDomains": [
+       "stats-home.example"
+      ],
+      "requestDomains": [
+       "stats.example"
+      ]
+     },
+     "id": 1,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "beacon2.example"
+      ],
+      "resourceTypes": [
+       "ping"
+      ]
+     },
+     "id": 2,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "pixel.example",
+       "trk.example",
+       "trk2.example"
+      ]
+     },
+     "id": 3,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "pixel3.example"
+      ],
+      "resourceTypes": [
+       "image"
+      ]
+     },
+     "id": 4,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "beacon.example"
+      ],
+      "resourceTypes": [
+       "ping"
+      ]
+     },
+     "id": 5,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "ws.example"
+      ],
+      "resourceTypes": [
+       "websocket"
+      ]
+     },
+     "id": 6,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "requestDomains": [
+       "pixel2.example"
+      ]
+     },
+     "id": 7,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "count.example"
+      ]
+     },
+     "id": 8,
+     "priority": 3
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "||ana.example/collect?"
+     },
+     "id": 9,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/analytics.js"
+     },
+     "id": 10,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "/analytics.js"
+     },
+     "id": 11,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "initiatorDomains": [
+       "news.example"
+      ],
+      "resourceTypes": [
+       "image"
+      ],
+      "urlFilter": "/track/*"
+     },
+     "id": 12,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "/pixel.gif?"
+     },
+     "id": 13,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "urlFilter": "-tracking-pixel-"
+     },
+     "id": 14,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "isUrlFilterCaseSensitive": true,
+      "urlFilter": "||x.example/t.gif"
+     },
+     "id": 15,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "regexFilter": "^https?:\\/\\/[a-z0-9]{10}\\.cloudfront\\.net\\/t\\/",
+      "resourceTypes": [
+       "script"
+      ]
+     },
+     "id": 16,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "block"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "urlFilter": "||bad..host^"
+     },
+     "id": 17,
+     "priority": 1
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "domainType": "thirdParty",
+      "requestDomains": [
+       "trk3.example"
+      ]
+     },
+     "id": 500001,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allowAllRequests"
+     },
+     "condition": {
+      "requestDomains": [
+       "allow-doc.example"
+      ],
+      "resourceTypes": [
+       "main_frame",
+       "sub_frame"
+      ]
+     },
+     "id": 500002,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "resourceTypes": [
+       "script"
+      ],
+      "urlFilter": "||trk.example/ok.js"
+     },
+     "id": 500003,
+     "priority": 2
+    },
+    {
+     "action": {
+      "type": "allow"
+     },
+     "condition": {
+      "urlFilter": "||trk.example/consent.js"
+     },
+     "id": 500004,
+     "priority": 2
+    }
+   ],
+   "skipped": {
+    "cosmetic-in-network-list": 3,
+    "non-ascii": 1,
+    "option:csp": 1,
+    "option:method": 1,
+    "option:redirect": 1,
+    "option:removeparam": 1,
+    "regex": 1,
+    "regex-cap": 0,
+    "too-broad": 1
+   },
+   "skippedTotal": 10,
+   "version": "202611100010"
+  }
+ },
+ "site": {
+  "ads": {
+   "a.com": [
+    ".side-ad",
+    ".upper-host",
+    ".neg-host"
+   ],
+   "b.com": [
+    ".side-ad"
+   ],
+   "host.example": [
+    "div > [id*=\"ad\"]",
+    ".ad, .ad2",
+    ".ad-ünicode",
+    ".ad-😀"
+   ],
+   "real.example": [
+    ".wild-mixed"
+   ],
+   "site.example": [
+    "[data-x=\"a;b\"]",
+    "[data-x='{x}']",
+    ".e\\{",
+    ".spaced"
+   ],
+   "xn--80apmps.example": [
+    ".idn-cosmetic"
+   ],
+   "xn--mnchen-3ya.example": [
+    ".idn-host"
+   ]
+  },
+  "cookies": {
+   "a.com": [
+    ".side-ad"
+   ],
+   "b.com": [
+    ".consent",
+    ".consent-popup"
+   ],
+   "c.com": [
+    ".consent-popup"
+   ],
+   "xn--mller-kva.example": [
+    ".cookie-idn"
+   ]
+  },
+  "elemhide": [
+   "cookie-page.example",
+   "news3.example",
+   "site.example"
+  ],
+  "exceptions": {
+   "a.com": [
+    ".ad-banner",
+    ".cookie-bar",
+    ".generic-excepted"
+   ],
+   "c.a.com": [
+    ".neg-host"
+   ],
+   "d.example": [
+    ".generic-with-neg"
+   ],
+   "e.example": [
+    ".generic-excepted2"
+   ],
+   "f.example": [
+    ".consent-banner"
+   ]
+  },
+  "genericExceptionHosts": [
+   "a.com",
+   "d.example",
+   "e.example",
+   "f.example"
+  ],
+  "generichide": [
+   "cookie-gh.example",
+   "news.example",
+   "news2.example",
+   "news4.example",
+   "news5.example"
+  ],
+  "v": 1
+ }
+}

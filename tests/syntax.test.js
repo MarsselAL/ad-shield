@@ -9,7 +9,8 @@ var FILES = [
   'src/worker/worker-main.js', 'src/page/recovery.js', 'src/page/page.js',
   'src/content/cosmetic.js', 'src/content/bridge.js',
   'src/background/service-worker.js', 'src/popup/popup.js', 'src/options/options.js',
-  'src/shared/blocking.js', 'src/background/general.js', 'src/background/autoconsent-shim.js', 'src/content/general.js'
+  'src/shared/blocking.js', 'src/background/general.js', 'src/background/autoconsent-shim.js', 'src/content/general.js',
+  'src/shared/filterlist.js', 'src/shared/lists.js', 'src/background/updater.js'
 ];
 
 FILES.forEach(function (f) {

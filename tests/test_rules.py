@@ -19,6 +19,7 @@ import dnr_schema  # noqa: E402
 import filterlist as F  # noqa: E402
 import build_rules  # noqa: E402
 import curated as C  # noqa: E402
+import make_golden  # noqa: E402
 
 
 def rules_of(lines):
@@ -536,6 +537,36 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(site["cookies"], {"b.com": [".consent"]})
         self.assertEqual(site["genericExceptionHosts"], ["a.com"])
         self.assertEqual(site["generichide"], ["good.example"])
+
+
+class Golden(unittest.TestCase):
+    """tests/fixtures/lists/golden.json is what the Python converter makes of the fixture lists;
+    tests/filterlist.test.js checks the JavaScript port against the same file."""
+
+    def test_golden_equals_current_python_output(self):
+        with open(make_golden.GOLDEN, encoding="utf-8") as fh:
+            committed = json.load(fh)
+        current = json.loads(make_golden.dumps(make_golden.golden()))
+        self.assertEqual(committed, current, "run python3 -I tools/make_golden.py (and update src/shared/filterlist.js)")
+
+    def test_golden_covers_the_filter_shapes(self):
+        g = make_golden.golden()
+        ads = g["lists"]["easylist"]
+        for reason in ("popup", "document-block", "option:csp", "option:unknown", "regex", "wildcard-domain",
+                       "bad-domain", "non-ascii", "too-broad", "whitespace", "pipe-in-pattern",
+                       "procedural-or-scriptlet", "bad-selector", "cosmetic-exception-pattern"):
+            self.assertIn(reason, ads["skipped"], reason)
+        rules = ads["rules"]
+        conds = [r["condition"] for r in rules]
+        self.assertTrue(any("regexFilter" in c for c in conds))
+        self.assertTrue(any("requestDomains" in c for c in conds))
+        self.assertTrue(any(r["action"]["type"] == "allowAllRequests" for r in rules))
+        self.assertTrue(any(r["priority"] == F.PRIORITY_IMPORTANT for r in rules))
+        self.assertTrue(any(r["priority"] == F.PRIORITY_ALLOW_IMPORTANT for r in rules))
+        self.assertTrue(any(d.startswith("xn--") for c in conds for d in c.get("initiatorDomains", [])))
+        self.assertTrue(g["site"]["generichide"] and g["site"]["elemhide"] and g["site"]["genericExceptionHosts"])
+        for key, lst in g["lists"].items():
+            self.assertEqual(dnr_schema.ruleset_errors(lst["rules"], key), [], key)
 
 
 class Result(unittest.TextTestResult):
