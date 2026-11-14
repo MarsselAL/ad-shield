@@ -419,6 +419,7 @@
       autoRejectCookies: false,  // DuckDuckGo autoconsent: click "reject" on consent pop-ups
       autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
       scriptlets: true,          // our page scripts (rules/scriptlets.json, e.g. YouTube); needs ads on
+      stripTrackingParams: true, // remove utm_*, fbclid, gclid ... from page / frame URLs (rules/removeparam.json)
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -519,8 +520,11 @@
    * ads_N / privacy_N come from EasyList / EasyPrivacy, ads_curated / privacy_curated from our
    * own rules/curated_hosts.txt; both follow the same switch and count in the same bucket.
    * youtube is our hand-written rules/youtube.json (two YouTube ad paths), part of Ads.
+   * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
+   * frames to the same URL without tracking parameters; never counted in the popup.
    */
   function rulesetFeature(id) {
+    if (id === 'removeparam') return 'stripTrackingParams';
     if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
     if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
@@ -583,7 +587,8 @@
     }];
   }
 
-  /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo. */
+  /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
+   * Tracking-parameter redirects (removeparam) are not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {

@@ -98,6 +98,9 @@
       "version": "202611140010"
     }
   },
+  "removeparam": {
+    "params": 46
+  },
   "rulesets": {
     "ads_1": {
       "allow": 516,
@@ -134,7 +137,14 @@
       "block": 1,
       "regex": 0,
       "rules": 1
+    },
+    "removeparam": {
+      "allow": 0,
+      "block": 0,
+      "params": 46,
+      "regex": 0,
+      "rules": 92
     }
   },
-  "totalStaticRules": 14820
+  "totalStaticRules": 14912
 }

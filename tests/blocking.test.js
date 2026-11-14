@@ -4,7 +4,7 @@ var B = __TAS__.blocking;
 
 test('defaults: everything on except auto-reject; normalize never throws', function () {
   var d = B.defaults();
-  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, scriptlets: true, allowlist: [] });
+  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, scriptlets: true, stripTrackingParams: true, allowlist: [] });
   assert.equal(B.normalize({ scriptlets: false }).scriptlets, false);
   assert.equal(B.normalize({ scriptlets: 1 }).scriptlets, true);
   assert.equal(B.normalize({ autoUpdateLists: false }).autoUpdateLists, false);
@@ -83,6 +83,21 @@ test('rulesetPlan: curated rulesets follow the Ads / Trackers switches and the m
   assert.deepEqual(yt.disableRulesetIds, ['ads_1', 'youtube']);
   assert.deepEqual(B.rulesetPlan(['ads_1', 'youtube'], true, B.defaults(), { ads: true }).enableRulesetIds, ['youtube']);
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 1 } }]).ads, 1);
+});
+
+test('removeparam ruleset: own switch, never counted', function () {
+  assert.equal(B.rulesetFeature('removeparam'), 'stripTrackingParams');
+  assert.notOk(B.isListRuleset('removeparam'), 'the weekly update never replaces it');
+  var ids = ['ads_1', 'removeparam'];
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults()).enableRulesetIds, ['ads_1', 'removeparam']);
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults(), { ads: true }).enableRulesetIds, ['removeparam'], 'dynamic lists do not disable it');
+  var off = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { stripTrackingParams: false }));
+  assert.deepEqual(off.enableRulesetIds, ['ads_1']);
+  assert.deepEqual(off.disableRulesetIds, ['removeparam']);
+  assert.deepEqual(B.rulesetPlan(ids, false, B.defaults()).enableRulesetIds, []);
+  assert.equal(B.normalize({ stripTrackingParams: false }).stripTrackingParams, false);
+  assert.equal(B.normalize({ stripTrackingParams: 'x' }).stripTrackingParams, true);
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'removeparam', ruleId: 3 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
 });
 
 test('countMatches: curated rulesets count as ads / trackers', function () {

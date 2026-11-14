@@ -20,6 +20,7 @@ import filterlist as F  # noqa: E402
 import build_rules  # noqa: E402
 import curated as C  # noqa: E402
 import make_golden  # noqa: E402
+import removeparam as R  # noqa: E402
 
 
 def rules_of(lines):
@@ -324,12 +325,14 @@ class CuratedBuild(unittest.TestCase):
             fh.write("SENTINEL")
         with open(os.path.join(root, "rules", "curated_hosts.txt"), "w", encoding="utf-8") as fh:
             fh.write(CuratedHosts.BASIC)
+        with open(os.path.join(root, "rules", "removeparams.txt"), "w", encoding="utf-8") as fh:
+            fh.write("utm_source\nfbclid  # comment\n")
         build_rules.curated_only(root)
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
                          ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
-                          "youtube"], "the hand-written youtube ruleset is always kept, last")
+                          "youtube", "removeparam"], "youtube is always kept; removeparam rebuilt and last")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])
@@ -340,7 +343,10 @@ class CuratedBuild(unittest.TestCase):
         self.assertEqual(info["lists"], old_info["lists"])
         self.assertEqual(info["curated"]["trackers"], {"hosts": 2, "exclusions": 1})
         self.assertEqual(info["rulesets"]["ads_curated"]["rules"], 1)
-        self.assertEqual(info["totalStaticRules"], 10)
+        self.assertEqual(info["totalStaticRules"], 14)
+        self.assertEqual(info["removeparam"], {"params": 2})
+        with open(os.path.join(root, "rules", "removeparam.json"), encoding="utf-8") as fh:
+            self.assertEqual(len(json.load(fh)), 4)
         for rid in ("ads_curated", "privacy_curated"):
             with open(os.path.join(root, "rules", rid + ".json"), encoding="utf-8") as fh:
                 self.assertEqual(dnr_schema.curated_ruleset_errors(json.load(fh)), [])
@@ -359,6 +365,61 @@ class CuratedBuild(unittest.TestCase):
         with self.assertRaises(C.CuratedError):
             build_rules.curated_only(root)
         self.assertFalse(os.path.exists(os.path.join(root, "rules", "ads_curated.json")))
+
+
+class Removeparam(unittest.TestCase):
+    def test_parse_comments_and_errors(self):
+        self.assertEqual(R.parse("# c\nutm_source\n\nfbclid   # Meta\n_hsenc\n"), ["utm_source", "fbclid", "_hsenc"])
+        for bad, why in (("utm_source\nutm_source", "duplicate"), ("utm-source", "not a parameter"), ("ref", "generic"),
+                         ("SI", "generic"), ("mkt_tok", "generic"), ("a b", "not a parameter"), ("# only comments\n", "empty")):
+            with self.assertRaises(R.RemoveparamError) as cm:
+                R.parse(bad)
+            self.assertIn(why, str(cm.exception), bad)
+
+    def test_rule_shape(self):
+        rules = R.build_rules(["utm_source", "fbclid"])
+        self.assertEqual(dnr_schema.removeparam_ruleset_errors(rules), [])
+        self.assertEqual([r["condition"]["urlFilter"] for r in rules], ["?utm_source=", "&utm_source=", "?fbclid=", "&fbclid="])
+        self.assertEqual([r["id"] for r in rules], [1, 2, 3, 4])
+        for r in rules:
+            self.assertEqual(r["action"]["redirect"]["transform"]["queryTransform"]["removeParams"], ["utm_source", "fbclid"])
+            self.assertEqual(r["condition"]["resourceTypes"], ["main_frame", "sub_frame"])
+            self.assertTrue(r["condition"]["isUrlFilterCaseSensitive"])
+            self.assertIn("googleadservices.com", r["condition"]["excludedRequestDomains"])
+            self.assertTrue(F.PRIORITY_ALLOW_IMPORTANT < r["priority"] < 100, "above list rules, below the allowlist")
+
+    def test_shape_check_rejects_deviations(self):
+        good = R.build_rules(["utm_source"])[0]
+        changes = [
+            lambda r: r.update(priority=100),
+            lambda r: r.update(priority=2),
+            lambda r: r["action"]["redirect"]["transform"]["queryTransform"].update(addOrReplaceParams=[{"key": "a", "value": "b"}]),
+            lambda r: r["action"].update(redirect={"url": "https://x.com/"}),
+            lambda r: r["condition"].update(urlFilter="utm_source="),
+            lambda r: r["condition"].update(urlFilter="?other="),
+            lambda r: r["condition"].update(resourceTypes=["script"]),
+            lambda r: r["condition"].pop("isUrlFilterCaseSensitive"),
+            lambda r: r["condition"].update(requestDomains=["a.com"]),
+            lambda r: r["action"]["redirect"]["transform"]["queryTransform"].update(removeParams=["utm_source", "utm_source"]),
+        ]
+        for i, change in enumerate(changes):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.removeparam_ruleset_errors([r]), i)
+        other = R.build_rules(["utm_source", "x"])[1]
+        other["id"] = 2
+        self.assertTrue(dnr_schema.removeparam_ruleset_errors([good, other]), "rules must agree on the names")
+        self.assertTrue(dnr_schema.removeparam_ruleset_errors([]))
+
+    def test_committed_ruleset_matches_the_list(self):
+        names = R.read(ROOT)
+        with open(os.path.join(ROOT, R.OUTPUT), encoding="utf-8") as fh:
+            committed = json.load(fh)
+        self.assertEqual(committed, R.build_rules(names), "run python3 -I tools/build_rules.py --curated-only")
+        for n in ("utm_source", "utm_viz_id", "fbclid", "gclid", "msclkid", "srsltid", "_hsenc", "igshid"):
+            self.assertIn(n, names)
+        for n in ("si", "ref", "mkt_tok", "source", "id"):
+            self.assertNotIn(n, names)
 
 
 class Schema(unittest.TestCase):
@@ -409,7 +470,7 @@ class Schema(unittest.TestCase):
         self.assertTrue(dnr_schema.curated_ruleset_errors([]))
 
     def test_general_ruleset_ids_and_order(self):
-        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated"):
+        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam"):
             self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
             self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)

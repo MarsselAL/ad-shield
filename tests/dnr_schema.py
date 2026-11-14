@@ -17,8 +17,12 @@ ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allo
 # Rulesets built from our own rules/curated_hosts.txt (tools/curated.py), in manifest order.
 CURATED_RULESETS = ("ads_curated", "privacy_curated")
 # Every general (non-Twitch) ruleset id the build may produce.
-GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$")
-_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4}
+GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$|^removeparam$")
+_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+# The only ruleset allowed to contain redirect rules (tools/removeparam.py).
+REMOVEPARAM_RULESET = "removeparam"
+ALLOWLIST_PRIORITY = 100  # src/shared/blocking.js: the per-site allowlist rule must outrank everything
+PARAM_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 RESOURCE_TYPES = {
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object",
@@ -82,8 +86,13 @@ def rule_errors(rule):
                     e.append("remove takes no value")
                 if op in ("set", "append") and not isinstance(h.get("value"), str):
                     e.append("%s needs a value" % op)
-    if at == "redirect" and not isinstance(action.get("redirect"), dict):
-        e.append("redirect action needs redirect")
+    if at == "redirect":
+        red = action.get("redirect")
+        if set(action) != {"type", "redirect"} or not isinstance(red, dict):
+            e.append("redirect action needs redirect")
+        elif len(set(red) & {"url", "extensionPath", "transform", "regexSubstitution"}) != 1 or set(red) - {
+                "url", "extensionPath", "transform", "regexSubstitution"}:
+            e.append("redirect needs exactly one of url, extensionPath, transform, regexSubstitution")
 
     extra = set(cond) - CONDITION_KEYS
     if extra:
@@ -168,7 +177,7 @@ def regex_count(rules):
 
 def general_order_key(rid):
     """Required manifest order of the general rulesets: ads_1.., ads_curated, privacy_1..,
-    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written)."""
+    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written), removeparam."""
     if rid in _ORDER_GROUPS:
         return (_ORDER_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -223,4 +232,53 @@ def curated_ruleset_errors(rules, name="curated ruleset"):
                     e.append("%s: excluded host %r is not under a blocked host" % (name, x))
     if "main_frame" in repr(r):
         e.append("%s: must not mention main_frame" % name)
+    return e
+
+
+def removeparam_ruleset_errors(rules, name="removeparam ruleset"):
+    """Problems with rules/removeparam.json (tools/removeparam.py): every rule is a redirect whose
+    only effect is queryTransform.removeParams (no added or replaced parameters), all rules remove
+    the same names, each fires only on "?name=" / "&name=" of a name it removes (case-sensitive),
+    main_frame / sub_frame only, priority above the list rules (1..4) and below the allowlist."""
+    if not isinstance(rules, list) or not rules:
+        return ["%s must be a non-empty list" % name]
+    e = ruleset_errors(rules, name)
+    first = None
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("id")
+        where = "%s rule %s" % (name, rid)
+        if set(r) != {"id", "priority", "action", "condition"}:
+            e.append("%s: rule keys must be id, priority, action, condition" % where)
+        if not isinstance(r.get("priority"), int) or not 4 < r["priority"] < ALLOWLIST_PRIORITY:
+            e.append("%s: priority must be above 4 and below %d" % (where, ALLOWLIST_PRIORITY))
+        a = r.get("action") or {}
+        qt = (((a.get("redirect") or {}).get("transform") or {}).get("queryTransform") or {})
+        if a.get("type") != "redirect" or set(a.get("redirect") or {}) != {"transform"} \
+                or set(a["redirect"]["transform"]) != {"queryTransform"} or set(qt) != {"removeParams"}:
+            e.append("%s: action must be redirect.transform.queryTransform.removeParams only" % where)
+            continue
+        params = qt["removeParams"]
+        if not isinstance(params, list) or not params or len(set(params)) != len(params) \
+                or not all(isinstance(p, str) and PARAM_RE.match(p) for p in params):
+            e.append("%s: removeParams must be unique parameter names" % where)
+            continue
+        if first is None:
+            first = params
+        elif params != first:
+            e.append("%s: every rule must remove the same names" % where)
+        c = r.get("condition") or {}
+        if set(c) - {"urlFilter", "isUrlFilterCaseSensitive", "resourceTypes", "excludedRequestDomains"}:
+            e.append("%s: unexpected condition keys %s" % (where, sorted(set(c) - {
+                "urlFilter", "isUrlFilterCaseSensitive", "resourceTypes", "excludedRequestDomains"})))
+        if c.get("isUrlFilterCaseSensitive") is not True:
+            e.append("%s: isUrlFilterCaseSensitive must be true (removeParams is case-sensitive)" % where)
+        rt = c.get("resourceTypes")
+        if not rt or any(t not in ("main_frame", "sub_frame") for t in rt):
+            e.append("%s: resourceTypes must be within main_frame / sub_frame" % where)
+        uf = c.get("urlFilter")
+        m = re.match(r"^[?&]([A-Za-z0-9_]+)=$", uf) if isinstance(uf, str) else None
+        if not m or m.group(1) not in params:
+            e.append("%s: urlFilter must be ?name= or &name= of a removed name (else the redirect could loop)" % where)
     return e

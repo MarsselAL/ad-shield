@@ -1,0 +1,71 @@
+# Ad Shield tracking-parameter list (our own list, MIT licence, like the rest of the code).
+# Turned into rules/removeparam.json by tools/removeparam.py (run python3 -I tools/build_rules.py
+# --curated-only to rebuild it offline).
+#
+# One query-parameter name per line, spelled out exactly: Chrome's queryTransform.removeParams
+# matches whole names only (no wildcards, no prefixes) and is case-sensitive. "#" starts a
+# comment. Every name here must be tracking-only: removing it must never change what the page
+# shows. Generic names (ref, source, id, cid, campaign, si, ...) are refused by the build because
+# sites use them for real content (tools/removeparam.py NEVER).
+# Removed only from top-level pages and frames (main_frame, sub_frame), only when one of these
+# names is in the query string.
+
+# --- UTM campaign tags (Google Analytics and every analytics tool that reads them) ---
+utm_source
+utm_medium
+utm_campaign
+utm_term
+utm_content
+utm_id
+utm_name
+utm_cid
+utm_reader
+utm_referrer
+utm_social
+utm_brand
+utm_place
+utm_pubreferrer
+utm_swu
+utm_viz_id
+
+# --- Ad click identifiers that ad networks append to landing-page links ---
+fbclid        # Meta (Facebook / Instagram) ads and outbound links
+gclid         # Google Ads auto-tagging
+gclsrc        # Google Ads / Search Ads 360 click source
+dclid         # Google Campaign Manager / Display & Video 360
+gbraid        # Google Ads, iOS app-to-web measurement
+wbraid        # Google Ads, iOS web-to-app measurement
+msclkid       # Microsoft Advertising (Bing ads)
+twclid        # X (Twitter) ads
+ttclid        # TikTok ads
+li_fat_id     # LinkedIn ads (first-party attribution id)
+yclid         # Yandex Direct
+ysclid        # Yandex search click id
+rb_clickid    # ad / affiliate click id found in common tracking-parameter lists
+srsltid       # Google Merchant Center auto-tagging on Google Shopping results
+wickedid      # Wicked Reports ad attribution
+
+# --- E-mail and marketing-automation tracking ---
+mc_cid        # Mailchimp campaign id
+mc_eid        # Mailchimp subscriber (e-mail) id
+_hsenc        # HubSpot e-mail tracking
+_hsmi         # HubSpot e-mail tracking
+__hssc        # HubSpot analytics cookie copied into the link
+__hstc        # HubSpot analytics cookie copied into the link
+__hsfp        # HubSpot browser fingerprint copied into the link
+hsCtaTracking # HubSpot call-to-action click tracking
+vero_id       # Vero e-mail subscriber id
+oly_anon_id   # Omeda (Olytics) anonymous visitor id
+oly_enc_id    # Omeda (Olytics) encrypted visitor id
+
+# --- Share-link and analytics tags ---
+igshid        # Instagram share-link tracking
+igsh          # Instagram share-link tracking (newer name)
+s_cid         # Adobe Analytics campaign id
+_openstat     # Yandex Openstat campaign tag
+
+# Deliberately NOT listed:
+#   mkt_tok   Marketo: also identifies the reader on unsubscribe / preference pages; removing it
+#             can break unsubscribing from e-mail.
+#   si, ref, ref_src, ref_url, source, cid, spm, campaign: too generic; sites use them for real
+#             content or navigation.

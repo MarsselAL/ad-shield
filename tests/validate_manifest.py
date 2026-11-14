@@ -13,7 +13,8 @@ Checks:
     of the generated general rulesets passes tests/dnr_schema.py; the curated rulesets
     (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
     third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
-  - the hand-written youtube ruleset blocks only its two paths; the scriptlet bundle exists and the
+  - the hand-written youtube ruleset blocks only its two paths; redirect rules exist only in
+    removeparam.json and have its exact shape (tests/dnr_schema.removeparam_ruleset_errors); the scriptlet bundle exists and the
     scriptlet sources contain no URLs
 """
 import ast
@@ -236,7 +237,7 @@ def main():
     check(len(ids) == len(set(ids)), "duplicate ruleset ids")
     general = [i for i in ids if i not in TWITCH_RULESETS]
     check(all(GENERATED_RULESET_RE.match(i) for i in general), "unexpected ruleset ids %s" % general)
-    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip") + dnr_schema.CURATED_RULESETS:
+    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip", dnr_schema.REMOVEPARAM_RULESET) + dnr_schema.CURATED_RULESETS:
         check(want in general, "ruleset %s missing" % want)
     if all(GENERATED_RULESET_RE.match(i) for i in general):
         check(general == sorted(general, key=dnr_schema.general_order_key),
@@ -265,6 +266,13 @@ def main():
                   "rules/youtube.json must block exactly /pagead/ and /youtubei/v1/player/ad_break, got %s" % flt)
             check(all(x.get("action") == {"type": "block"} and set(x.get("condition", {})) == {"urlFilter"} for x in rules if isinstance(x, dict)),
                   "rules/youtube.json: plain block rules only (no resourceTypes: main_frame is never blocked)")
+        if r.get("id") == dnr_schema.REMOVEPARAM_RULESET:
+            check(r.get("enabled") is True, "removeparam ruleset must be enabled by default")
+            for msg in dnr_schema.removeparam_ruleset_errors(rules, r.get("path")):
+                errors.append(msg)
+        else:
+            check(not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
+                  "%s: redirect rules are only allowed in rules/removeparam.json" % r.get("path"))
         if r.get("id") in dnr_schema.CURATED_RULESETS:
             check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
             for msg in dnr_schema.curated_ruleset_errors(rules, r.get("path")):

@@ -433,7 +433,8 @@ SW_STATE_JS = """
 """
 
 GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-css-youtube", "as-scriptlets", "as-site"]
-DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated", "youtube"]
+DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated", "removeparam",
+                    "youtube"]
 
 # chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
 # which static rulesets a request would match. No request is sent.
@@ -619,6 +620,25 @@ def picker_check(cdp, sw_sid, sessions, check, report):
           and vis.get("inline") == "" and vis.get("pickerGone") and again == "none", report["picker"])
 
 
+def removeparam_live(cdp, sessions, check, report):
+    """A real navigation (example.com, IANA's reserved example domain): the tracking parameters are
+    gone from the address the page ends up at, the other parameter is kept."""
+    start = "https://example.com/?utm_source=x&fbclid=y&keep=1"
+    _, sid = open_page(cdp, start)
+    sessions.add(sid)
+    final = None
+    for _ in range(40):
+        time.sleep(0.25)
+        try:
+            final = cdp.evaluate(sid, "document.readyState === 'complete' ? location.href : null")
+        except CDPError:
+            final = None
+        if final and final != "about:blank":
+            break
+    report["removeparam_live"] = {"start": start, "final": final}
+    check("removeparam live: %s ends at https://example.com/?keep=1" % start, final == "https://example.com/?keep=1", final)
+
+
 def run_smoke(args):
     checks = []
 
@@ -689,6 +709,17 @@ def run_smoke(args):
             check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
                   dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
                   and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
+            rp = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
+                "page_utm": {"url": "https://example.com/?utm_source=x&keep=1", "type": "main_frame"},
+                "frame_fbclid": {"url": "https://example.org/embed?a=1&fbclid=z", "type": "sub_frame", "initiator": "https://example.com"},
+                "lookalike": {"url": "https://example.com/?keep=1&xutm_source=1&UTM_SOURCE=2", "type": "main_frame"},
+                "script_utm": {"url": "https://example.com/a.js?utm_source=x", "type": "script", "initiator": "https://example.com"},
+                "ad_click": {"url": "https://www.googleadservices.com/pagead/aclk?gclid=1", "type": "main_frame"}}))
+            report["dnr_test_removeparam"] = rp
+            check("testMatchOutcome: removeparam fires on pages/frames with a listed parameter only (not look-alikes, scripts, ad-click redirectors)",
+                  rp and rp.get("page_utm") == ["removeparam"] and rp.get("frame_fbclid") == ["removeparam"]
+                  and "removeparam" not in rp.get("lookalike", ["removeparam"]) and "removeparam" not in rp.get("script_utm", ["removeparam"])
+                  and "removeparam" not in rp.get("ad_click", ["removeparam"]), rp)
             check("testMatchOutcome: curated hosts blocked third-party only; [never] host (excluded) not blocked by them",
                   dnr and "ads_curated" in dnr.get("curated_ad", []) and "privacy_curated" in dnr.get("curated_tracker", [])
                   and "ads_curated" not in dnr.get("curated_first_party", [])
@@ -734,7 +765,7 @@ def run_smoke(args):
                                      " lists: document.querySelectorAll('#lists tr').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 7 and opts["lists"] == 3
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 8 and opts["lists"] == 3
               and opts["order"].split("\n")[0] == "site", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
@@ -774,12 +805,14 @@ def run_smoke(args):
                 time.sleep(0.25)
                 dnr2 = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
                     "cookie": cases["cookie"],
-                    "allowlisted": {"url": "https://allowed.example/", "type": "main_frame"}}))
+                    "allowlisted": {"url": "https://allowed.example/", "type": "main_frame"},
+                    "allowlisted_utm": {"url": "https://allowed.example/?utm_source=x", "type": "main_frame"}}))
                 if dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted"):
                     break
             report["dnr_test_trackers_off"] = dnr2
-            check("trackers off: tracker request only gets its cookies stripped; allowlist rule matches",
-                  dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted") == ["_dynamic"], dnr2)
+            check("trackers off: tracker request only gets its cookies stripped; allowlist rule matches (and outranks removeparam)",
+                  dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted") == ["_dynamic"]
+                  and dnr2.get("allowlisted_utm") == ["_dynamic"], dnr2)
             cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"trackers": True, "allowlist": [], "autoRejectCookies": True}))
             ac = None
             for _ in range(20):
@@ -800,6 +833,7 @@ def run_smoke(args):
                 stop_page2()
             cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"autoRejectCookies": False}))
             picker_check(cdp, sw_sid, sessions, check, report)
+            removeparam_live(cdp, sessions, check, report)
 
         # Page-script self-test on about:blank (no network): the MAIN-world files load, the
         # generated worker source runs in a real Chrome worker with fetch hooked, and after

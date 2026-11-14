@@ -45,6 +45,10 @@
         <label class="switch"><input type="checkbox" data-bkey="stripCookies" aria-label="Strip tracking cookies"><span class="track"></span></label>
       </div>
       <div class="opt row">
+        <div><strong>Remove tracking parameters from links (utm_*, fbclid, gclid…)</strong><p class="muted">When a page or frame opens with known tracking parameters in its address, loads it without them (46 names, our own list in rules/removeparams.txt). Other parameters are kept.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="stripTrackingParams" aria-label="Remove tracking parameters from links"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
         <div><strong>Cookie banners: hide</strong><p class="muted">Hides cookie notices and blocks consent-banner scripts (EasyList Cookie List).</p></div>
         <label class="switch"><input type="checkbox" data-bkey="hideCookieBanners" aria-label="Hide cookie banners"><span class="track"></span></label>
       </div>

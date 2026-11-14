@@ -24,6 +24,12 @@ JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configu
   hiding CSS and two network rules (`/pagead/`, `/youtubei/v1/player/ad_break`). They run on
   youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
+- **Tracking parameters** (option "Remove tracking parameters from links (utm_*, fbclid,
+  gclid…)", on by default): when a page or frame opens with one of 46 known tracking parameters
+  in its address (UTM tags, ad click ids such as `fbclid`, `gclid`, `msclkid`, e-mail tracking
+  such as `mc_eid`, `_hsenc`), Chrome loads it without them; other parameters are kept. Our own
+  list (`rules/removeparams.txt`, MIT), one static redirect ruleset (`removeparam`). Generic
+  names (`ref`, `si`, `source`, ...) and Marketo's `mkt_tok` (unsubscribe links) are left alone.
 - **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
   "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
   kept under **My filters** on the options page (`example.com##.selector`, editable there) and
@@ -113,9 +119,10 @@ Twitch:
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `youtube` | 2 | 0 | `rules/youtube.json` (ours, hand-written) |
+| `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,826 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,918 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.
@@ -124,7 +131,8 @@ Skipped (counted in `rules/build-info.json`): EasyList 4,156 of 77,788 filters (
 `$popup` and 572 `$document` page blocks DNR cannot express, 295 procedural/scriptlet, 240
 wildcard-TLD domains); EasyPrivacy 75 of 56,631 (mostly `$redirect`); cookie list 79 of
 25,382. Not converted at all: procedural cosmetic filters (`#?#`, `:has-text()`), scriptlets
-(`##+js`, `#$#`), `$redirect`, `$csp`, `$removeparam`, `$rewrite`, `$popup`, complex regex.
+(`##+js`, `#$#`), `$redirect`, `$csp`, `$removeparam` (our own parameter list is used instead),
+`$rewrite`, `$popup`, complex regex.
 
 To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests/run.sh`.
 
@@ -179,6 +187,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Fix YouTube ads and anti-adblock walls (page scripts) | on | MAIN-world scriptlets on YouTube hosts (`build/scriptlets-main.js`); only while Ads is on. |
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
+| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 46 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Not counted in the popup. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
@@ -201,7 +210,8 @@ Reload the tab after switching.
 - **Lists are as fresh as the last build.** There is no automatic list update (by design: no
   remote configuration). Rebuild and reload to update.
 - DNR cannot express everything uBlock Origin can: pop-up blocking, list scriptlets, procedural
-  cosmetic filters, `$redirect`/`$csp`/`$removeparam`, and most regex filters are skipped, so
+  cosmetic filters, `$redirect`/`$csp`, the lists' `$removeparam` (we strip our own fixed list of
+  46 tracking parameters instead), and most regex filters are skipped, so
   some sites (especially anti-adblock walls) work less well than with uBlock Origin. Our own
   scriptlets cover YouTube only; YouTube changes its data shapes often, so they can stop
   working until a new release. Ads that YouTube stitches into the video stream (server-side,

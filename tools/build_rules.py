@@ -7,14 +7,18 @@ List (converter: tools/filterlist.py, our own code).
     python3 -I tools/build_rules.py --lists DIR     use DIR/easylist.txt, DIR/easyprivacy.txt,
                                                     DIR/easylist-cookie.txt (offline rebuild)
     python3 -I tools/build_rules.py --curated-only  only rebuild the curated rulesets from
-                                                    rules/curated_hosts.txt (no download; the
-                                                    other generated files stay as they are)
+                                                    rules/curated_hosts.txt and the tracking-
+                                                    parameter ruleset from rules/removeparams.txt
+                                                    (no download; the other generated files stay
+                                                    as they are)
 
 Writes (all committed, so the extension works offline and needs no remote config):
     rules/ads_N.json, rules/privacy_N.json, rules/cookies_N.json   DNR block/allow rulesets
     rules/cookie_strip.json                                        DNR modifyHeaders ruleset
     rules/ads_curated.json, rules/privacy_curated.json             DNR block rulesets from our own
                                                                    rules/curated_hosts.txt (tools/curated.py)
+    rules/removeparam.json                                         DNR redirect ruleset (queryTransform) from
+                                                                   our own rules/removeparams.txt (tools/removeparam.py)
     rules/cosmetic/ads_generic.css, rules/cosmetic/cookies_generic.css
     rules/cosmetic/generic.json, rules/cosmetic/site.json          cosmetic data for the worker
     rules/build-info.json                                          list versions, counts, skips
@@ -34,6 +38,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import curated as C  # noqa: E402
 import filterlist as F  # noqa: E402
+import removeparam as R  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LISTS = [
@@ -51,14 +56,14 @@ TWITCH_RULESETS = [
 # (full or --curated-only) but never deleted by the cleanup.
 GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
 CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
-_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4}
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
 # Hand-written rulesets (not generated, never deleted): kept in the manifest by every build.
 HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"}]
 
 
 def ruleset_order_key(rid):
     """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip,
-    youtube."""
+    youtube, removeparam."""
     if rid in _GROUPS:
         return (_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -87,12 +92,17 @@ def write_curated(root=ROOT):
         write_rules(os.path.join(root, "rules", rid + ".json"), rs)
         entries.append({"id": rid, "enabled": True, "path": "rules/%s.json" % rid})
         metas[rid] = {"rules": len(rs), "block": len(rs), "allow": 0, "regex": 0}
+    # Our tracking-parameter ruleset is rebuilt alongside (also offline).
+    rp_entry, rp_meta, _ = R.write(root)
+    entries.append(rp_entry)
+    metas[R.RULESET_ID] = rp_meta
     return entries, metas, cinfo
 
 
 def add_curated_info(info, metas, cinfo):
     info.setdefault("rulesets", {}).update(metas)
     info["curated"] = cinfo
+    info["removeparam"] = {"params": metas.get(R.RULESET_ID, {}).get("params", 0)}
     info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
     return info
 
@@ -107,11 +117,13 @@ def curated_only(root=ROOT):
     """Regenerate only the curated rulesets, the manifest rule_resources and the `curated` entry of
     rules/build-info.json. Nothing is downloaded; the other generated files are not touched."""
     read_curated(root)  # fail before writing anything
+    R.read(root)
     with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
         current = json.load(fh).get("declarative_net_request", {}).get("rule_resources", [])
     twitch = {r["id"] for r in TWITCH_RULESETS}
     hand = {r["id"] for r in HAND_RULESETS}
-    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS and r.get("id") not in hand]
+    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS and r.get("id") not in hand
+            and r.get("id") != R.RULESET_ID]
     entries, metas, cinfo = write_curated(root)
     info_path = os.path.join(root, "rules", "build-info.json")
     info = {}
@@ -313,6 +325,7 @@ def print_summary(info, changed):
     c = info["curated"]
     print("curated          ads %d hosts (%d excluded), trackers %d hosts (%d excluded), never %d" % (
         c["ads"]["hosts"], c["ads"]["exclusions"], c["trackers"]["hosts"], c["trackers"]["exclusions"], c["never"]))
+    print("removeparam      %d parameter names" % info["removeparam"]["params"])
     print("total static rules", info["totalStaticRules"], "| manifest", "updated" if changed else "unchanged")
 
 
@@ -321,7 +334,7 @@ def main(argv):
     if len(argv) == 2 and argv[1] == "--curated-only":
         try:
             info, changed = curated_only()
-        except C.CuratedError as e:
+        except (C.CuratedError, R.RemoveparamError) as e:
             print("ERROR", e)
             return 1
         print_summary(info, changed)
@@ -333,7 +346,8 @@ def main(argv):
         return 2
     try:
         read_curated()  # fail before downloading or deleting anything
-    except C.CuratedError as e:
+        R.read()
+    except (C.CuratedError, R.RemoveparamError) as e:
         print("ERROR", e)
         return 1
     if lists_dir is None:

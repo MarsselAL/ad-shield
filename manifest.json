@@ -115,6 +115,11 @@
         "id": "youtube",
         "enabled": true,
         "path": "rules/youtube.json"
+      },
+      {
+        "id": "removeparam",
+        "enabled": true,
+        "path": "rules/removeparam.json"
       }
     ]
   }
