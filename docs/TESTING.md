@@ -83,3 +83,40 @@ Report: `results/20261111-215639-live-hasanabi/report.md`.
   with no ad segments at probe time; autoplay is capped at 360p.
 - Every playlist carried a `twitch-trigger` DATERANGE. It was in the ad-marker list — a false positive
   that would have flagged every stream as an ad. FIXED in src/config.js; regression test added (114 tests pass).
+
+## superadblocktest.com (2026-11-14)
+
+Run with `python3 -I tools/site_test.py` (headless Chrome, fresh profile, clicks "Start test",
+reads every probe row). Full results: `results/<timestamp>-superadblocktest/` (gitignored).
+The test is 482 `fetch(no-cors)` probes of `https://<host>/`, `/favicon.ico` and `/robots.txt`
+from superadblocktest.com; a host counts as blocked when all three fail. The page itself
+renders no cosmetic or script-path checks in the scored run.
+
+| Run | Protection score | Raw | Blocked |
+|---|---|---|---|
+| No extension | 11-13% | 13-14% | 62-66/482 (DNS failures, dead hosts) |
+| Ad Shield before (`main`, 425293e) | 71% | 71% | 341/482 |
+| Ad Shield after (curated host rulesets) | **92%** | **95%** | 458/482 |
+
+Module scores after: Ad networks 159/160, Trackers 151/162, Video ads 13/17, Affiliate 23/23,
+OEM telemetry 69/69, Consent / A/B 14/22, Risky hosts 14/14.
+
+Why the 141 misses before: 127 hosts are in EasyList/EasyPrivacy, but only on certain paths or
+resource types (e.g. `||kochava.com/track/`, `||quantserve.com^$script`), and the test
+fetches `/`. The other 14 are not in any of the lists. None was caused by a filter our converter
+skips (`$popup`, scriptlets and so on). Fix: `rules/curated_hosts.txt` (our own data) blocks
+whole hosts, third-party only, never main_frame (`ads_curated` / `privacy_curated`).
+
+Remaining 24 reachable, all deliberate:
+
+| Host(s) | Reason |
+|---|---|
+| redirector.googlevideo.com, dai.google.com, ssl.p.jwpcdn.com | video delivery / player; blocking breaks playback |
+| bea4.v.fwmrm.net, 2975c.v.fwmrm.net | blocked by our rule, but EasyList's own exception `@@\|\|v.fwmrm.net/?$xmlhttprequest` (priority 2) wins for this path, on purpose |
+| connect.facebook.net, graph.facebook.com, graph.instagram.com, i.instagram.com | Facebook login, embedded posts and feeds |
+| widgets.pinterest.com | share / save buttons |
+| cdn.cookielaw.org, consent.trustarc.com, cdn.privacy-mgmt.com | consent platforms; some sites wait for them. Banners are hidden / auto-rejected instead |
+| cdn./api.optimizely.com, cdn./st.dynamicyield.com, clientstream.launchdarkly.com | anti-flicker snippets hide the page; feature flags gate app features |
+| widget.intercom.io, js.driftt.com, cdn./api.onesignal.com, static./a.klaviyo.com | support chat, web push, signup forms |
+
+The site test is not run by `tests/run.sh` (it needs the network).

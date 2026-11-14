@@ -92,7 +92,7 @@ function setBlocking(patch) { return chrome.storage.local.set({ blocking: Object
 test('startup: enables the generated rulesets, registers CSS and page script, badge count on', function () {
   return flush().then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
-    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'cookie_strip', 'cookies_1', 'privacy_1']);
+    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated']);
     assert.deepEqual(last.disableRulesetIds, []);
     assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-site']);
     var css = registered.filter(function (s) { return s.id === 'as-css-ads'; })[0];
@@ -205,7 +205,7 @@ test('master switch off: all general rulesets disabled, scripts unregistered, al
   return chrome.storage.local.set({ settings: Object.assign(__TAS__.settings.defaults(), { enabled: false }) }).then(flush).then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
     assert.deepEqual(last.enableRulesetIds, []);
-    assert.equal(last.disableRulesetIds.length, 4);
+    assert.equal(last.disableRulesetIds.length, 6);
     assert.deepEqual(ids(), []);
     assert.deepEqual(calls.dynamic[calls.dynamic.length - 1].addRules, []);
   });

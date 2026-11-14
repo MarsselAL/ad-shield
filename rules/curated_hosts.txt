@@ -1,0 +1,176 @@
+# Ad Shield curated host list. This project's own data (MIT), written by hand on 2026-11-14.
+#
+# Why: EasyList / EasyPrivacy often block these hosts only on certain paths or resource types
+# (for example `||kochava.com/track/` or `||quantserve.com^$script`), so other requests to the
+# same host still go out. Every host below exists only to serve ads, ad measurement,
+# tracking or vendor telemetry, so we block the whole host.
+#
+# How it is applied (tools/build_rules.py -> rules/ads_curated.json, rules/privacy_curated.json):
+#   - one DNR block rule per section, `requestDomains` = the hosts (subdomains included),
+#   - `domainType: thirdParty` only: a site's own use of its own hosts is never blocked
+#     (tiktok.com -> ads.tiktok.com still works), and top-level navigation (main_frame) is never
+#     blocked, so following a link to one of these hosts still works,
+#   - priority 1, like the EasyList block rules, so EasyList `@@` exceptions (priority 2) and
+#     the user's allowlist (priority 100) still win.
+#
+# Syntax: `[ads]` / `[trackers]` start a section (toggled by the Ads / Trackers switches).
+# One host per line. `-host` excludes that host (and its subdomains) from the section's rule.
+# `[never]` lists hosts we deliberately do NOT block because sites need them to work; the
+# build fails if one of them would be blocked by a curated rule.
+
+[ads]
+# Amazon
+analyticsengine.s3.amazonaws.com
+advertising-api-eu.amazon.com
+mads-eu.amazon.com
+# Google ad serving (AdSense for Search, DoubleClick hosts not fully covered by EasyList)
+afs.googlesyndication.com
+m.doubleclick.net
+mediavisor.doubleclick.net
+# Microsoft / Bing ads
+ads.microsoft.com
+c.bing.com
+# Mobile ad networks
+applovin.com
+unityads.unity3d.com
+vungle.com
+liftoff.io
+live.chartboost.com
+supersonicads.com
+ironsource.mobi
+fyber.com
+pangleglobal.com
+# Yahoo ad and data collection hosts
+udc.yahoo.com
+udcm.yahoo.com
+advertising.yahoo.com
+analytics.query.yahoo.com
+partnerads.ysm.yahoo.com
+log.fc.yahoo.com
+gemini.yahoo.com
+adtech.yahooinc.com
+# Yandex advertising
+adfstat.yandex.ru
+advertising.yandex.ru
+# YouTube ad hosts (not video delivery)
+ads.youtube.com
+# Social network ad platforms
+an.facebook.com
+ads-api.twitter.com
+ads-api.x.com
+ads.x.com
+ads.tiktok.com
+ads-api.tiktok.com
+ads-sg.tiktok.com
+ads.pinterest.com
+ads.vk.com
+# Device-vendor ad platforms
+advertising.apple.com
+iadsdk.apple.com
+api-adservices.apple.com
+ads.huawei.com
+adsfs.oppomobile.com
+ads.oppomobile.com
+bdapi-ads.realmemobile.com
+bdapi-in-ads.realmemobile.com
+ads.roku.com
+# Header bidding exchange
+indexexchange.com
+# Video ad serving. Note: EasyList's `@@||v.fwmrm.net/?$xmlhttprequest` exception still wins for
+# that path, on purpose (sites' players need it).
+smartclip.com
+v.fwmrm.net
+# Adult ad network, browser cryptominer
+juicyads.com
+mineralt.io
+# Affiliate link rewriting
+skimresources.com
+viglink.com
+
+[trackers]
+# Analytics
+tagmanager.google.com
+quantserve.com
+quantcast.com
+-cmp.quantcast.com
+app.posthog.com
+eu.posthog.com
+i.posthog.com
+rudderstack.com
+snowplowanalytics.com
+click.googleanalytics.com
+metrika.yandex.ru
+appmetrica.yandex.ru
+s.youtube.com
+# Attribution / fingerprinting
+fingerprintjs.com
+appsflyer.com
+adjust.com
+bnc.lt
+kochava.com
+# Social network tracking
+tr.facebook.com
+sc-analytics.appspot.com
+snap.licdn.com
+analytics.twitter.com
+analytics.x.com
+d.reddit.com
+business-api.tiktok.com
+log.byteoversea.com
+mon.byteoversea.com
+mon.tiktokv.com
+pixel.quora.com
+qevents.quora.com
+# Device-vendor telemetry
+xp.apple.com
+books-analytics-events.apple.com
+notes-analytics-events.apple.com
+iot-logser.realme.com
+iot-eu-logser.realme.com
+grs.hicloud.com
+data.mistat.xiaomi.com
+data.mistat.india.xiaomi.com
+data.mistat.rus.xiaomi.com
+tracking.rus.miui.com
+ngfts.lge.com
+browser.events.data.msn.com
+device-metrics-us.amazon.com
+device-metrics-us-2.amazon.com
+# Email / marketing tracking
+click.mailchimp.com
+sdk.iad-01.braze.com
+# Video player analytics
+g.jwpsrv.com
+prd.jwpltx.com
+
+[never]
+# Video delivery and players: blocking breaks playback.
+redirector.googlevideo.com
+dai.google.com
+ssl.p.jwpcdn.com
+# Facebook / Instagram SDK and APIs: "Log in with Facebook", embedded posts and feeds.
+connect.facebook.net
+graph.facebook.com
+graph.instagram.com
+i.instagram.com
+# Social buttons and embeds.
+widgets.pinterest.com
+# Consent management platforms: some sites wait for them. Banners are handled by cosmetic
+# hiding and auto-reject instead.
+cdn.cookielaw.org
+consent.trustarc.com
+cdn.privacy-mgmt.com
+cmp.quantcast.com
+# A/B testing and feature flags: anti-flicker snippets hide the page, apps gate features.
+cdn.optimizely.com
+api.optimizely.com
+cdn.dynamicyield.com
+st.dynamicyield.com
+clientstream.launchdarkly.com
+# Support chat, web push, signup forms.
+widget.intercom.io
+js.driftt.com
+cdn.onesignal.com
+api.onesignal.com
+static.klaviyo.com
+a.klaviyo.com

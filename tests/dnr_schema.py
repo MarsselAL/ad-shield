@@ -13,6 +13,12 @@ MAX_NUMBER_OF_REGEX_RULES = 1000
 MAX_NUMBER_OF_STATIC_RULESETS = 100
 MAX_NUMBER_OF_ENABLED_STATIC_RULESETS = 50
 REGEX_MAX_LENGTH = 2000  # proxy for "less than 2KB once compiled"; ours are far smaller
+ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allow rule ids above
+# Rulesets built from our own rules/curated_hosts.txt (tools/curated.py), in manifest order.
+CURATED_RULESETS = ("ads_curated", "privacy_curated")
+# Every general (non-Twitch) ruleset id the build may produce.
+GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$")
+_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3}
 
 RESOURCE_TYPES = {
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object",
@@ -158,3 +164,63 @@ def ruleset_errors(rules, name="ruleset"):
 
 def regex_count(rules):
     return sum(1 for r in rules if isinstance(r, dict) and "regexFilter" in r.get("condition", {}))
+
+
+def general_order_key(rid):
+    """Required manifest order of the general rulesets: ads_1.., ads_curated, privacy_1..,
+    privacy_curated, cookies_1.., cookie_strip."""
+    if rid in _ORDER_GROUPS:
+        return (_ORDER_GROUPS[rid], 0)
+    prefix, _, rest = rid.rpartition("_")
+    return (_ORDER_GROUPS.get(prefix, 9), 10 ** 9 if rest == "curated" else int(rest) if rest.isdigit() else -1)
+
+
+def _under(host, parents):
+    return any(host != p and host.endswith("." + p) for p in parents)
+
+
+def curated_ruleset_errors(rules, name="curated ruleset"):
+    """Problems with a curated ruleset: exactly one third-party block rule on requestDomains,
+    priority 1, a block-range id, optional excludedRequestDomains (each under a blocked host),
+    and no resource types, so main_frame (top-level navigation) is never blocked."""
+    if not isinstance(rules, list) or len(rules) != 1 or not isinstance(rules[0], dict):
+        return ["%s must hold exactly one rule" % name]
+    r = rules[0]
+    e = ["%s: %s" % (name, m) for m in rule_errors(r)]
+    if set(r) != {"id", "priority", "action", "condition"}:
+        e.append("%s: rule keys must be id, priority, action, condition" % name)
+    rid = r.get("id")
+    if not isinstance(rid, int) or isinstance(rid, bool) or not 1 <= rid < ALLOW_ID_BASE:
+        e.append("%s: id must be in the block range 1..%d" % (name, ALLOW_ID_BASE - 1))
+    if r.get("priority") != 1:
+        e.append("%s: priority must be 1" % name)
+    if r.get("action") != {"type": "block"}:
+        e.append("%s: action must be {type: block}" % name)
+    c = r.get("condition")
+    if not isinstance(c, dict):
+        return e + ["%s: condition must be an object" % name]
+    extra = set(c) - {"requestDomains", "domainType", "excludedRequestDomains"}
+    if extra:
+        e.append("%s: unexpected condition keys %s (no resourceTypes: main_frame must stay unblocked)" % (name, sorted(extra)))
+    if c.get("domainType") != "thirdParty":
+        e.append("%s: domainType must be thirdParty" % name)
+    hosts = c.get("requestDomains")
+    if not isinstance(hosts, list) or not hosts:
+        e.append("%s: requestDomains must be a non-empty list" % name)
+        hosts = []
+    elif hosts != sorted(hosts):
+        e.append("%s: requestDomains must be sorted" % name)
+    for h in hosts:
+        if isinstance(h, str) and "." not in h:
+            e.append("%s: single-label host %r would block a whole TLD" % (name, h))
+    if "excludedRequestDomains" in c:
+        ex = c["excludedRequestDomains"]
+        if not isinstance(ex, list) or not ex or ex != sorted(ex):
+            e.append("%s: excludedRequestDomains must be a sorted non-empty list" % name)
+        else:
+            for x in ex:
+                if not _under(x, hosts):
+                    e.append("%s: excluded host %r is not under a blocked host" % (name, x))
+    if "main_frame" in repr(r):
+        e.append("%s: must not mention main_frame" % name)
+    return e

@@ -10,7 +10,8 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 
 | File | Role |
 |---|---|
-| `tools/build_rules.py` | Downloads EasyList, EasyPrivacy and the EasyList Cookie List with `curl` (`--proto =https`) into a fresh `tempfile.mkdtemp()` folder (or `--lists DIR`), converts them, writes `rules/*.json`, `rules/cosmetic/*`, `rules/build-info.json` and the `rule_resources` list in `manifest.json`. |
+| `tools/build_rules.py` | Downloads EasyList, EasyPrivacy and the EasyList Cookie List with `curl` (`--proto =https`) into a fresh `tempfile.mkdtemp()` folder (or `--lists DIR`), converts them, writes `rules/*.json`, `rules/cosmetic/*`, `rules/build-info.json` and the `rule_resources` list in `manifest.json`. Every build also builds the two curated rulesets from `rules/curated_hosts.txt` (checked before anything is downloaded or deleted). `--curated-only` rebuilds just those: `ads_curated.json`, `privacy_curated.json`, the manifest `rule_resources` and the `curated` / ruleset entries of `build-info.json`, with no download and without touching the other generated files. The cleanup of old output removes only numbered rulesets (`ads_[0-9]*.json`, ...). Manifest order: `client_ads`, `trackers`, `ads_N`, `ads_curated`, `privacy_N`, `privacy_curated`, `cookies_N`, `cookie_strip`. |
+| `tools/curated.py` | Parser and rule generator for `rules/curated_hosts.txt` (pure functions). Sections `[ads]`, `[trackers]`, `[never]`; `#` comments; `-host` excludes a host (and its subdomains) from its section. Hosts must be lowercase ASCII/punycode with at least two labels; duplicates, unknown sections, empty sections and exclusions that exclude nothing are errors. The build fails if a `[never]` host is equal to or under a blocked host and not covered by an exclusion of that section. Each blocked section becomes one rule: id 1, priority 1, `block`, `requestDomains` (sorted), `domainType: thirdParty`, `excludedRequestDomains` when there are exclusions, no `resourceTypes` (so `main_frame` is never blocked). |
 | `tools/filterlist.py` | Our converter (pure functions). Network filters: `\|\|`, `\|`, `^`, `*` patterns pass through to `urlFilter` (same syntax in DNR); `$third-party`/`first-party` -> `domainType`; resource types and `~type` -> `resourceTypes` / `excludedResourceTypes`; `domain=` -> `initiatorDomains` / `excludedInitiatorDomains` (IDN -> punycode); `match-case`; `important` (priority 3); `@@` -> `allow` (priority 2), `@@...$document` -> `allowAllRequests`; simple RE2-safe `/regex/` (capped at 200 per list). Plain `\|\|host^` filters with identical options are merged into `requestDomains` lists of 1,000 hosts. Block rule ids start at 1, allow rule ids at 500001 (`ALLOW_ID_BASE`, mirrored in `src/shared/blocking.js`) so counts can ignore allow matches. Rulesets are split at 30,000 rules. Cosmetic: `##` / `#@#`, `$generichide` / `$elemhide` for `\|\|host^`. Everything else raises `Skip(reason)` and is counted. |
 | `tools/vendor_autoconsent.py` | Downloads the pinned `@duckduckgo/autoconsent` npm tarball (17.2.0), checks its sha512 against the registry's integrity value, copies four files unmodified into `vendor/autoconsent/` and records their sha256 in `VERSION.json` (the validator re-checks them). |
 
@@ -19,13 +20,14 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 | File | Used by |
 |---|---|
 | `ads_N.json`, `privacy_N.json`, `cookies_N.json` | static DNR rulesets, toggled by Ads / Trackers / Cookie banners (hide) |
+| `curated_hosts.txt` -> `ads_curated.json`, `privacy_curated.json` | our own hand-written host list (MIT): whole hosts that only serve ads / tracking, where EasyList / EasyPrivacy block only some paths or types. One third-party block rule per section (44 ad hosts; 45 tracker hosts, 1 exclusion; 23 `[never]` hosts checked). Toggled by Ads / Trackers and counted as ads / trackers, like `ads_N` / `privacy_N`. Priority 1, so EasyList `@@` exceptions and the allowlist still win. |
 | `cookie_strip.json` | static `modifyHeaders` ruleset: removes `cookie` (request) and `set-cookie` (response) for `domainType: thirdParty` requests to hosts from EasyPrivacy `\|\|host^$third-party` filters (cap 10,000; 3,791 today). Same priority as block rules, so a blocked request stays blocked and an exception (`allow`, priority 2) also stops stripping. |
 | `cosmetic/ads_generic.css`, `cosmetic/cookies_generic.css` | generic hiding, registered as content-script CSS (all frames). Simple `#id` / `.class` selectors grouped 100 per rule, everything else one rule per selector (an invalid selector only drops itself). |
 | `cosmetic/site.json` | site selectors per host (`ads`, `cookies`), exceptions per host, `genericExceptionHosts`, `generichide`, `elemhide` |
 | `cosmetic/generic.json` | the generic selectors again, for hosts that have exceptions (loaded only for them) |
-| `build-info.json` | list versions, rule counts, skipped filters by reason |
+| `build-info.json` | list versions, rule counts, skipped filters by reason, `curated` host counts |
 
-Total enabled static rules today: 14,825, under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
+Total static rules today: 14,824 (14,822 enabled by default), under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
 the shared global pool is never needed; `tests/validate_manifest.py` enforces this, the regex
 limit (1,000) and the ruleset count limits.
 
@@ -66,8 +68,8 @@ the exceptions (none for `generichide`, nothing at all for `elemhide`).
 
 The popup calls `declarativeNetRequest.getMatchedRules({tabId, minTimeStamp: page start})`
 (needs `declarativeNetRequestFeedback`; 20 calls per 10 min, so once per popup open, at most
-every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_*`/`client_ads` -> ads,
-`privacy_*`/`trackers` -> trackers, `cookie_strip` -> cookies stripped, `cookies_*` -> banners;
+every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_N`/`ads_curated`/`client_ads` -> ads,
+`privacy_N`/`privacy_curated`/`trackers` -> trackers, `cookie_strip` -> cookies stripped, `cookies_*` -> banners;
 rule ids >= 500000 (allow rules) and the dynamic allowlist rule are ignored. Banners also add the
 page's `hidden` and `rejected` counts from `chrome.storage.session` key `page:<tabId>`. The badge
 is Chrome's own action count (`setExtensionActionOptions({displayActionCountAsBadgeText: true})`).

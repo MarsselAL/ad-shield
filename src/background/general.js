@@ -3,7 +3,8 @@
  * importScripts after config.js, settings.js, logger.js, blocking.js and the vendored
  * autoconsent library (vendor/autoconsent/autoconsent.cjs.js via autoconsent-shim.js).
  *
- *  - enables/disables the generated static rulesets (ads_N, privacy_N, cookies_N, cookie_strip);
+ *  - enables/disables the generated static rulesets (ads_N, ads_curated, privacy_N,
+ *    privacy_curated, cookies_N, cookie_strip) via blocking.rulesetPlan;
  *  - keeps one dynamic allowAllRequests rule for the per-site allowlist;
  *  - registers the cosmetic CSS / small page script / autoconsent content scripts with
  *    chrome.scripting.registerContentScripts (only when the plan changed);
