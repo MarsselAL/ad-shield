@@ -33,12 +33,20 @@
         <label class="switch"><input type="checkbox" data-bkey="ads" aria-label="Block ads"><span class="track"></span></label>
       </div>
       <div class="opt row">
+        <div><strong>Fix YouTube ads and anti-adblock walls (page scripts)</strong><p class="muted">Removes ad data from YouTube's player and feed responses before the page uses it, and skips an ad that still plays. Runs a small built-in script inside YouTube pages only; needs Ads on.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="scriptlets" aria-label="Fix YouTube ads and anti-adblock walls (page scripts)"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
         <div><strong>Trackers</strong><p class="muted">Blocks tracking and analytics requests (EasyPrivacy).</p></div>
         <label class="switch"><input type="checkbox" data-bkey="trackers" aria-label="Block trackers"><span class="track"></span></label>
       </div>
       <div class="opt row">
         <div><strong>Strip tracking cookies</strong><p class="muted">Removes cookies from third-party requests to known tracker domains (taken from EasyPrivacy) and drops the cookies they try to set.</p></div>
         <label class="switch"><input type="checkbox" data-bkey="stripCookies" aria-label="Strip tracking cookies"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
+        <div><strong>Remove tracking parameters from links (utm_*, fbclid, gclid…)</strong><p class="muted">When a page or frame opens with known tracking parameters in its address, loads it without them (46 names, our own list in rules/removeparams.txt). Other parameters are kept.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="stripTrackingParams" aria-label="Remove tracking parameters from links"><span class="track"></span></label>
       </div>
       <div class="opt row">
         <div><strong>Cookie banners: hide</strong><p class="muted">Hides cookie notices and blocks consent-banner scripts (EasyList Cookie List).</p></div>
@@ -58,6 +66,17 @@
       <div class="row left">
         <button class="primary" id="al-save">Save list</button>
         <span class="muted" id="al-saved" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>My filters</h2>
+      <p class="muted">Elements you hid with "Hide an element on this page" in the popup, one per line as <code>example.com##.selector</code> (the site covers its subdomains; <code>a.com,b.com##.selector</code> for several sites). You can add, edit or delete lines here. Lines starting with <code>!</code> are comments and are not kept. Filters apply on their sites whenever Ad Shield is on there, also with Ads switched off; not on sites where blocking is off. Per site only: a line without a site is rejected. Reload open tabs after a change.</p>
+      <textarea id="userfilters" rows="6" spellcheck="false" aria-label="My filters, one site##selector per line"></textarea>
+      <ul class="errors" id="uf-errors" aria-live="polite"></ul>
+      <div class="row left">
+        <button class="primary" id="uf-save">Save filters</button>
+        <span class="muted" id="uf-saved" aria-live="polite"></span>
       </div>
     </section>
 
@@ -107,15 +126,29 @@
 
     <section class="card">
       <h2>Filter lists</h2>
-      <p class="muted">Built into this version (no downloads at run time, no remote configuration):</p>
-      <ul class="lists" id="lists"></ul>
-      <p class="muted">Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0. Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
+      <div class="opt row">
+        <div><strong>Update filter lists automatically</strong><p class="muted">Once a week, downloads EasyList, EasyPrivacy and the EasyList Cookie List from their public addresses (easylist.to, secure.fanboy.co.nz) and converts them in the browser. Nothing else is sent or downloaded. Off: the lists in use stay until you choose "Use built-in lists".</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="autoUpdateLists" aria-label="Update filter lists automatically"><span class="track"></span></label>
+      </div>
+      <table class="lists" aria-label="Filter lists in use">
+        <thead><tr><th>List</th><th>Version</th><th>Updated</th><th>Rules</th><th>Status</th></tr></thead>
+        <tbody id="lists"></tbody>
+      </table>
+      <p class="muted" id="lists-last" aria-live="polite"></p>
+      <div class="row left">
+        <button class="primary" id="lists-update">Update now</button>
+        <button id="lists-reset">Use built-in lists</button>
+        <span class="muted" id="lists-result" aria-live="polite"></span>
+      </div>
+      <p class="muted">Updates replace the network rules and the site-specific element hiding; the generic element-hiding CSS stays as built into this version. Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0 (cookie list: CC BY 3.0). Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
     </section>
   </main>
 
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>
   <script src="../shared/blocking.js"></script>
+  <script src="../shared/userfilters.js"></script>
+  <script src="../shared/lists.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

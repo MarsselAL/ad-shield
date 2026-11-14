@@ -7,6 +7,8 @@
  * hidden-banner and autoconsent counts kept by the background. getMatchedRules is limited to 20
  * calls per 10 minutes outside user gestures, so it runs once per popup open and at most every
  * 5 s while the popup stays open.
+ * "Hide an element on this page" (web pages with blocking on) injects the element picker
+ * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
  */
 (function () {
   'use strict';
@@ -34,6 +36,7 @@
     $('site-detail').textContent = site.detail;
     $('site-on').checked = site.on;
     $('site-on').disabled = !site.web || !settings.enabled;
+    $('pick').hidden = !(site.web && site.on && settings.enabled);
   }
 
   function setCount(id, n) { $(id).textContent = typeof n === 'number' ? String(n) : '–'; }
@@ -146,6 +149,17 @@
   }
   $('reload').addEventListener('click', reloadTab);
   $('site-reload').addEventListener('click', reloadTab);
+
+  $('pick').addEventListener('click', function () {
+    if (!activeTab || typeof activeTab.id !== 'number') return;
+    chrome.scripting.executeScript({
+      target: { tabId: activeTab.id, frameIds: [0] },
+      files: ['src/shared/selector.js', 'src/content/picker.js']
+    }).then(function () { window.close(); }, function (e) {
+      $('pick-error').hidden = false;
+      $('pick-error').textContent = 'Cannot open the picker on this page' + (e && e.message ? ' (' + e.message + ')' : '') + '.';
+    });
+  });
 
   $('open-options').addEventListener('click', function (e) {
     e.preventDefault();

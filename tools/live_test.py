@@ -432,8 +432,9 @@ SW_STATE_JS = """
 })()
 """
 
-GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-site"]
-DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated"]
+GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-css-youtube", "as-scriptlets", "as-site"]
+DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated", "removeparam",
+                    "youtube"]
 
 # chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
 # which static rulesets a request would match. No request is sent.
@@ -567,6 +568,77 @@ def element_html(sel, label):
     return '<div %s data-t="%s">x</div>' % (attr, label)
 
 
+PICKER_INJECT_JS = """
+(async () => {
+  const tabs = await chrome.tabs.query({ url: %s });
+  if (!tabs.length) return 'no tab';
+  await chrome.scripting.executeScript({ target: { tabId: tabs[0].id, frameIds: [0] },
+                                         files: ['src/shared/selector.js', 'src/content/picker.js'] });
+  return tabs[0].id;
+})()
+"""
+
+
+def picker_check(cdp, sw_sid, sessions, check, report):
+    """Element picker end to end on a 127.0.0.1 page: inject it the way the popup does, click an
+    element with trusted CDP mouse events, press Enter (= Hide), then check "My filters" storage,
+    that the element is hidden, and that it is hidden again after a reload (as-page path)."""
+    page = ('<!doctype html><title>p</title><link rel="icon" href="data:,">'
+            '<div class="wrap"><div id="pick-me" class="promo-box" style="width:200px;height:80px">ad</div></div>'
+            '<p data-t="keep">keep</p>')
+    url, stop = serve_local_page(page)
+    try:
+        _, sid = open_page(cdp, url)
+        sessions.add(sid)
+        time.sleep(1.5)
+        tab = cdp.evaluate(sw_sid, PICKER_INJECT_JS % json.dumps(url))
+        time.sleep(0.5)
+        r = cdp.evaluate(sid, "(() => { const r = document.getElementById('pick-me').getBoundingClientRect();"
+                              " return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()")
+        for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
+            cdp.send("Input.dispatchMouseEvent", {"type": typ, "x": r["x"], "y": r["y"], "button": "left",
+                                                  "clickCount": 0 if typ == "mouseMoved" else 1}, session=sid)
+        time.sleep(0.5)
+        for typ in ("keyDown", "keyUp"):
+            cdp.send("Input.dispatchKeyEvent", {"type": typ, "key": "Enter", "code": "Enter",
+                                                "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13}, session=sid)
+        time.sleep(2.0)
+        stored = cdp.evaluate(sw_sid, "chrome.storage.local.get('userFilters').then(r => r.userFilters || null)")
+        vis = cdp.evaluate(sid, "({ picked: getComputedStyle(document.getElementById('pick-me')).display,"
+                                " keep: getComputedStyle(document.querySelector('[data-t=keep]')).display,"
+                                " inline: document.getElementById('pick-me').style.display,"
+                                " pickerGone: !document.querySelector('as-picker') })")
+        cdp.send("Page.reload", {}, session=sid)
+        time.sleep(2.5)
+        again = cdp.evaluate(sid, "getComputedStyle(document.getElementById('pick-me')).display")
+    finally:
+        stop()
+    cdp.evaluate(sw_sid, "chrome.storage.local.set({ userFilters: {} }).then(() => true)")
+    report["picker"] = {"tab": tab, "stored": stored, "display": vis, "afterReload": again}
+    check("element picker: click + Enter saves '127.0.0.1###pick-me', hides it now and after a reload",
+          stored == {"127.0.0.1": ["#pick-me"]} and vis and vis.get("picked") == "none" and vis.get("keep") == "block"
+          and vis.get("inline") == "" and vis.get("pickerGone") and again == "none", report["picker"])
+
+
+def removeparam_live(cdp, sessions, check, report):
+    """A real navigation (example.com, IANA's reserved example domain): the tracking parameters are
+    gone from the address the page ends up at, the other parameter is kept."""
+    start = "https://example.com/?utm_source=x&fbclid=y&keep=1"
+    _, sid = open_page(cdp, start)
+    sessions.add(sid)
+    final = None
+    for _ in range(40):
+        time.sleep(0.25)
+        try:
+            final = cdp.evaluate(sid, "document.readyState === 'complete' ? location.href : null")
+        except CDPError:
+            final = None
+        if final and final != "about:blank":
+            break
+    report["removeparam_live"] = {"start": start, "final": final}
+    check("removeparam live: %s ends at https://example.com/?keep=1" % start, final == "https://example.com/?keep=1", final)
+
+
 def run_smoke(args):
     checks = []
 
@@ -612,7 +684,7 @@ def run_smoke(args):
                     break
                 time.sleep(0.25)
             report["sw_state_initial"] = st
-            check("manifest version 1.0.0", st and st.get("version") == "1.0.0", st and st.get("version"))
+            check("manifest version 1.1.0", st and st.get("version") == "1.1.0", st and st.get("version"))
             ids = sorted(s["id"] for s in st.get("scripts", [])) if st else None
             check("only the general content scripts are registered (Twitch ones are static in manifest.json)",
                   ids == GENERAL_SCRIPTS, ids)
@@ -637,6 +709,17 @@ def run_smoke(args):
             check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
                   dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
                   and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
+            rp = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
+                "page_utm": {"url": "https://example.com/?utm_source=x&keep=1", "type": "main_frame"},
+                "frame_fbclid": {"url": "https://example.org/embed?a=1&fbclid=z", "type": "sub_frame", "initiator": "https://example.com"},
+                "lookalike": {"url": "https://example.com/?keep=1&xutm_source=1&UTM_SOURCE=2", "type": "main_frame"},
+                "script_utm": {"url": "https://example.com/a.js?utm_source=x", "type": "script", "initiator": "https://example.com"},
+                "ad_click": {"url": "https://www.googleadservices.com/pagead/aclk?gclid=1", "type": "main_frame"}}))
+            report["dnr_test_removeparam"] = rp
+            check("testMatchOutcome: removeparam fires on pages/frames with a listed parameter only (not look-alikes, scripts, ad-click redirectors)",
+                  rp and rp.get("page_utm") == ["removeparam"] and rp.get("frame_fbclid") == ["removeparam"]
+                  and "removeparam" not in rp.get("lookalike", ["removeparam"]) and "removeparam" not in rp.get("script_utm", ["removeparam"])
+                  and "removeparam" not in rp.get("ad_click", ["removeparam"]), rp)
             check("testMatchOutcome: curated hosts blocked third-party only; [never] host (excluded) not blocked by them",
                   dnr and "ads_curated" in dnr.get("curated_ad", []) and "privacy_curated" in dnr.get("curated_tracker", [])
                   and "ads_curated" not in dnr.get("curated_first_party", [])
@@ -679,15 +762,20 @@ def run_smoke(args):
         time.sleep(2.0)
         opts = cdp.evaluate(opt_sid, "({ toggles: document.querySelectorAll('input[data-key]').length,"
                                      " btoggles: document.querySelectorAll('input[data-bkey]').length,"
-                                     " lists: document.querySelectorAll('#lists li').length,"
+                                     " lists: document.querySelectorAll('#lists tr').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 5 and opts["lists"] == 3
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 8 and opts["lists"] == 3
               and opts["order"].split("\n")[0] == "site", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
                                     " return document.querySelectorAll('#pt-errors li').length; })()")
         check("options rejects an invalid playerType list", bad and bad >= 2, "%s error(s) shown" % bad)
+        uf = cdp.evaluate(opt_sid, "(() => { document.getElementById('userfilters').value = '##.global\\nexample.com##.ok\\nexample.com##div:bogus-pseudo';"
+                                   " document.getElementById('uf-save').click();"
+                                   " return [...document.querySelectorAll('#uf-errors li')].map(li => li.textContent); })()")
+        check("options 'My filters' rejects a line without a site and invalid CSS", uf and len(uf) == 2
+              and uf[0].startswith("Line 1") and uf[1].startswith("Line 3"), uf)
 
         # General blocking on a real http page served from 127.0.0.1 (no outside traffic): the
         # registered generic CSS hides an EasyList ad element and a cookie-list element, a plain
@@ -717,12 +805,14 @@ def run_smoke(args):
                 time.sleep(0.25)
                 dnr2 = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
                     "cookie": cases["cookie"],
-                    "allowlisted": {"url": "https://allowed.example/", "type": "main_frame"}}))
+                    "allowlisted": {"url": "https://allowed.example/", "type": "main_frame"},
+                    "allowlisted_utm": {"url": "https://allowed.example/?utm_source=x", "type": "main_frame"}}))
                 if dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted"):
                     break
             report["dnr_test_trackers_off"] = dnr2
-            check("trackers off: tracker request only gets its cookies stripped; allowlist rule matches",
-                  dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted") == ["_dynamic"], dnr2)
+            check("trackers off: tracker request only gets its cookies stripped; allowlist rule matches (and outranks removeparam)",
+                  dnr2 and dnr2.get("cookie") == ["cookie_strip"] and dnr2.get("allowlisted") == ["_dynamic"]
+                  and dnr2.get("allowlisted_utm") == ["_dynamic"], dnr2)
             cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"trackers": True, "allowlist": [], "autoRejectCookies": True}))
             ac = None
             for _ in range(20):
@@ -742,6 +832,8 @@ def run_smoke(args):
             finally:
                 stop_page2()
             cdp.evaluate(sw_sid, SET_BLOCKING_JS % json.dumps({"autoRejectCookies": False}))
+            picker_check(cdp, sw_sid, sessions, check, report)
+            removeparam_live(cdp, sessions, check, report)
 
         # Page-script self-test on about:blank (no network): the MAIN-world files load, the
         # generated worker source runs in a real Chrome worker with fetch hooked, and after

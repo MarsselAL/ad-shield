@@ -15,7 +15,7 @@ function flush() {
 var BASE = 'chrome-extension://test-id/';
 var manifest = JSON.parse(readFile('manifest.json'));
 var calls = { rulesets: [], dynamic: [], registered: [], unregistered: [], css: [], exec: [], toTabs: [], actionOptions: [] };
-var local = {}, session = {}, registered = [];
+var local = {}, session = {}, registered = [], dynamicRules = [], failDynamic = false;
 var storageListeners = [], messageListeners = [];
 
 function area(store, name) {
@@ -48,7 +48,13 @@ globalThis.chrome = {
   storage: { local: area(local, 'local'), session: area(session, 'session'), onChanged: { addListener: function (fn) { storageListeners.push(fn); } } },
   declarativeNetRequest: {
     updateEnabledRulesets: function (o) { calls.rulesets.push(o); return Promise.resolve(); },
-    updateDynamicRules: function (o) { calls.dynamic.push(o); return Promise.resolve(); },
+    updateDynamicRules: function (o) {
+      calls.dynamic.push(o);
+      if (failDynamic && o.addRules.some(function (r) { return r.id > 1; })) return Promise.reject(new Error('quota'));
+      dynamicRules = dynamicRules.filter(function (r) { return o.removeRuleIds.indexOf(r.id) === -1; }).concat(o.addRules);
+      return Promise.resolve();
+    },
+    getDynamicRules: function () { return Promise.resolve(dynamicRules.slice()); },
     setExtensionActionOptions: function (o) { calls.actionOptions.push(o); return Promise.resolve(); }
   },
   scripting: {
@@ -75,7 +81,7 @@ globalThis.fetch = function (url) {
   return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(readFile(path))); } });
 };
 
-loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js',
+loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js', 'src/shared/userfilters.js', 'src/shared/lists.js',
   'src/background/autoconsent-shim.js', 'vendor/autoconsent/autoconsent.cjs.js', 'src/background/general.js');
 var B = __TAS__.blocking;
 var SITE = JSON.parse(readFile('rules/cosmetic/site.json'));
@@ -92,9 +98,12 @@ function setBlocking(patch) { return chrome.storage.local.set({ blocking: Object
 test('startup: enables the generated rulesets, registers CSS and page script, badge count on', function () {
   return flush().then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
-    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated']);
+    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'youtube']);
     assert.deepEqual(last.disableRulesetIds, []);
-    assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-site']);
+    assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
+    var sl = registered.filter(function (s) { return s.id === 'as-scriptlets'; })[0];
+    assert.equal(sl.world, 'MAIN');
+    assert.deepEqual(sl.matches, ['*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*'], 'hosts from rules/scriptlets.json');
     var css = registered.filter(function (s) { return s.id === 'as-css-ads'; })[0];
     assert.ok(css.excludeMatches.length >= SITE.genericExceptionHosts.length, 'exception hosts excluded from the generic CSS');
     assert.deepEqual(calls.actionOptions[0], { displayActionCountAsBadgeText: true });
@@ -111,7 +120,7 @@ test('same settings again: no re-registration', function () {
 
 test('auto-reject on registers autoconsent; allowlist adds the dynamic rule and exclusions', function () {
   return setBlocking({ autoRejectCookies: true, allowlist: ['off.example'] }).then(function () {
-    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-cookies', 'as-site']);
+    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var ac = registered.filter(function (s) { return s.id === 'as-autoconsent'; })[0];
     assert.deepEqual(ac.js, ['vendor/autoconsent/content.bundle.js']);
     assert.deepEqual(ac.excludeMatches, ['*://*.off.example/*']);
@@ -205,7 +214,7 @@ test('master switch off: all general rulesets disabled, scripts unregistered, al
   return chrome.storage.local.set({ settings: Object.assign(__TAS__.settings.defaults(), { enabled: false }) }).then(flush).then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
     assert.deepEqual(last.enableRulesetIds, []);
-    assert.equal(last.disableRulesetIds.length, 6);
+    assert.equal(last.disableRulesetIds.length, 8);
     assert.deepEqual(ids(), []);
     assert.deepEqual(calls.dynamic[calls.dynamic.length - 1].addRules, []);
   });
@@ -217,6 +226,144 @@ test('messages from other extensions or without a tab are ignored', function () 
     return send({ type: 'as-page', host: 'www.1news.co.nz' }, { tab: undefined });
   }).then(function () {
     assert.equal(calls.css.length, before);
+  });
+});
+
+// ------------------------------------------------------------------ element picker / My filters
+test('picker save: stored under the site key, CSS inserted into the top frame at once', function () {
+  var before = calls.css.length;
+  return send({ type: 'as-picker-save', selector: '.while-off' }).then(function (resp) {
+    assert.ok(resp.ok, 'master switch off: stored');
+    assert.equal(calls.css.length, before, 'master switch off: nothing inserted');
+    return chrome.storage.local.set({ settings: __TAS__.settings.defaults(), userFilters: {} }).then(flush);
+  }).then(function () {
+    return send({ type: 'as-picker-save', selector: ' .my-ad ' });
+  }).then(function (resp) {
+    assert.deepEqual(resp, { ok: true, error: null });
+    assert.deepEqual(local.userFilters, { '1news.co.nz': ['.my-ad'] }, 'site taken from the tab URL, www. dropped');
+    assert.equal(calls.css.length, before + 1);
+    assert.deepEqual(calls.css[calls.css.length - 1], { target: { tabId: 7, frameIds: [0] }, css: '.my-ad{display:none!important}', origin: 'USER' });
+    return send({ type: 'as-picker-save', selector: '.my-ad' });
+  }).then(function (resp) {
+    assert.ok(resp.ok, 'saving the same selector again is fine');
+    assert.deepEqual(local.userFilters, { '1news.co.nz': ['.my-ad'] });
+  });
+});
+
+test('picker save: bad selector, sub frame or allowlisted site', function () {
+  var before = calls.css.length;
+  return send({ type: 'as-picker-save', selector: 'div{color:red}' }).then(function (resp) {
+    assert.equal(resp.ok, false);
+    assert.includes(resp.error, 'Selector');
+    return send({ type: 'as-picker-save', selector: '.x' }, { frameId: 3 });
+  }).then(function (resp) {
+    assert.equal(resp.ok, false);
+    return send({ type: 'as-picker-save', selector: '.y' }, { tab: { id: 9, url: 'https://shop.off.example/' } });
+  }).then(function (resp) {
+    assert.ok(resp.ok, 'stored on an allowlisted site');
+    assert.deepEqual(local.userFilters['shop.off.example'], ['.y']);
+    assert.equal(calls.css.length, before, 'nothing inserted: bad selector, sub frame, allowlisted site');
+    return chrome.storage.local.set({ userFilters: { '1news.co.nz': ['.my-ad'] } }).then(flush);
+  });
+});
+
+test('page hello: My filters added to the site CSS; with Ads and Cookie banners off only they apply', function () {
+  return send({ type: 'as-page', host: 'www.1news.co.nz', t: 5 }).then(function () {
+    var css = calls.css[calls.css.length - 1].css;
+    assert.includes(css, SITE.ads['1news.co.nz'][0] + '{display:none!important}');
+    assert.includes(css, '\n.my-ad{display:none!important}');
+    return setBlocking({ ads: false, hideCookieBanners: false });
+  }).then(function () {
+    var site = registered.filter(function (s) { return s.id === 'as-site'; })[0];
+    assert.deepEqual(site.matches, ['*://*.1news.co.nz/*'], 'page script only where My filters exist');
+    return send({ type: 'as-page', host: 'www.1news.co.nz', t: 6 });
+  }).then(function (resp) {
+    assert.equal(calls.css[calls.css.length - 1].css, '.my-ad{display:none!important}');
+    assert.deepEqual(resp, { cookieSelectors: [] });
+    return chrome.storage.local.set({ userFilters: {} }).then(flush);
+  }).then(function () {
+    assert.equal(ids().indexOf('as-site'), -1, 'no filters left: page script unregistered');
+    return setBlocking({ ads: true, hideCookieBanners: true });
+  }).then(function () {
+    assert.ok(ids().indexOf('as-site') !== -1);
+  });
+});
+
+// ------------------------------------------------------------------ updated lists (dynamic rules)
+function dynRule(id) { return { id: id, priority: 1, action: { type: 'block' }, condition: { requestDomains: ['d' + id + '.example'] } }; }
+function dynIds(f) { return dynamicRules.filter(function (r) { return B.dynamicFeature(r.id) === f; }).map(function (r) { return r.id; }); }
+function lastPlan() { return calls.rulesets[calls.rulesets.length - 1]; }
+var STORED = { ads: [dynRule(1000001), dynRule(1500001)], trackers: [dynRule(2000001)], hideCookieBanners: [dynRule(3000001)] };
+var META = { source: 'updated', lastCheck: 1, lists: {} };
+
+test('installLists: dynamic rules in one call, list rulesets off, curated / cookie_strip stay on, then stored', function () {
+  return chrome.storage.local.set({ settings: __TAS__.settings.defaults(), blocking: B.defaults() }).then(flush).then(function () {
+    var before = calls.dynamic.length;
+    return __TAS__.general.installLists({ rules: STORED, site: Object.assign({}, SITE, { ads: { 'fresh.example': ['.fresh-ad'] } }), meta: META }).then(function (res) {
+      assert.ok(res.ok);
+      var adding = calls.dynamic.slice(before).filter(function (c) { return c.addRules.length > 1; });
+      assert.equal(adding.length, 1, 'one atomic updateDynamicRules');
+      assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+      assert.deepEqual(dynIds('trackers'), [2000001]);
+      var p = lastPlan();
+      assert.deepEqual(p.disableRulesetIds.slice().sort(), ['ads_1', 'cookies_1', 'privacy_1']);
+      assert.deepEqual(p.enableRulesetIds.slice().sort(), ['ads_curated', 'cookie_strip', 'privacy_curated', 'removeparam', 'youtube']);
+      assert.deepEqual(local.listRules, STORED);
+      assert.deepEqual(local.lists, META);
+    });
+  });
+});
+
+test('page hello uses the updated site data from storage', function () {
+  return send({ type: 'as-page', host: 'www.fresh.example', t: 5 }, { tab: { id: 11, url: 'https://www.fresh.example/' } }).then(function () {
+    assert.includes(calls.css[calls.css.length - 1].css, '.fresh-ad{display:none!important}');
+  });
+});
+
+test('Trackers off removes only the tracker dynamic rules (and privacy_N stays off); on again re-adds them', function () {
+  return setBlocking({ trackers: false }).then(function () {
+    assert.deepEqual(dynIds('trackers'), []);
+    assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+    assert.ok(lastPlan().disableRulesetIds.indexOf('privacy_1') !== -1);
+    return setBlocking({ trackers: true });
+  }).then(function () {
+    assert.deepEqual(dynIds('trackers'), [2000001]);
+    assert.ok(lastPlan().disableRulesetIds.indexOf('privacy_1') !== -1, 'privacy_1 stays off: dynamic rules active');
+  });
+});
+
+test('master switch off removes every dynamic list rule; on restores them from storage', function () {
+  return chrome.storage.local.set({ settings: Object.assign(__TAS__.settings.defaults(), { enabled: false }) }).then(flush).then(function () {
+    assert.equal(dynamicRules.length, 0);
+    return chrome.storage.local.set({ settings: __TAS__.settings.defaults() }).then(flush);
+  }).then(function () {
+    assert.equal(dynamicRules.length, 4);
+  });
+});
+
+test('Chrome refuses new rules: previous dynamic rules and storage kept, installLists rejects', function () {
+  failDynamic = true;
+  var other = { ads: [dynRule(1000009)], trackers: [], hideCookieBanners: [] };
+  return __TAS__.general.installLists({ rules: other, site: SITE, meta: { source: 'updated', x: 1 } }).then(function () {
+    throw new Error('should reject');
+  }, function (e) {
+    failDynamic = false;
+    assert.includes(e.message, 'quota');
+    assert.deepEqual(dynIds('ads'), [1000001, 1500001]);
+    assert.deepEqual(local.listRules, STORED);
+    assert.deepEqual(lastPlan().disableRulesetIds.slice().sort(), ['ads_1', 'cookies_1', 'privacy_1']);
+  });
+});
+
+test('resetLists: static list rulesets enabled before the dynamic rules go, storage cleared', function () {
+  var n = calls.rulesets.length;
+  return __TAS__.general.resetLists({ source: 'packaged', lists: {} }).then(function () {
+    assert.equal(dynamicRules.filter(function (r) { return r.id !== 1; }).length, 0);
+    var first = calls.rulesets[n];
+    assert.deepEqual(first.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'youtube']);
+    assert.equal(local.listRules, undefined);
+    assert.equal(local.listSite, undefined);
+    assert.equal(local.lists.source, 'packaged');
   });
 });
 

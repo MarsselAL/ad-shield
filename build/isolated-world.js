@@ -400,8 +400,15 @@
   var ALLOWLIST_RULE_ID = 1;
   var ALLOWLIST_PRIORITY = 100;     // above every static rule (static priorities are 1..4)
   var TWITCH_RULESETS = ['client_ads', 'trackers'];
+  // Dynamic rules from the weekly list update (src/background/updater.js): rule id = base +
+  // static id, so block rules sit at base+1.. and allow rules at base+500001.. (ALLOW_ID_BASE).
+  var DYNAMIC_BASES = { ads: 1000000, trackers: 2000000, hideCookieBanners: 3000000 };
+  var DYNAMIC_SPAN = 1000000;
+  var DYNAMIC_FEATURES = ['ads', 'trackers', 'hideCookieBanners'];
   var SCRIPT_PREFIX = 'as-';
   var WEB = ['http://*/*', 'https://*/*'];
+  // Our own YouTube cosmetic CSS (rules/cosmetic/youtube.css) is registered for these sites only.
+  var YOUTUBE_CSS_HOSTS = ['youtube.com', 'youtube-nocookie.com', 'youtubekids.com'];
 
   function defaults() {
     return {
@@ -410,6 +417,9 @@
       stripCookies: true,        // remove Cookie / Set-Cookie on third-party tracker requests
       hideCookieBanners: true,   // EasyList Cookie List network rules + cosmetic hiding
       autoRejectCookies: false,  // DuckDuckGo autoconsent: click "reject" on consent pop-ups
+      autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
+      scriptlets: true,          // our page scripts (rules/scriptlets.json, e.g. YouTube); needs ads on
+      stripTrackingParams: true, // remove utm_*, fbclid, gclid ... from page / frame URLs (rules/removeparam.json)
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -509,24 +519,60 @@
    * Category of a static ruleset id; null for rulesets this module does not own.
    * ads_N / privacy_N come from EasyList / EasyPrivacy, ads_curated / privacy_curated from our
    * own rules/curated_hosts.txt; both follow the same switch and count in the same bucket.
+   * youtube is our hand-written rules/youtube.json (two YouTube ad paths), part of Ads.
+   * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
+   * frames to the same URL without tracking parameters; never counted in the popup.
    */
   function rulesetFeature(id) {
-    if (/^ads_(\d+|curated)$/.test(id)) return 'ads';
+    if (id === 'removeparam') return 'stripTrackingParams';
+    if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
     if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
     if (id === 'cookie_strip') return 'stripCookies';
     return null;
   }
 
-  /** { enableRulesetIds, disableRulesetIds } for the general rulesets among `ids`. */
-  function rulesetPlan(ids, masterEnabled, b) {
+  /** True for the rulesets generated from the lists (ads_N, privacy_N, cookies_N), which the
+   * weekly update replaces with dynamic rules; not the curated ones or cookie_strip. */
+  function isListRuleset(id) {
+    return /^(ads|privacy|cookies)_\d+$/.test(id);
+  }
+
+  /**
+   * { enableRulesetIds, disableRulesetIds } for the general rulesets among `ids`.
+   * dynamic: { ads, trackers, hideCookieBanners } -> true when that category's updated lists are
+   * installed as dynamic rules; its list rulesets are then disabled (curated / cookie_strip stay).
+   */
+  function rulesetPlan(ids, masterEnabled, b, dynamic) {
     var enable = [], disable = [];
+    var dyn = dynamic || {};
     (ids || []).forEach(function (id) {
       var f = rulesetFeature(id);
       if (!f) return;
-      (masterEnabled && b[f] ? enable : disable).push(id);
+      var on = masterEnabled && b[f] && !(isListRuleset(id) && dyn[f]);
+      (on ? enable : disable).push(id);
     });
     return { enableRulesetIds: enable, disableRulesetIds: disable };
+  }
+
+  /** Feature ('ads' | 'trackers' | 'hideCookieBanners') owning a dynamic rule id, or null. */
+  function dynamicFeature(ruleId) {
+    if (typeof ruleId !== 'number') return null;
+    for (var i = 0; i < DYNAMIC_FEATURES.length; i++) {
+      var base = DYNAMIC_BASES[DYNAMIC_FEATURES[i]];
+      if (ruleId > base && ruleId < base + DYNAMIC_SPAN) return DYNAMIC_FEATURES[i];
+    }
+    return null;
+  }
+
+  /** Dynamic rule ids -> { ads: n, trackers: n, hideCookieBanners: n } (installed rule counts). */
+  function dynamicCounts(ruleIds) {
+    var c = { ads: 0, trackers: 0, hideCookieBanners: 0 };
+    (ruleIds || []).forEach(function (id) {
+      var f = dynamicFeature(id);
+      if (f) c[f]++;
+    });
+    return c;
   }
 
   /** Dynamic rules for the allowlist: one allowAllRequests rule covering every listed site. */
@@ -541,12 +587,23 @@
     }];
   }
 
-  /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo. */
+  /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
+   * Tracking-parameter redirects (removeparam) are not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {
       var r = m && m.rule;
-      if (!r || typeof r.ruleId !== 'number' || r.ruleId >= ALLOW_ID_BASE) return;
+      if (!r || typeof r.ruleId !== 'number') return;
+      if (r.rulesetId === '_dynamic') {
+        // Updated lists (allowlist rule 1 and allow-rule ranges are not counted).
+        var df = dynamicFeature(r.ruleId);
+        if (!df || r.ruleId - DYNAMIC_BASES[df] >= ALLOW_ID_BASE) return;
+        if (df === 'ads') c.ads++;
+        else if (df === 'trackers') c.trackers++;
+        else c.banners++;
+        return;
+      }
+      if (r.ruleId >= ALLOW_ID_BASE) return;
       var id = r.rulesetId;
       if (id === 'client_ads') { c.ads++; return; }
       if (id === 'trackers') { c.trackers++; return; }
@@ -573,12 +630,29 @@
     return out;
   }
 
+  /** Sorted unique hosts of rules/scriptlets.json ({ rules: [{ hosts: [...] }] }); [] if malformed. */
+  function scriptletHosts(table) {
+    var seen = {};
+    var rules = table && Array.isArray(table.rules) ? table.rules : [];
+    rules.forEach(function (r) {
+      (r && Array.isArray(r.hosts) ? r.hosts : []).forEach(function (h) {
+        var n = normalizeHost(h);
+        if (n && n === h && hostPatterns(n).length) seen[n] = true;
+      });
+    });
+    return Object.keys(seen).sort();
+  }
+
   /**
    * Content scripts to register (chrome.scripting.registerContentScripts format).
    * cosmeticExcludeHosts: hosts with generic-hiding exceptions; they get the generic CSS from the
    * background instead (minus the exceptions), so the static CSS file skips them.
+   * slHosts: scriptletHosts(rules/scriptlets.json); build/scriptlets-main.js runs only there
+   * (MAIN world, every frame incl. about:blank ones), while Ads and Page scripts are both on.
+   * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
+   * background for their CSS, so with Ads and Cookie banners both off it still runs there.
    */
-  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts) {
+  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts, slHosts, userHosts) {
     if (!masterEnabled) return [];
     var allow = patternsFor(b.allowlist);
     var cssExclude = allow.concat(patternsFor(cosmeticExcludeHosts));
@@ -588,16 +662,32 @@
       if (cssExclude.length) o.excludeMatches = cssExclude.slice();
       plan.push(o);
     }
-    function js(id, file, allFrames) {
-      var o = { id: id, js: [file], matches: WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
+    function js(id, file, allFrames, matches) {
+      var o = { id: id, js: [file], matches: matches || WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
       if (allFrames) o.matchOriginAsFallback = true;
       if (allow.length) o.excludeMatches = allow.slice();
       plan.push(o);
     }
     if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css');
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
+    var userMatches = patternsFor(userHosts);
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);
+    else if (userMatches.length) js('as-site', 'src/content/general.js', false, userMatches);
     if (b.autoRejectCookies) js('as-autoconsent', 'vendor/autoconsent/content.bundle.js', true);
+    if (b.ads) {
+      var yt = { id: 'as-css-youtube', css: ['rules/cosmetic/youtube.css'], matches: patternsFor(YOUTUBE_CSS_HOSTS), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
+      if (allow.length) yt.excludeMatches = allow.slice();
+      plan.push(yt);
+    }
+    var slm = patternsFor(slHosts);
+    if (b.ads && b.scriptlets && slm.length) {
+      var sl = {
+        id: 'as-scriptlets', js: ['build/scriptlets-main.js'], matches: slm, world: 'MAIN', allFrames: true,
+        matchOriginAsFallback: true, runAt: 'document_start', persistAcrossSessions: true
+      };
+      if (allow.length) sl.excludeMatches = allow.slice();
+      plan.push(sl);
+    }
     return plan;
   }
 
@@ -690,6 +780,12 @@
     ALLOW_ID_BASE: ALLOW_ID_BASE,
     ALLOWLIST_RULE_ID: ALLOWLIST_RULE_ID,
     TWITCH_RULESETS: TWITCH_RULESETS,
+    DYNAMIC_BASES: DYNAMIC_BASES,
+    DYNAMIC_SPAN: DYNAMIC_SPAN,
+    DYNAMIC_FEATURES: DYNAMIC_FEATURES,
+    isListRuleset: isListRuleset,
+    dynamicFeature: dynamicFeature,
+    dynamicCounts: dynamicCounts,
     SCRIPT_PREFIX: SCRIPT_PREFIX,
     defaults: defaults,
     normalize: normalize,
@@ -704,6 +800,8 @@
     countMatches: countMatches,
     hostPatterns: hostPatterns,
     contentScriptPlan: contentScriptPlan,
+    scriptletHosts: scriptletHosts,
+    YOUTUBE_CSS_HOSTS: YOUTUBE_CSS_HOSTS,
     hostCandidates: hostCandidates,
     cssForHost: cssForHost,
     needsGeneric: needsGeneric,

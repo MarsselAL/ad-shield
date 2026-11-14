@@ -14,4 +14,8 @@ Ad Shield's own code is MIT licensed (see `LICENSE`). The package also contains:
 
 The converter (`tools/filterlist.py`) and the autoconsent integration
 (`src/background/general.js`) are this project's own code; no code from uBlock Origin (Lite) or
-AdGuard is included.
+AdGuard is included. The scriptlets (`src/scriptlets/`) are also our own code, written from the
+public descriptions of what such scriptlets do; the YouTube object paths, URL patterns
+(`rules/scriptlets.json`, `rules/youtube.json`) and CSS selectors (`rules/cosmetic/youtube.css`,
+mostly as listed in EasyList's `easylist_specific_hide.txt`) are facts about YouTube's pages,
+collected in `docs/research-v2.md` section B.

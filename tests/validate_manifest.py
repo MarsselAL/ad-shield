@@ -13,6 +13,9 @@ Checks:
     of the generated general rulesets passes tests/dnr_schema.py; the curated rulesets
     (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
     third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
+  - the hand-written youtube ruleset blocks only its two paths; redirect rules exist only in
+    removeparam.json and have its exact shape (tests/dnr_schema.removeparam_ruleset_errors); the scriptlet bundle exists and the
+    scriptlet sources contain no URLs
 """
 import ast
 import hashlib
@@ -25,7 +28,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dnr_schema  # noqa: E402
 
-ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback"}
+# alarms: weekly filter-list update; unlimitedStorage: the updated lists' rules and site data
+# (~5 MB) next to the 10 MB default quota.
+ALLOWED_PERMISSIONS = {"storage", "scripting", "declarativeNetRequest", "declarativeNetRequestFeedback", "alarms",
+                       "unlimitedStorage"}
 ALLOWED_HOSTS = {"*://*.twitch.tv/*", "*://*.ttvnw.net/*", "<all_urls>"}
 TWITCH_RULESETS = ["client_ads", "trackers"]
 GENERATED_RULESET_RE = dnr_schema.GENERATED_RULESET_RE
@@ -82,7 +88,7 @@ def main():
         return report()
 
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
-    check(m.get("version") == "1.0.0", "version must be 1.0.0")
+    check(m.get("version") == "1.1.0", "version must be 1.1.0")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
     check(m.get("name") == "Ad Shield", "name must be Ad Shield")
     check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")
@@ -117,17 +123,56 @@ def main():
                   "service worker must not register content scripts dynamically (they are in manifest.json)")
             check("/src/background/general.js" in src and "/src/shared/blocking.js" in src,
                   "service worker must load src/shared/blocking.js and src/background/general.js")
+            order = ["/src/shared/blocking.js", "/src/shared/userfilters.js", "/src/shared/filterlist.js", "/src/shared/lists.js",
+                     "/src/background/general.js", "/src/background/updater.js"]
+            pos = [src.find(f) for f in order]
+            check(all(p >= 0 for p in pos) and pos == sorted(pos),
+                  "service worker must load %s in this order" % ", ".join(order))
     gen = os.path.join(ROOT, "src", "background", "general.js")
     if os.path.isfile(gen):
         gsrc = open(gen, encoding="utf-8").read()
         for legacy in ("tas-page-main", "tas-bridge-isolated"):
             check(legacy not in gsrc, "general.js must not touch the Twitch script id " + legacy)
+    upd = os.path.join(ROOT, "src", "shared", "lists.js")
+    if os.path.isfile(upd):
+        urls = sorted(set(re.findall(r"https?://[^'\"\s]+", open(upd, encoding="utf-8").read())))
+        check(urls == ["https://easylist.to/easylist/easylist.txt", "https://easylist.to/easylist/easyprivacy.txt",
+                       "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"],
+              "src/shared/lists.js may only name the three list URLs, got %s" % urls)
+    for bg_file in ("general.js", "updater.js", "service-worker.js"):
+        bp = os.path.join(ROOT, "src", "background", bg_file)
+        if os.path.isfile(bp):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(bp, encoding="utf-8").read().split("*/", 1)[1]),
+                  "src/background/%s must not contain URLs in code (fetches only via lists.js)" % bg_file)
     blk = os.path.join(ROOT, "src", "shared", "blocking.js")
     if os.path.isfile(blk):
         bsrc = open(blk, encoding="utf-8").read()
         for f in re.findall(r"'((?:rules|src|vendor)/[^']+\.(?:js|css|json))'", bsrc):
             exists(f, "registered content-script file")
         check("ALLOW_ID_BASE = 500000" in bsrc, "blocking.js ALLOW_ID_BASE must match tools/filterlist.py")
+        # Our MAIN-world scriptlets: generated bundle registered by blocking.contentScriptPlan.
+        check("'build/scriptlets-main.js'" in bsrc and "world: 'MAIN'" in bsrc, "blocking.js must register build/scriptlets-main.js in the MAIN world")
+        exists("build/scriptlets-main.js", "scriptlet bundle (run python3 tools/build.py)")
+    # Element picker: injected by the popup on click only (never registered), no network use.
+    pop = os.path.join(ROOT, "src", "popup", "popup.js")
+    if os.path.isfile(pop):
+        picker_files = re.findall(r"files: \[([^\]]*)\]", open(pop, encoding="utf-8").read())
+        names = re.findall(r"'([^']+)'", picker_files[0]) if picker_files else []
+        check(names == ["src/shared/selector.js", "src/content/picker.js"],
+              "popup.js must inject exactly src/shared/selector.js then src/content/picker.js, got %s" % names)
+        for f in names:
+            exists(f, "element picker file")
+    for f in ("src/content/picker.js", "src/shared/selector.js", "src/shared/userfilters.js"):
+        p = exists(f, "element picker / My filters source")
+        if os.path.isfile(p):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(p, encoding="utf-8").read()), "%s must not contain URLs" % f)
+    sl_rules = load_json("rules/scriptlets.json")
+    check(isinstance(sl_rules, dict) and sl_rules.get("version") == 1, "rules/scriptlets.json must have version 1")
+    for f in ("src/scriptlets/lib.js", "src/scriptlets/runner.js"):
+        p = exists(f, "scriptlet source")
+        if os.path.isfile(p):
+            check(not re.search(r"https?://[A-Za-z0-9]", open(p, encoding="utf-8").read()),
+                  "%s must not contain URLs (scriptlets never fetch anything themselves)" % f)
     fl = os.path.join(ROOT, "tools", "filterlist.py")
     if os.path.isfile(fl):
         check("ALLOW_ID_BASE = 500000" in open(fl, encoding="utf-8").read(), "tools/filterlist.py ALLOW_ID_BASE changed")
@@ -192,7 +237,7 @@ def main():
     check(len(ids) == len(set(ids)), "duplicate ruleset ids")
     general = [i for i in ids if i not in TWITCH_RULESETS]
     check(all(GENERATED_RULESET_RE.match(i) for i in general), "unexpected ruleset ids %s" % general)
-    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip") + dnr_schema.CURATED_RULESETS:
+    for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip", dnr_schema.REMOVEPARAM_RULESET) + dnr_schema.CURATED_RULESETS:
         check(want in general, "ruleset %s missing" % want)
     if all(GENERATED_RULESET_RE.match(i) for i in general):
         check(general == sorted(general, key=dnr_schema.general_order_key),
@@ -212,6 +257,22 @@ def main():
         regexes += dnr_schema.regex_count(rules)
         if r.get("enabled"):
             enabled_rules += len(rules)
+        if r.get("id") == "youtube":
+            # Hand-written: only the two safe YouTube ad paths (docs/research-v2.md B.5); never
+            # /api/stats/ or get_drm_license (both break playback / "free with ads" films).
+            check(r.get("enabled") is True, "youtube ruleset must be enabled by default")
+            flt = sorted(x.get("condition", {}).get("urlFilter", "") for x in rules if isinstance(x, dict))
+            check(flt == ["||youtube.com/pagead/", "||youtube.com/youtubei/v1/player/ad_break"],
+                  "rules/youtube.json must block exactly /pagead/ and /youtubei/v1/player/ad_break, got %s" % flt)
+            check(all(x.get("action") == {"type": "block"} and set(x.get("condition", {})) == {"urlFilter"} for x in rules if isinstance(x, dict)),
+                  "rules/youtube.json: plain block rules only (no resourceTypes: main_frame is never blocked)")
+        if r.get("id") == dnr_schema.REMOVEPARAM_RULESET:
+            check(r.get("enabled") is True, "removeparam ruleset must be enabled by default")
+            for msg in dnr_schema.removeparam_ruleset_errors(rules, r.get("path")):
+                errors.append(msg)
+        else:
+            check(not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
+                  "%s: redirect rules are only allowed in rules/removeparam.json" % r.get("path"))
         if r.get("id") in dnr_schema.CURATED_RULESETS:
             check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
             for msg in dnr_schema.curated_ruleset_errors(rules, r.get("path")):

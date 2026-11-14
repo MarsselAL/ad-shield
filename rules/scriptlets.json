@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "about": "Ad Shield's own scriptlet rules (MIT). Each rule: hosts (each covers its subdomains) and scriptlets ([name, ...string args]) from src/scriptlets/lib.js. Built into build/scriptlets-main.js by tools/build.py; shipped in the package, never downloaded. Object paths and URL patterns: docs/research-v2.md section B.",
+  "rules": [
+    {
+      "id": "youtube",
+      "about": "Ad data removed before the player sees it: the page-embedded player response and initial data (setter traps), every JSON.parse / Response.json (player keys always; feed and Shorts ad items only in API responses, which have responseContext), and the youtubei fetch / XHR responses. Plus the onAbnormalityDetected reporter defused and the web_streaming_watch flag off (research B recipe 1-7).",
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com",
+        "youtubekids.com"
+      ],
+      "scriptlets": [
+        [
+          "prune-on-assign",
+          "ytInitialPlayerResponse",
+          "adPlacements adSlots playerAds"
+        ],
+        [
+          "prune-on-assign",
+          "ytInitialData",
+          "..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"
+        ],
+        [
+          "json-prune",
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"
+        ],
+        [
+          "json-prune",
+          "..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "responseContext"
+        ],
+        [
+          "json-prune-fetch-response",
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
+        ],
+        [
+          "json-prune-xhr-response",
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
+        ],
+        [
+          "prevent-promise-then-callback",
+          "onAbnormalityDetected"
+        ],
+        [
+          "set-constant",
+          "ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch",
+          "false"
+        ]
+      ]
+    },
+    {
+      "id": "youtube-skip",
+      "about": "Fallback for ads that still play (e.g. server-side inserted): mute, jump to the end of the ad, click Skip; unmute afterwards (research B recipe 11).",
+      "hosts": [
+        "youtube.com"
+      ],
+      "scriptlets": [
+        [
+          "youtube-ad-skip"
+        ]
+      ]
+    }
+  ]
+}

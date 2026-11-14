@@ -7,14 +7,18 @@ List (converter: tools/filterlist.py, our own code).
     python3 -I tools/build_rules.py --lists DIR     use DIR/easylist.txt, DIR/easyprivacy.txt,
                                                     DIR/easylist-cookie.txt (offline rebuild)
     python3 -I tools/build_rules.py --curated-only  only rebuild the curated rulesets from
-                                                    rules/curated_hosts.txt (no download; the
-                                                    other generated files stay as they are)
+                                                    rules/curated_hosts.txt and the tracking-
+                                                    parameter ruleset from rules/removeparams.txt
+                                                    (no download; the other generated files stay
+                                                    as they are)
 
 Writes (all committed, so the extension works offline and needs no remote config):
     rules/ads_N.json, rules/privacy_N.json, rules/cookies_N.json   DNR block/allow rulesets
     rules/cookie_strip.json                                        DNR modifyHeaders ruleset
     rules/ads_curated.json, rules/privacy_curated.json             DNR block rulesets from our own
                                                                    rules/curated_hosts.txt (tools/curated.py)
+    rules/removeparam.json                                         DNR redirect ruleset (queryTransform) from
+                                                                   our own rules/removeparams.txt (tools/removeparam.py)
     rules/cosmetic/ads_generic.css, rules/cosmetic/cookies_generic.css
     rules/cosmetic/generic.json, rules/cosmetic/site.json          cosmetic data for the worker
     rules/build-info.json                                          list versions, counts, skips
@@ -34,6 +38,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import curated as C  # noqa: E402
 import filterlist as F  # noqa: E402
+import removeparam as R  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LISTS = [
@@ -51,11 +56,14 @@ TWITCH_RULESETS = [
 # (full or --curated-only) but never deleted by the cleanup.
 GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
 CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
-_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3}
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+# Hand-written rulesets (not generated, never deleted): kept in the manifest by every build.
+HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"}]
 
 
 def ruleset_order_key(rid):
-    """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip."""
+    """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip,
+    youtube, removeparam."""
     if rid in _GROUPS:
         return (_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -84,12 +92,17 @@ def write_curated(root=ROOT):
         write_rules(os.path.join(root, "rules", rid + ".json"), rs)
         entries.append({"id": rid, "enabled": True, "path": "rules/%s.json" % rid})
         metas[rid] = {"rules": len(rs), "block": len(rs), "allow": 0, "regex": 0}
+    # Our tracking-parameter ruleset is rebuilt alongside (also offline).
+    rp_entry, rp_meta, _ = R.write(root)
+    entries.append(rp_entry)
+    metas[R.RULESET_ID] = rp_meta
     return entries, metas, cinfo
 
 
 def add_curated_info(info, metas, cinfo):
     info.setdefault("rulesets", {}).update(metas)
     info["curated"] = cinfo
+    info["removeparam"] = {"params": metas.get(R.RULESET_ID, {}).get("params", 0)}
     info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
     return info
 
@@ -104,10 +117,13 @@ def curated_only(root=ROOT):
     """Regenerate only the curated rulesets, the manifest rule_resources and the `curated` entry of
     rules/build-info.json. Nothing is downloaded; the other generated files are not touched."""
     read_curated(root)  # fail before writing anything
+    R.read(root)
     with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
         current = json.load(fh).get("declarative_net_request", {}).get("rule_resources", [])
     twitch = {r["id"] for r in TWITCH_RULESETS}
-    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS]
+    hand = {r["id"] for r in HAND_RULESETS}
+    keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS and r.get("id") not in hand
+            and r.get("id") != R.RULESET_ID]
     entries, metas, cinfo = write_curated(root)
     info_path = os.path.join(root, "rules", "build-info.json")
     info = {}
@@ -116,7 +132,7 @@ def curated_only(root=ROOT):
             info = json.load(fh)
     add_curated_info(info, metas, cinfo)
     write_build_info(info, root)
-    changed = update_manifest(order_rulesets(keep + entries), root)
+    changed = update_manifest(order_rulesets(keep + entries + HAND_RULESETS), root)
     return info, changed
 
 
@@ -142,16 +158,22 @@ def write_rules(path, rules):
         fh.write("\n]\n")
 
 
-def convert(lists_dir, root=ROOT):
-    info = {"lists": {}, "rulesets": {}, "cosmetic": {}, "cookieStrip": {}}
+def convert_texts(texts):
+    """Pure conversion of the three lists. texts: {list key: file text}. Returns a dict:
+    lists      {key: build-info entry without url, plus "rules" (block ids from 1, allow ids
+               from ALLOW_ID_BASE + 1, before splitting into rulesets)}
+    site       the rules/cosmetic/site.json object
+    generic    {"ads": [...], "cookies": [...]} generic selectors (rules/cosmetic/generic.json)
+    cosmetic   {"ads": CosmeticCollector, "cookies": CosmeticCollector} (finished)
+    exceptions {host: set(selectors)}; cookieDomains: EasyPrivacy ||host^$third-party hosts.
+    src/shared/filterlist.js ports this function; tests/fixtures/lists/golden.json (written by
+    tools/make_golden.py) keeps the two in step."""
+    out = {"lists": {}}
     cosmetic = {"ads": F.CosmeticCollector(), "cookies": F.CosmeticCollector()}
     generichide, elemhide = set(), set()
-    rulesets = []
     cookie_domains = []
-    for key, name, url, prefix, category in LISTS:
-        path = os.path.join(lists_dir, name)
-        with open(path, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
+    for key, _name, _url, _prefix, category in LISTS:
+        lines = texts[key].splitlines()
         skipped = collections.Counter()
         parsed = []
         n_filters = n_cos = 0
@@ -185,6 +207,52 @@ def convert(lists_dir, root=ROOT):
                 skipped[str(e)] += 1
         rules, st = F.build_network_rules(parsed)
         skipped["regex-cap"] += st["regex-cap"]
+        out["lists"][key] = {
+            "version": header_value(lines, "Version") or header_value(lines, "Last modified"),
+            "licence": header_value(lines, "Licence") or header_value(lines, "License"),
+            "filters": n_filters,
+            "networkConverted": len(parsed),
+            "cosmeticConverted": n_cos,
+            "mergedDomains": st["merged-domains"],
+            "duplicates": st["duplicates"],
+            "skipped": dict(sorted(skipped.items())),
+            "skippedTotal": sum(skipped.values()),
+            "rules": rules,
+        }
+    exceptions = {}
+    for c in cosmetic.values():
+        c.finish()
+        for h, sels in c.exceptions.items():
+            exceptions.setdefault(h, set()).update(sels)
+    generic_all = set(cosmetic["ads"].generic) | set(cosmetic["cookies"].generic)
+    generic_exc_hosts = sorted(h for h, sels in exceptions.items() if sels & generic_all)
+    out["site"] = {
+        "v": 1,
+        "ads": {h: s for h, s in sorted(cosmetic["ads"].site.items())},
+        "cookies": {h: s for h, s in sorted(cosmetic["cookies"].site.items())},
+        "exceptions": {h: sorted(s) for h, s in sorted(exceptions.items())},
+        "genericExceptionHosts": generic_exc_hosts,
+        "generichide": sorted(generichide),
+        "elemhide": sorted(elemhide),
+    }
+    out["generic"] = {"ads": cosmetic["ads"].generic, "cookies": cosmetic["cookies"].generic}
+    out["cosmetic"] = cosmetic
+    out["exceptions"] = exceptions
+    out["cookieDomains"] = cookie_domains
+    return out
+
+
+def convert(lists_dir, root=ROOT):
+    texts = {}
+    for key, name, _url, _prefix, _category in LISTS:
+        with open(os.path.join(lists_dir, name), encoding="utf-8") as fh:
+            texts[key] = fh.read()
+    conv = convert_texts(texts)
+    info = {"lists": {}, "rulesets": {}, "cosmetic": {}, "cookieStrip": {}}
+    rulesets = []
+    for key, name, url, prefix, category in LISTS:
+        entry = dict(conv["lists"][key])
+        rules = entry.pop("rules")
         chunks = F.split_rulesets(rules)
         for i, chunk in enumerate(chunks):
             rid = "%s_%d" % (prefix, i + 1)
@@ -196,19 +264,10 @@ def convert(lists_dir, root=ROOT):
                 "allow": sum(1 for r in chunk if r["id"] >= F.ALLOW_ID_BASE),
                 "regex": sum(1 for r in chunk if "regexFilter" in r["condition"]),
             }
-        info["lists"][key] = {
-            "url": url,
-            "version": header_value(lines, "Version") or header_value(lines, "Last modified"),
-            "licence": header_value(lines, "Licence") or header_value(lines, "License"),
-            "filters": n_filters,
-            "networkConverted": len(parsed),
-            "cosmeticConverted": n_cos,
-            "mergedDomains": st["merged-domains"],
-            "duplicates": st["duplicates"],
-            "skipped": dict(sorted(skipped.items())),
-            "skippedTotal": sum(skipped.values()),
-        }
+        entry["url"] = url
+        info["lists"][key] = entry
 
+    cookie_domains = conv["cookieDomains"]
     strip, n_strip = F.cookie_strip_rules(cookie_domains, COOKIE_STRIP_CAP)
     write_rules(os.path.join(root, "rules", "cookie_strip.json"), strip)
     rulesets.append({"id": "cookie_strip", "enabled": True, "path": "rules/cookie_strip.json"})
@@ -216,32 +275,17 @@ def convert(lists_dir, root=ROOT):
     info["cookieStrip"] = {"candidates": len(set(cookie_domains)), "cap": COOKIE_STRIP_CAP, "domains": n_strip}
 
     # Cosmetic data
+    cosmetic = conv["cosmetic"]
+    site = conv["site"]
     cdir = os.path.join(root, "rules", "cosmetic")
     os.makedirs(cdir, exist_ok=True)
-    exceptions = {}
-    for c in cosmetic.values():
-        c.finish()
-        for h, sels in c.exceptions.items():
-            exceptions.setdefault(h, set()).update(sels)
-    generic_all = set(cosmetic["ads"].generic) | set(cosmetic["cookies"].generic)
-    generic_exc_hosts = sorted(h for h, sels in exceptions.items() if sels & generic_all)
     for cat, c in cosmetic.items():
         with open(os.path.join(cdir, "%s_generic.css" % cat), "w", encoding="utf-8") as fh:
             fh.write("/* GENERATED by tools/build_rules.py from %s; see rules/NOTICE.md */\n" %
                      ("EasyList" if cat == "ads" else "the EasyList Cookie List"))
             fh.write(F.generic_css(c.generic))
     with open(os.path.join(cdir, "generic.json"), "w", encoding="utf-8") as fh:
-        json.dump({"ads": cosmetic["ads"].generic, "cookies": cosmetic["cookies"].generic}, fh,
-                  separators=(",", ":"), ensure_ascii=False)
-    site = {
-        "v": 1,
-        "ads": {h: s for h, s in sorted(cosmetic["ads"].site.items())},
-        "cookies": {h: s for h, s in sorted(cosmetic["cookies"].site.items())},
-        "exceptions": {h: sorted(s) for h, s in sorted(exceptions.items())},
-        "genericExceptionHosts": generic_exc_hosts,
-        "generichide": sorted(generichide),
-        "elemhide": sorted(elemhide),
-    }
+        json.dump(conv["generic"], fh, separators=(",", ":"), ensure_ascii=False)
     with open(os.path.join(cdir, "site.json"), "w", encoding="utf-8") as fh:
         json.dump(site, fh, separators=(",", ":"), ensure_ascii=False)
     for cat, c in cosmetic.items():
@@ -250,10 +294,10 @@ def convert(lists_dir, root=ROOT):
             "siteHosts": len(c.site),
             "siteSelectors": sum(len(v) for v in c.site.values()),
         }
-    info["cosmetic"]["exceptionHosts"] = len(exceptions)
-    info["cosmetic"]["genericExceptionHosts"] = len(generic_exc_hosts)
-    info["cosmetic"]["generichide"] = len(generichide)
-    info["cosmetic"]["elemhide"] = len(elemhide)
+    info["cosmetic"]["exceptionHosts"] = len(conv["exceptions"])
+    info["cosmetic"]["genericExceptionHosts"] = len(site["genericExceptionHosts"])
+    info["cosmetic"]["generichide"] = len(site["generichide"])
+    info["cosmetic"]["elemhide"] = len(site["elemhide"])
     info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
     return rulesets, info
 
@@ -281,6 +325,7 @@ def print_summary(info, changed):
     c = info["curated"]
     print("curated          ads %d hosts (%d excluded), trackers %d hosts (%d excluded), never %d" % (
         c["ads"]["hosts"], c["ads"]["exclusions"], c["trackers"]["hosts"], c["trackers"]["exclusions"], c["never"]))
+    print("removeparam      %d parameter names" % info["removeparam"]["params"])
     print("total static rules", info["totalStaticRules"], "| manifest", "updated" if changed else "unchanged")
 
 
@@ -289,7 +334,7 @@ def main(argv):
     if len(argv) == 2 and argv[1] == "--curated-only":
         try:
             info, changed = curated_only()
-        except C.CuratedError as e:
+        except (C.CuratedError, R.RemoveparamError) as e:
             print("ERROR", e)
             return 1
         print_summary(info, changed)
@@ -301,7 +346,8 @@ def main(argv):
         return 2
     try:
         read_curated()  # fail before downloading or deleting anything
-    except C.CuratedError as e:
+        R.read()
+    except (C.CuratedError, R.RemoveparamError) as e:
         print("ERROR", e)
         return 1
     if lists_dir is None:
@@ -315,7 +361,7 @@ def main(argv):
     entries, metas, cinfo = write_curated()
     add_curated_info(info, metas, cinfo)
     write_build_info(info)
-    changed = update_manifest(order_rulesets(rulesets + entries))
+    changed = update_manifest(order_rulesets(rulesets + entries + HAND_RULESETS))
     print_summary(info, changed)
     return 0
 

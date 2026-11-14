@@ -16,7 +16,28 @@ JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configu
 - **Cookie banners: hide**: blocks consent-banner scripts and hides cookie notices.
 - **Cookie banners: auto-reject** (off by default): DuckDuckGo's autoconsent clicks "reject" /
   "only necessary" on known consent pop-ups.
+- **YouTube ads and anti-adblock walls** (on with Ads; option "Fix YouTube ads and anti-adblock
+  walls (page scripts)"): our own small page scripts ("scriptlets", `rules/scriptlets.json`)
+  remove the ad entries (`adPlacements`, `playerAds`, `adSlots`, feed and Shorts ad items) from
+  YouTube's player and feed data before the page uses it, defuse the player's anti-adblock
+  report, and, if an ad still plays, mute it, jump to its end and press Skip. Plus YouTube-only
+  hiding CSS and two network rules (`/pagead/`, `/youtubei/v1/player/ad_break`). They run on
+  youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
+- **Tracking parameters** (option "Remove tracking parameters from links (utm_*, fbclid,
+  gclid…)", on by default): when a page or frame opens with one of 46 known tracking parameters
+  in its address (UTM tags, ad click ids such as `fbclid`, `gclid`, `msclkid`, e-mail tracking
+  such as `mc_eid`, `_hsenc`), Chrome loads it without them; other parameters are kept. Our own
+  list (`rules/removeparams.txt`, MIT), one static redirect ruleset (`removeparam`). Generic
+  names (`ref`, `si`, `source`, ...) and Marketo's `mkt_tok` (unsubscribe links) are left alone.
+- **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
+  "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
+  kept under **My filters** on the options page (`example.com##.selector`, editable there) and
+  applied on every visit to that site. Per site only; top frame only.
+- **Weekly filter-list updates** (on by default, can be switched off): downloads the three lists
+  from their public addresses once a week, converts them in the browser and installs them as
+  dynamic rules; "Update now" and "Use built-in lists" on the options page. The generic
+  element-hiding CSS stays as built into the extension.
 
 **On Twitch** (unchanged): when a stream playlist contains an ad, the extension asks Twitch for
 the same stream with a different player type (a "backup stream") and plays that copy if it has
@@ -35,18 +56,21 @@ in the automated run, so Twitch ad blocking was not yet proven there.
 3. Click **Load unpacked** and choose the folder that contains `manifest.json`.
 4. Reload tabs that were already open.
 
-## Install on another PC (Windows or Linux; also Edge or Brave)
+## Share it / install on another computer (free, no store)
 
-1. On this computer run `python3 tools/package.py`. It makes `dist/ad-shield-<version>.zip`.
-2. Copy the zip to the other PC (USB stick, cloud drive, or email it to yourself).
-3. Unzip it. You get a folder `ad-shield` that contains `manifest.json`.
-4. Open `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`), turn on
-   **Developer mode**, click **Load unpacked**, and pick the `ad-shield` folder.
-5. **Keep the folder.** The browser reads the extension from it; if you delete or move it,
-   the extension stops working.
+Ad Shield is not on the Chrome Web Store; the zip is the way to share it.
 
-To update: replace the folder contents with the new version, then click the reload icon on the
-extension's card in `chrome://extensions`.
+1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
+   `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
+   Tests, tools, docs and test results are left out.
+2. Send the zip (USB stick, cloud drive, e-mail).
+3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
+   `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`), turn on
+   **Developer mode**, **Load unpacked**, pick the `ad-shield` folder. It also covers macOS, the
+   "developer mode extensions" message at browser start (expected; close it, do not disable),
+   pinning the icon, the settings, weekly list updates, updating to a new zip (replace the folder
+   contents, keep the path, press reload on the extension card: settings are kept) and
+   uninstalling.
 
 ## How it works
 
@@ -56,8 +80,12 @@ General blocking (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
   converts them with our own converter (`tools/filterlist.py`) into static DNR rulesets in
   `rules/` (`ads_1`, `privacy_1`, `cookies_1`, `cookie_strip`) and cosmetic data in
   `rules/cosmetic/`. It also turns our own hand-written host list `rules/curated_hosts.txt` into
-  `ads_curated` and `privacy_curated` (`--curated-only` rebuilds just those, offline). The output is committed, so the extension works offline. Lists are updated
-  only by rebuilding and shipping a new version.
+  `ads_curated` and `privacy_curated` (`--curated-only` rebuilds just those, offline). The output is committed, so the extension works offline.
+- Weekly updates: the background downloads the same three lists, converts them with a
+  JavaScript port of the converter (`src/shared/filterlist.js`, checked against the Python output
+  by a golden-file test) and installs them as dynamic rules in place of `ads_N` / `privacy_N` /
+  `cookies_N` (all three or none; sanity checks on versions and rule counts). The site-specific
+  hiding data is replaced too; the generic hiding CSS is not.
 - Generic element hiding is a CSS file registered as a content script: no JavaScript runs for it.
   Site-specific hiding: a tiny page script (top frame only) says hello, and the background
   injects that site's CSS with `chrome.scripting.insertCSS`. No MutationObserver, no polling.
@@ -66,6 +94,10 @@ General blocking (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)):
   snippets) as its documentation describes.
 - Allowlisted sites get one dynamic `allowAllRequests` rule and are excluded from all content
   scripts.
+- Scriptlets: `src/scriptlets/lib.js` (our own code, no GPL code) + the rules in
+  `rules/scriptlets.json` are built into `build/scriptlets-main.js`, registered in the page's
+  MAIN world at `document_start` (all frames) for the hosts named in the rules only. Shipped in
+  the package; nothing is downloaded.
 
 Twitch:
 
@@ -89,9 +121,11 @@ Twitch:
 | `privacy_curated` | 1 (45 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
+| `youtube` | 2 | 0 | `rules/youtube.json` (ours, hand-written) |
+| `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,824 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,918 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.
@@ -100,7 +134,8 @@ Skipped (counted in `rules/build-info.json`): EasyList 4,156 of 77,788 filters (
 `$popup` and 572 `$document` page blocks DNR cannot express, 295 procedural/scriptlet, 240
 wildcard-TLD domains); EasyPrivacy 75 of 56,631 (mostly `$redirect`); cookie list 79 of
 25,382. Not converted at all: procedural cosmetic filters (`#?#`, `:has-text()`), scriptlets
-(`##+js`, `#$#`), `$redirect`, `$csp`, `$removeparam`, `$rewrite`, `$popup`, complex regex.
+(`##+js`, `#$#`), `$redirect`, `$csp`, `$removeparam` (our own parameter list is used instead),
+`$rewrite`, `$popup`, complex regex.
 
 To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests/run.sh`.
 
@@ -109,7 +144,7 @@ To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests
 | Permission | Why |
 |---|---|
 | `storage` | Settings, allowlist and statistics. |
-| `scripting` | Registers the cosmetic CSS / page script / autoconsent content scripts; injects site CSS; runs autoconsent's page-world snippets; removes leftover dynamic scripts of older versions. |
+| `scripting` | Registers the cosmetic CSS / page script / autoconsent content scripts; injects site CSS and My filters; injects the element picker when you click "Hide an element on this page"; runs autoconsent's page-world snippets; removes leftover dynamic scripts of older versions. |
 | `declarativeNetRequest` | Static rulesets in `rules/` and the dynamic allowlist rule. |
 | `declarativeNetRequestFeedback` | Popup counts via `getMatchedRules` and the badge count (see below). |
 | host `<all_urls>` | Needed for `modifyHeaders` (cookie stripping), for CSS on all sites and for autoconsent. |
@@ -132,12 +167,21 @@ requests itself); on Twitch tabs the Twitch count replaces it once a video ad wa
 
 ## Privacy
 
-- No proxies, no telemetry, no analytics, no remote configuration.
-- The background service worker makes no network requests; it only reads files from the
-  extension package.
-- The filter lists are downloaded only when you run `tools/build_rules.py` (and autoconsent only
-  with `tools/vendor_autoconsent.py`), never by the extension.
-- Settings and statistics stay in your browser (`chrome.storage`).
+- No telemetry, no analytics, no accounts, no remote configuration, no proxies.
+- The only network requests the extension itself makes:
+  - the weekly downloads of the three public filter lists
+    (`https://easylist.to/easylist/easylist.txt`, `https://easylist.to/easylist/easyprivacy.txt`,
+    `https://secure.fanboy.co.nz/fanboy-cookiemonster.txt`) while "Update filter lists
+    automatically" is on, or when you press "Update now". No cookies or other data are sent with
+    them. Switch the option off to stop them;
+  - on Twitch pages only, when a stream has an ad: requests to Twitch's own servers
+    (`gql.twitch.tv` for a playback token, `usher.ttvnw.net` for the playlist) for the same stream
+    as another player type ("backup stream"), sent from the Twitch page like the player's own.
+- The element picker, "My filters" and the tracking-parameter removal are fully local (no
+  requests; tracking parameters are removed by a browser rule before the page loads).
+- autoconsent is downloaded only when you run `tools/vendor_autoconsent.py`, never by the
+  extension.
+- Settings, the allowlist, "My filters" and statistics stay in your browser (`chrome.storage`).
 
 ## Settings and on/off switch
 
@@ -148,12 +192,16 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 |---|---|---|
 | Enabled | on | Master switch for everything (all-sites features and Twitch). |
 | Debug logging | off | `[TAS]` debug lines in the page and extension consoles (warnings/errors always). |
-| Ads | on | Rulesets `ads_*` + EasyList element hiding. |
+| Ads | on | Rulesets `ads_*` and `youtube` + EasyList element hiding + YouTube hiding CSS. |
+| Fix YouTube ads and anti-adblock walls (page scripts) | on | MAIN-world scriptlets on YouTube hosts (`build/scriptlets-main.js`); only while Ads is on. |
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
+| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 46 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Not counted in the popup. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
+| Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
+| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever Ad Shield is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
 | Block client-side ad requests | on | DNR ruleset `client_ads`: `edge.ads.twitch.tv` and Amazon's `apstag.js`, only for requests from twitch.tv pages. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host. |
@@ -168,11 +216,16 @@ Reload the tab after switching.
 
 ## Limitations
 
-- **Lists are as fresh as the last build.** There is no automatic list update (by design: no
-  remote configuration). Rebuild and reload to update.
-- DNR cannot express everything uBlock Origin can: pop-up blocking, scriptlets, procedural
-  cosmetic filters, `$redirect`/`$csp`/`$removeparam`, and most regex filters are skipped, so
-  some sites (especially anti-adblock walls) work less well than with uBlock Origin.
+- **Generic hiding CSS is as fresh as the last build.** The network rules and site-specific
+  hiding update weekly (option on by default); the generic element-hiding CSS only with a new
+  zip.
+- DNR cannot express everything uBlock Origin can: pop-up blocking, list scriptlets, procedural
+  cosmetic filters, `$redirect`/`$csp`, the lists' `$removeparam` (we strip our own fixed list of
+  46 tracking parameters instead), and most regex filters are skipped, so
+  some sites (especially anti-adblock walls) work less well than with uBlock Origin. Our own
+  scriptlets cover YouTube only; YouTube changes its data shapes often, so they can stop
+  working until a new release. Ads that YouTube stitches into the video stream (server-side,
+  "SSAP") cannot be removed: they are only muted (we do not seek, as that would skip the video).
 - Site-specific hiding is applied a moment after the page starts (it waits for the background),
   so an ad can flash briefly. It is applied in the top frame only; generic hiding runs in all
   frames.
@@ -185,7 +238,8 @@ Reload the tab after switching.
   at the start or end of an ad break. Ads may still appear when no ad-free backup is available.
 - Client-side Twitch ads (`twitch-maf-ad`) have nothing to strip; only the network block rule
   applies. VODs are only stripped; there is no backup stream for VODs.
-- Not on the Chrome Web Store. `clips.twitch.tv` is excluded. No Firefox build.
+- Not on the Chrome Web Store (on purpose: shared as a free zip, see above). `clips.twitch.tv` is
+  excluded. No Firefox build.
 - Do not run another ad blocker at the same time.
 
 ## When something changes
@@ -217,10 +271,19 @@ Then bump `version` in `manifest.json` and `src/config.js`, and reload the exten
 ## Tests
 
 - `bash tests/run.sh` – offline: JavaScriptCore unit tests, `tests/test_rules.py` (converter,
-  and every generated DNR rule checked against `tests/dnr_schema.py`) and the manifest check.
+  and every generated DNR rule checked against `tests/dnr_schema.py`), `tests/test_package.py`
+  (the zip: `INSTALL.txt` and every manifest file inside, no tests / tools / docs / results) and
+  the manifest check.
 - `python3 tools/live_test.py --smoke` – starts Chrome with a temporary profile and checks the
-  extension loads, the rulesets match test requests (`testMatchOutcome`, nothing is sent) and
-  the cosmetic CSS works on a page served from 127.0.0.1. No Twitch traffic.
+  extension loads, the rulesets match test requests (`testMatchOutcome`, nothing is sent),
+  the cosmetic CSS and the element picker (click, Enter, saved, hidden again after a reload) work
+  on a page served from 127.0.0.1, and one real navigation to
+  `https://example.com/?utm_source=x&fbclid=y&keep=1` ends at `https://example.com/?keep=1`.
+  No Twitch traffic.
+- `python3 -I tools/youtube_test.py [--only ext|noext]` – **makes real requests to YouTube**:
+  watches three videos for 30 s each in a fresh headless profile (consent: "Reject all") and
+  reports playback, `ad-showing`, the anti-adblock element and which ad keys were served and
+  which the page saw.
 - `python3 tools/live_test.py --live CHANNEL [--minutes N] [--vod URL] [--switch-to CH2]
   [--compare-without-extension]` – **makes real requests to Twitch.**
 
