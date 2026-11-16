@@ -203,6 +203,12 @@
       giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
       healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
       rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
+      // Frozen picture with sound (research-2026-11-13 C5/F7): the audio clock keeps currentTime
+      // moving while no video frames are decoded (or there is no video track: videoWidth 0).
+      frozenPictureMinAdvanceSec: 0.5, // playhead must advance at least this much per sample ...
+      frozenPictureMinFrames: 1,     // ... while fewer than this many frames were decoded
+      frozenPictureTicks: 4,         // this many such samples in a row = stalled ('frozen-picture')
+      frozenPictureWatchMs: 40000,   // a watch armed by ad-end lasts at least this long (the wedge follows breaks)
       repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
       maxReloadsPerWindow: 3,        // hard reloads per channel ...
       reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only

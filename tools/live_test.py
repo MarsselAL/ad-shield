@@ -684,7 +684,7 @@ def run_smoke(args):
                     break
                 time.sleep(0.25)
             report["sw_state_initial"] = st
-            check("manifest version 1.1.1", st and st.get("version") == "1.1.1", st and st.get("version"))
+            check("manifest version 1.1.2", st and st.get("version") == "1.1.2", st and st.get("version"))
             ids = sorted(s["id"] for s in st.get("scripts", [])) if st else None
             check("only the general content scripts are registered (Twitch ones are static in manifest.json)",
                   ids == GENERAL_SCRIPTS, ids)
