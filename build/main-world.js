@@ -206,6 +206,12 @@
       giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
       healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
       rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
+      // Frozen picture with sound (research-2026-11-13 C5/F7): the audio clock keeps currentTime
+      // moving while no video frames are decoded (or there is no video track: videoWidth 0).
+      frozenPictureMinAdvanceSec: 0.5, // playhead must advance at least this much per sample ...
+      frozenPictureMinFrames: 1,     // ... while fewer than this many frames were decoded
+      frozenPictureTicks: 4,         // this many such samples in a row = stalled ('frozen-picture')
+      frozenPictureWatchMs: 40000,   // a watch armed by ad-end lasts at least this long (the wedge follows breaks)
       repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
       maxReloadsPerWindow: 3,        // hard reloads per channel ...
       reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only
@@ -1974,21 +1980,27 @@
 // ---- src/page/recovery.js ----
 /*
  * Player recovery / health (MAIN world). docs/research-technique.md §5 and
- * docs/research-2026-11-13.md §2 (F2, F6, F9) / §4 items 2, 4, 5.
+ * docs/research-2026-11-13.md §1 C5, §2 (F2, F6, F7, F9) / §4 items 2, 4, 5.
  *
- * A watch is armed after every playlist switch (native <-> backup <-> stripped), every ad end,
- * and (while a backup/stripped playlist is served, and for rearmAfterNativeMs after returning
- * to native) on the main <video>'s waiting/stalled events and on pauses nobody asked for.
+ * A watch is armed after every playlist switch (native <-> backup <-> stripped), every ad end
+ * (for at least frozenPictureWatchMs), and (while a backup/stripped playlist is served, and for
+ * rearmAfterNativeMs after returning to native) on the main <video>'s waiting/stalled events
+ * and on pauses nobody asked for.
  * While armed, once per checkIntervalMs, and only while the tab is visible:
  *   - paused, and the pause did not follow a click/key on the player  -> play()
  *   - playhead stuck stallThresholdMs (3 ticks), not enough data (readyState < 3) and a hole
  *     in the buffered ranges ahead                                     -> seek over the hole
  *   - playhead stuck and less than drainingBufferSec buffered ahead   -> pause/play nudge
+ *   - picture frozen while the sound plays: playhead advancing but the decoded-frame counter
+ *     (getVideoPlaybackQuality / webkitDecodedFrameCount) flat, or videoWidth 0, for
+ *     frozenPictureTicks samples in a row (not when the viewer chose audio-only; no counter: not
+ *     checked)                                                         -> pause/play nudge
  *   at most maxSoftKicks per watch, minKickIntervalMs apart, maxKicksPerWindow overall;
  *   - still stuck hardReloadAfterMs after the first soft action       -> one hard player reload
  *     (React fiber setSrc, localStorage quality/volume/muted/lowLatency kept), not within
  *     reloadCooldownMs of the previous one, and not for a watch armed only by a break that
- *     stripped nothing / used a backup of the native quality (soft recovery only);
+ *     stripped nothing / used a backup of the native quality (soft recovery only) unless the
+ *     picture is frozen ('frozen-picture' may always reload);
  *   - then the watch ends with giveUpCooldownMs of no automatic actions (no loops).
  * play() rejected with NotAllowedError (no sound allowed): retried once muted, and the sound is
  * restored at the next click/key unless someone unmuted or the viewer had muted already.
@@ -2201,8 +2213,9 @@
         var t = now();
         if (t < cooldownUntil) return;
         var hard = !o || o.hard !== false;
+        var span = Math.max(rc.watchWindowMs, (o && o.minMs) || 0);
         if (watch) {
-          watch.until = Math.max(watch.until, t + rc.watchWindowMs);
+          watch.until = Math.max(watch.until, t + span);
           if (hard) watch.hard = true;
           if (channel) watch.channel = channel;
           return;
@@ -2210,8 +2223,10 @@
         var v = findVideo();
         watch = {
           channel: channel || lastChannel || '',
-          until: t + rc.watchWindowMs,
+          until: t + span,
           lastTime: v ? v.currentTime : -1,
+          lastFrames: v ? decodedFrames(v) : null,
+          frozenTicks: 0,
           lastAdvanceAt: t,
           healthySince: t,
           stallSince: null,
@@ -2225,6 +2240,43 @@
       } catch (e) {
         log.warn('recovery arm failed', e && e.message);
       }
+    }
+
+    /** Decoded video frames so far, or null when the browser exposes no counter. */
+    function decodedFrames(v) {
+      try {
+        if (typeof v.getVideoPlaybackQuality === 'function') {
+          var q = v.getVideoPlaybackQuality();
+          if (q && typeof q.totalVideoFrames === 'number') return q.totalVideoFrames;
+        }
+        if (typeof v.webkitDecodedFrameCount === 'number') return v.webkitDecodedFrameCount;
+      } catch (e) { /* ignore */ }
+      return null;
+    }
+
+    /** The viewer picked "Audio Only" (Twitch stores {"default":"audio_only"} in video-quality). */
+    function audioOnly() {
+      try {
+        var raw = win.localStorage.getItem('video-quality');
+        var q = raw ? JSON.parse(raw) : null;
+        return q === 'audio_only' || !!(q && q['default'] === 'audio_only');
+      } catch (e) { return false; }
+    }
+
+    /**
+     * One sample on a tick where the playhead advanced: true when it advanced at least
+     * frozenPictureMinAdvanceSec while (almost) no frames were decoded, or there is no picture
+     * at all (videoWidth 0). No frame counter: never true (research-2026-11-13 C5/F7).
+     */
+    function frozenPictureSample(v) {
+      var frames = decodedFrames(v);
+      var prev = watch.lastFrames;
+      watch.lastFrames = frames;
+      if (frames === null || prev === null || prev === undefined) return false;
+      if (v.currentTime - watch.lastTime < rc.frozenPictureMinAdvanceSec) return false;
+      if (frames < prev) return false; // counter restarted (new media source)
+      if (frames - prev >= rc.frozenPictureMinFrames && v.videoWidth !== 0) return false;
+      return !audioOnly();
     }
 
     function kicksAllowed(t) {
@@ -2371,32 +2423,50 @@
         // Hidden tab: browsers stop drawing video; never act then (research-2026-11-13 C5).
         if (!visible() || v.ended || userPaused(v)) {
           watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; watch.stallSince = null;
+          watch.lastFrames = decodedFrames(v); watch.frozenTicks = 0;
           return;
         }
+        var reason;
         if (!v.paused && Math.abs(v.currentTime - watch.lastTime) > 0.1) {
+          var frozen = frozenPictureSample(v);
           watch.lastTime = v.currentTime;
           watch.lastAdvanceAt = t;
-          watch.stallSince = null;
-          if (t - watch.healthySince >= rc.healthyResetMs) { watch.kicks = 0; watch.firstSoftAt = null; }
-          return;
+          if (!frozen) {
+            watch.frozenTicks = 0;
+            watch.stallSince = null;
+            if (t - watch.healthySince >= rc.healthyResetMs) { watch.kicks = 0; watch.firstSoftAt = null; }
+            return;
+          }
+          // Sound plays, the picture does not: no healthy reset while this lasts.
+          watch.healthySince = t;
+          if (++watch.frozenTicks < rc.frozenPictureTicks) return;
+          watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
+          reason = 'frozen-picture';
+          if (watch.stallSince === null) watch.stallSince = t;
+        } else {
+          watch.lastFrames = decodedFrames(v);
+          watch.frozenTicks = 0;
+          watch.healthySince = t;
+          // Keep watching while frozen; the ladder below always ends in giveUp, so this is bounded.
+          watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
+          reason = v.paused ? 'paused' : 'stall';
+          if (t - watch.lastAdvanceAt < (v.paused ? rc.pausedStallMs : rc.stallThresholdMs)) return;
+          if (watch.stallSince === null) watch.stallSince = t;
         }
-        watch.healthySince = t;
-        // Keep watching while frozen; the ladder below always ends in giveUp, so this is bounded.
-        watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
-        var reason = v.paused ? 'paused' : 'stall';
-        if (t - watch.lastAdvanceAt < (v.paused ? rc.pausedStallMs : rc.stallThresholdMs)) return;
-        if (watch.stallSince === null) watch.stallSince = t;
+        // A frozen picture is broken whatever armed the watch: it may always end in a reload.
+        var mayReload = watch.hard || reason === 'frozen-picture';
         // Stalled: soft actions first.
         if (watch.kicks < rc.maxSoftKicks && kicksAllowed(t)) {
           if (t - watch.lastKickAt < rc.minKickIntervalMs) return;
           var draining = ahead(v) < rc.drainingBufferSec;
           var gap = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) && gapTarget(v) !== null;
-          if (reason === 'paused' || draining || gap) {
+          if (reason === 'paused' || reason === 'frozen-picture' || draining || gap) {
             watch.kicks++;
             watch.lastKickAt = t;
             if (watch.firstSoftAt === null) watch.firstSoftAt = t;
             kickTimes.push(t);
-            var action = softKick(v, reason);
+            var action = softKick(v, reason); // 'frozen-picture': never paused here, so a pause/play nudge
+            if (reason === 'frozen-picture') action = reason;
             log.debug('stall after playlist switch:', action);
             emit('stall-kick', { channel: watch.channel, action: action });
             return;
@@ -2404,12 +2474,13 @@
         }
         // Soft actions used up (or none fits): the hard reload, if this watch may do one.
         var since = watch.firstSoftAt !== null ? watch.firstSoftAt : watch.stallSince;
-        if (!watch.reloaded && watch.hard && t - since >= rc.hardReloadAfterMs) {
+        if (!watch.reloaded && mayReload && t - since >= rc.hardReloadAfterMs) {
           if (t - lastReloadAt < rc.reloadCooldownMs) return;
           var ch = watch.channel;
           watch.reloaded = true;
           watch.lastAdvanceAt = t;
           watch.stallSince = null;
+          watch.frozenTicks = 0;
           if (degraded[ch]) { giveUp(t); return; }
           if (limiter.allow(ch)) {
             log.debug('still stalled: player reload');
@@ -2420,7 +2491,7 @@
           }
           return;
         }
-        if (watch.reloaded || !watch.hard) {
+        if (watch.reloaded || !mayReload) {
           // Nothing left to try for this watch.
           if (t - since >= rc.hardReloadAfterMs) giveUp(t);
         }
@@ -2456,8 +2527,9 @@
           arm(d.channel, { hard: serving === 'stripped' || (serving !== 'native' && d.matched === false) });
         } else if (name === 'ad-end') {
           // Prefer soft recovery when nothing was stripped or the backup matched native quality.
+          // Watch longer than usual: the frozen-picture wedge shows up right after breaks.
           var soft = d.outcome === 'none' || (d.outcome === 'backup' && d.matched);
-          arm(d.channel, { hard: !soft });
+          arm(d.channel, { hard: !soft, minMs: rc.frozenPictureWatchMs });
         } else if (name === 'segment-repeat') {
           repeatKick();
         }

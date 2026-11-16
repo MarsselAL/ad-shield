@@ -1,6 +1,7 @@
 /*
  * Recovery: watch after a playlist switch, user-intent tracking, play() rejection, buffer-gap
- * seek, soft actions before a rate-limited hard reload, cooldown, degrade, repeat restart.
+ * seek, soft actions before a rate-limited hard reload, cooldown, degrade, repeat restart,
+ * frozen picture with sound (decoded-frame counter flat or videoWidth 0).
  */
 loadSrc('src/config.js', 'src/shared/logger.js', 'src/page/recovery.js');
 var ns = __TAS__;
@@ -31,9 +32,11 @@ function makeEnv(isEnabled, o) {
   };
   env.state = { setSrc: function (x) { env.reloads++; env.lastSetSrc = x; }, setInitialPlaybackSettings: function () {} };
   env.player = { play: function () {}, isPaused: function () { return true; } }; // the player's own flag is not trusted
+  env.store = o.store || null; // { key: value } for win.localStorage
+  var localStorage = env.store ? { getItem: function (k) { return Object.prototype.hasOwnProperty.call(env.store, k) ? env.store[k] : null; } } : null;
   env.rec = ns.recovery.createRecovery({
     cfg: cfg, log: quietLog, doc: env.doc,
-    win: { localStorage: null, setTimeout: function () {} },
+    win: { localStorage: localStorage, setTimeout: function () {} },
     now: function () { return env.t; },
     setInterval: function () { env.intervals++; return 1; },
     clearInterval: function () { env.cleared++; },
@@ -426,4 +429,118 @@ test('switched off with the reload limit exhausted: no degrade', function () {
   stallThroughReload(env, 'c');
   assert.deepEqual(env.degraded, []);
   assert.equal(env.reloads, rc.maxReloadsPerWindow);
+});
+
+// ---- Frozen picture: audio clock moves currentTime, but no video frames are decoded ----
+
+/** Give the fake video a decoded-frame counter (getVideoPlaybackQuality). */
+function withFrames(env, frames) {
+  env.frames = frames || 0;
+  env.video.videoWidth = 1280;
+  env.video.getVideoPlaybackQuality = function () { return { totalVideoFrames: env.frames }; };
+  return env;
+}
+
+/** One tick of playback: currentTime +1 s, frames += fps (0 = frozen picture). */
+function play(env, fps, ticks) {
+  for (var i = 0; i < (ticks || 1); i++) {
+    env.video.currentTime += 1;
+    env.frames += fps;
+    env.step(1000);
+  }
+}
+
+test('frozen picture (time advancing, frames flat): nudge after frozenPictureTicks, then a hard reload even for a soft watch', function () {
+  var env = withFrames(makeEnv(), 100);
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'none' }); // soft-armed watch
+  play(env, 0, rc.frozenPictureTicks - 1);
+  assert.equal(env.kicks, 0, 'not before frozenPictureTicks');
+  play(env, 0, 1);
+  assert.equal(env.kicks, 1, 'pause/play nudge');
+  assert.equal(env.plays, 1);
+  assert.deepEqual(env.actions(), ['frozen-picture']);
+  var firstSoftAt = env.t;
+  while (env.t < firstSoftAt + rc.hardReloadAfterMs - 1000) play(env, 0, 1);
+  assert.equal(env.reloads, 0, 'not before hardReloadAfterMs');
+  assert.ok(env.kicks <= rc.maxSoftKicks);
+  play(env, 0, 1);
+  assert.equal(env.reloads, 1, 'hard reload for a frozen picture');
+  play(env, 0, rc.frozenPictureTicks + 2);
+  assert.equal(env.reloads, 1, 'only one reload');
+  assert.notOk(env.rec.isWatching(), 'gave up');
+});
+
+test('frozen picture via webkitDecodedFrameCount when getVideoPlaybackQuality is missing', function () {
+  var env = makeEnv();
+  env.video.webkitDecodedFrameCount = 50;
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  for (var i = 0; i < rc.frozenPictureTicks; i++) { env.video.currentTime += 1; env.step(1000); }
+  assert.equal(env.kicks, 1);
+});
+
+test('videoWidth 0 while audio advances (no video track): treated as a frozen picture', function () {
+  var env = withFrames(makeEnv());
+  env.video.videoWidth = 0;
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  play(env, 30, rc.frozenPictureTicks);
+  assert.equal(env.kicks, 1);
+  assert.deepEqual(env.actions(), ['frozen-picture']);
+});
+
+test('viewer chose audio-only quality: frozen picture is left alone', function () {
+  var env = withFrames(makeEnv(undefined, { store: { 'video-quality': '{"default":"audio_only"}' } }));
+  env.video.videoWidth = 0;
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  play(env, 0, 40);
+  assert.equal(env.kicks + env.plays + env.reloads, 0);
+});
+
+test('unparsable video-quality value is not audio-only', function () {
+  var env = withFrames(makeEnv(undefined, { store: { 'video-quality': '{audio_only' } }));
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  play(env, 0, rc.frozenPictureTicks);
+  assert.equal(env.kicks, 1);
+});
+
+test('frames advancing normally: no action; a good tick resets the frozen counter', function () {
+  var env = withFrames(makeEnv());
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  play(env, 30, 10);
+  assert.equal(env.kicks, 0);
+  for (var i = 0; i < 6; i++) {
+    play(env, 0, rc.frozenPictureTicks - 1);
+    play(env, 30, 1);
+  }
+  assert.equal(env.kicks + env.plays + env.reloads, 0, 'never 4 frozen ticks in a row');
+});
+
+test('no decoded-frame counter: frozen picture is not detected (old behaviour)', function () {
+  var env = makeEnv();
+  env.video.videoWidth = 0;
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  for (var i = 0; i < 40; i++) { env.video.currentTime += 1; env.step(1000); }
+  assert.equal(env.kicks + env.plays + env.reloads, 0);
+});
+
+test('frozen picture in a hidden tab: nothing is done', function () {
+  var env = withFrames(makeEnv());
+  env.doc.visibilityState = 'hidden';
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  play(env, 0, 30);
+  assert.equal(env.kicks + env.plays + env.reloads, 0);
+});
+
+test('ad-end watch lasts frozenPictureWatchMs; a playlist-switch watch keeps watchWindowMs', function () {
+  assert.equal(rc.frozenPictureWatchMs, 40000);
+  var env = withFrames(makeEnv());
+  env.rec.onEvent('ad-end', { channel: 'c', outcome: 'stripped' });
+  assert.equal(env.intervals, 1);
+  play(env, 30, rc.frozenPictureWatchMs / 1000 - 1);
+  assert.ok(env.rec.isWatching(), 'still watching before frozenPictureWatchMs');
+  play(env, 30, 2);
+  assert.notOk(env.rec.isWatching(), 'watch over');
+  var env2 = withFrames(makeEnv());
+  env2.rec.onEvent('playlist-switch', { channel: 'c', to: 'stripped' });
+  play(env2, 30, rc.watchWindowMs / 1000 + 1);
+  assert.notOk(env2.rec.isWatching());
 });

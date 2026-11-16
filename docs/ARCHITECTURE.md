@@ -280,7 +280,7 @@ almost untouched.
 | `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`, `setTimeout`: poll deadline, single-flight search, ordered answers, renumbering. |
 | `src/worker/worker-main.js` | inlined in worker | Replaces the worker's `fetch`, talks to the page, serves blank ad-segment answers. |
 | `src/core/worker-source.js` | MAIN, tests | Builds the replacement worker source from the factories' `toString()` plus JSON data plus Twitch's original source. |
-| `src/page/recovery.js` | MAIN | Stall watch (user-intent tracking, play/seek/nudge, muted-play retry), React-fiber player reload, reload rate limit, localStorage preservation. |
+| `src/page/recovery.js` | MAIN | Stall and frozen-picture watch (user-intent tracking, play/seek/nudge, muted-play retry), React-fiber player reload, reload rate limit, localStorage preservation. |
 | `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements. |
@@ -366,7 +366,13 @@ config values:
   player pausing itself during a switch is a stall. Once a second, only while the tab is
   visible: paused (not by the viewer) 2 s -> `play()`; playhead stuck 3 s, `readyState < 3` and
   a hole in `buffered` -> seek to the next range + 0.05 s; stuck with < 0.5 s buffered ahead ->
-  pause/play. At most 2 soft actions per watch, 8 s apart, 6 per 2 min. Still stuck 15 s after
+  pause/play. Picture frozen while the sound plays (research-2026-11-13.md C5/F7: playhead
+  advancing >= 0.5 s per tick but `getVideoPlaybackQuality().totalVideoFrames` /
+  `webkitDecodedFrameCount` flat, or `videoWidth` 0) for 4 ticks in a row -> pause/play, then
+  the same ladder as a stall (reason `frozen-picture`, which may reload even in a soft watch);
+  skipped when the viewer chose audio-only (`video-quality`) or no frame counter exists. A watch
+  armed by `ad-end` lasts at least 40 s, since the wedge follows breaks.
+  At most 2 soft actions per watch, 8 s apart, 6 per 2 min. Still stuck 15 s after
   the first one -> one hard reload via `setSrc({isNewMediaPlayerInstance: true,
   refreshAccessToken: true})` (not within 15 s of the previous one; `video-quality`,
   `video-muted`, `volume`, `lowLatencyModeEnabled` pinned for 5 s), skipped for a watch armed
