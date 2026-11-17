@@ -249,14 +249,18 @@ function pl(o) {
   if (o.segs.some(function (s) { return s.ad; })) {
     lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=4.000,X-TV-TWITCH-AD-ROLL-TYPE="MIDROLL"');
   }
+  // fMP4 (o.map / s.map: init segment name): header MAP, or DISCONTINUITY + MAP before a segment.
+  if (o.map) lines.push(mapLine(o.map));
   o.segs.forEach(function (s) {
     if (s.disc) lines.push('#EXT-X-DISCONTINUITY');
+    if (s.map) lines.push(mapLine(s.map));
     lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + s.id * 2000 + (o.skewMs || 0)).toISOString());
     lines.push('#EXTINF:2.000,' + (s.ad ? 'Amazon|1' : 'live'));
-    lines.push(SEG_BASE + (s.ad ? 'ad-' : (o.prefix || 'native-')) + s.id + '.ts');
+    lines.push(SEG_BASE + (s.ad ? 'ad-' : (o.prefix || 'native-')) + s.id + (o.map || s.map ? '.mp4' : '.ts'));
   });
   return lines.join('\n') + '\n';
 }
+function mapLine(name) { return '#EXT-X-MAP:URI="' + SEG_BASE + 'init-' + name + '.mp4"'; }
 function ids(from, to, extra) {
   var a = [];
   for (var i = from; i <= to; i++) a.push(Object.assign({ id: i }, extra || {}));
@@ -372,4 +376,172 @@ test('pickVariant prefers the exact CODECS string among equal resolutions', func
   ];
   var t = { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2' };
   assert.equal(M.pickVariant(vs, t, cfg, { preferAvc: true }).url, 'b');
+});
+
+// ------------------------------------------------------------------ fMP4 init segments (EXT-X-MAP)
+// A MAP applies to every following segment until the next MAP (RFC 8216 §4.3.2.5). Listing a
+// segment under another source's MAP makes the player decode it with the wrong init segment:
+// picture lost, audio plays (twitch.tv/lirik, 2026-11-17).
+
+/** For each segment URL in order: the MAP URI in force for it, by RFC rules. */
+function effectiveMaps(text) {
+  var cur = null, res = [];
+  text.split('\n').forEach(function (l) {
+    if (l.indexOf('#EXT-X-MAP:') === 0) cur = /URI="([^"]*)"/.exec(l)[1];
+    else if (l && l[0] !== '#') res.push({ url: l, map: cur });
+  });
+  return res;
+}
+function mapUri(name) { return SEG_BASE + 'init-' + name + '.mp4'; }
+/** Every MAP line is the first line of a segment (first listed one, or right after a DISCONTINUITY)
+ *  and is directly followed by that segment's own tags: never in the header block. */
+function assertMapPlacement(text, label) {
+  var lines = text.split('\n');
+  var firstSeg = lines.findIndex(function (l) { return l === '#EXT-X-DISCONTINUITY' || l.indexOf('#EXT-X-PROGRAM-DATE-TIME') === 0 || l.indexOf('#EXTINF') === 0 || l.indexOf('#EXT-X-MAP') === 0; });
+  lines.forEach(function (l, i) {
+    if (l.indexOf('#EXT-X-MAP:') !== 0) return;
+    assert.ok(i === firstSeg || lines[i - 1] === '#EXT-X-DISCONTINUITY', label + ': MAP at line ' + i + ' starts a segment');
+    assert.ok(/^#EXT-X-(PROGRAM-DATE-TIME|BYTERANGE)|^#EXTINF/.test(lines[i + 1] || ''), label + ': MAP at line ' + i + ' is followed by its segment');
+  });
+  lines.slice(0, firstSeg).forEach(function (l) { assert.notIncludes(l, '#EXT-X-MAP', label + ': no MAP in the header block'); });
+}
+
+test('parseMedia: every segment carries the MAP in force for it; MAP lines leave header and tags', function () {
+  var p = M.parseMedia(fixture('fmp4-midroll.m3u8'));
+  var live = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-init-1080.mp4';
+  var ad = 'https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-init.mp4';
+  assert.deepEqual(p.segs.map(function (s) { return /URI="([^"]*)"/.exec(s.map)[1]; }), [live, live, ad, ad, live, live]);
+  p.header.concat.apply(p.header, p.segs.map(function (s) { return s.tags; })).forEach(function (l) {
+    assert.notIncludes(l, '#EXT-X-MAP');
+  });
+  assert.equal(M.parseMedia(fixture('clean.m3u8')).segs[0].map, null, 'TS: no MAP');
+});
+
+test('stripAds fMP4 pre-roll (100% ad): no segments and no ad MAP left', function () {
+  var r = M.stripAds(fixture('fmp4-preroll.m3u8'), cfg);
+  assert.equal(r.kept, 0);
+  assert.equal(r.removed, 3);
+  assert.notIncludes(r.text, '#EXT-X-MAP');
+  assert.notIncludes(r.text, 'SYNTH-ad-init');
+  assert.equal(M.countSegments(r.text), 0);
+});
+
+test('stripAds fMP4 midroll: live MAPs kept, ad MAP gone, live MAP again after the discontinuity', function () {
+  var live = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-init-1080.mp4';
+  var src = fixture('fmp4-midroll.m3u8');
+  var r = M.stripAds(src, cfg);
+  assert.equal(r.kept, 4);
+  assert.notIncludes(r.text, 'SYNTH-ad-init');
+  assert.deepEqual(effectiveMaps(r.text).map(function (e) { return e.map; }), [live, live, live, live]);
+  assert.equal(tagLines(r.text, '#EXT-X-MAP').length, 2, 'once for the first segment, once after the discontinuity');
+  var lines = r.text.split('\n');
+  var i5971 = lines.findIndex(function (l) { return /SYNTH-live-5971/.test(l); });
+  assert.deepEqual(lines.slice(i5971 - 4, i5971 - 2), ['#EXT-X-DISCONTINUITY', '#EXT-X-MAP:URI="' + live + '"']);
+  // Same playlist, but the live segments after the ad carry no MAP of their own (only the
+  // header one): the ad's MAP must not apply to them; the live MAP is written after the gap.
+  var noOwn = src.replace(/(#EXT-X-DISCONTINUITY\n)#EXT-X-MAP:URI="[^"]*SYNTH-live-init[^"]*"\n/, '$1');
+  assert.equal(tagLines(noOwn, '#EXT-X-MAP').length, 2, 'fixture edit applied');
+  var r2 = M.stripAds(noOwn, cfg);
+  assert.equal(r2.kept, 4);
+  assert.notIncludes(r2.text, 'SYNTH-ad-init');
+  assert.deepEqual(effectiveMaps(r2.text).map(function (e) { return e.map; }), [live, live, live, live]);
+  var l2 = r2.text.split('\n');
+  var j = l2.findIndex(function (l) { return /SYNTH-live-5971/.test(l); });
+  assert.deepEqual(l2.slice(j - 4, j - 2), ['#EXT-X-DISCONTINUITY', '#EXT-X-MAP:URI="' + live + '"']);
+  assertMapPlacement(r.text, 'own MAP');
+  assertMapPlacement(r2.text, 'header MAP');
+});
+
+test('resequence fMP4: native (MAP A) -> backup (MAP B) -> native (MAP A): each segment under its own MAP', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 100, live: 100, map: 'A', segs: ids(100, 102) });
+  var polls = [
+    { text: pl({ seq: 9000, live: 101, prefix: 'embed-', map: 'B', segs: ids(101, 105) }), src: 'backup:embed:640x360:30:avc1' },
+    { text: pl({ seq: 9001, live: 102, prefix: 'embed-', map: 'B', segs: ids(102, 106) }), src: 'backup:embed:640x360:30:avc1' },
+    { text: pl({ seq: 106, live: 105, map: 'A', segs: ids(105, 109) }), src: 'native' },
+    { text: pl({ seq: 107, live: 106, map: 'A', segs: ids(106, 110) }), src: 'native' }
+  ];
+  var given = {}, lastSeq = 0, sawB = false;
+  polls.forEach(function (poll, n) {
+    var text = M.resequence(st, poll.text, poll.src, cfg.sequencer).text;
+    var label = 'poll ' + n;
+    assertMapPlacement(text, label);
+    var eff = effectiveMaps(text);
+    eff.forEach(function (e) {
+      var want = e.url.indexOf('/embed-') !== -1 ? mapUri('B') : mapUri('A');
+      if (want === mapUri('B')) sawB = true;
+      assert.equal(e.map, want, label + ': ' + short(e.url) + ' under its own MAP');
+    });
+    // A MAP line at every change, with a DISCONTINUITY.
+    var lines = text.split('\n'), prev = null;
+    eff.forEach(function (e, k) {
+      if (k > 0 && e.map !== prev) {
+        var at = lines.indexOf(e.url);
+        var block = lines.slice(lines.indexOf(eff[k - 1].url) + 1, at);
+        assert.deepEqual(block.slice(0, 2), ['#EXT-X-DISCONTINUITY', '#EXT-X-MAP:URI="' + e.map + '"'], label + ': DISCONTINUITY + MAP before ' + short(e.url));
+      }
+      prev = e.map;
+    });
+    var num = numbering(text);
+    assert.ok(num.seq >= lastSeq, label + ': MEDIA-SEQUENCE never goes back');
+    lastSeq = num.seq;
+    num.urls.forEach(function (u) {
+      if (given[u] !== undefined) assert.equal(num.map[u], given[u], label + ': ' + short(u) + ' keeps its number');
+      else given[u] = num.map[u];
+    });
+  });
+  assert.ok(sawB, 'backup segments were listed');
+  var all = Object.keys(given).map(function (u) { return given[u]; }).sort(function (a, b) { return a - b; });
+  for (var i = 1; i < all.length; i++) assert.equal(all[i], all[i - 1] + 1, 'numbering continuous');
+});
+
+test('resequence fMP4 first load: empty stripped pre-roll, then backup -> backup MAP before its first segment', function () {
+  var st = M.newSequenceState();
+  var empty = M.stripAds(fixture('fmp4-preroll.m3u8'), cfg).text;
+  var r0 = M.resequence(st, empty, 'native', cfg.sequencer).text;
+  assert.notIncludes(r0, '#EXT-X-MAP');
+  assert.equal(M.countSegments(r0), 0);
+  var r1 = M.resequence(st, pl({ seq: 5967, live: 5967, prefix: 'embed-', map: 'B', segs: ids(5967, 5981) }), 'backup:embed:640x360:30:avc1', cfg.sequencer).text;
+  assertMapPlacement(r1, 'first backup poll');
+  var lines = r1.split('\n');
+  var firstMap = lines.findIndex(function (l) { return l.indexOf('#EXT-X-MAP') === 0; });
+  var firstSegTag = lines.findIndex(function (l) { return l.indexOf('#EXT-X-PROGRAM-DATE-TIME') === 0 || l.indexOf('#EXTINF') === 0; });
+  assert.equal(lines[firstMap], '#EXT-X-MAP:URI="' + mapUri('B') + '"');
+  assert.equal(firstMap, firstSegTag - 1, 'MAP directly before the first segment');
+  effectiveMaps(r1).forEach(function (e) { assert.equal(e.map, mapUri('B')); });
+  assert.equal(tagLines(r1, '#EXT-X-MAP').length, 1);
+});
+
+test('resequence fMP4: a MAP change inside one source forces a DISCONTINUITY', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 10, live: 10, map: 'A', segs: ids(10, 12) });
+  var r = M.resequence(st, pl({ seq: 11, live: 11, map: 'A', segs: ids(11, 12).concat([{ id: 13, map: 'C' }, { id: 14 }]) }), 'native', cfg.sequencer).text;
+  var num = numbering(r);
+  assert.deepEqual(num.urls.map(short), ['native-11.mp4', 'native-12.mp4', 'native-13.mp4', 'native-14.mp4']);
+  assert.equal(num.segs[2].disc, true, 'DISCONTINUITY where the init segment changes');
+  assert.equal(num.segs[3].disc, false);
+  assert.deepEqual(effectiveMaps(r).map(function (e) { return e.map; }), [mapUri('A'), mapUri('A'), mapUri('C'), mapUri('C')]);
+  assertMapPlacement(r, 'in-source change');
+});
+
+test('resequence fMP4: a MAP that slid out of the window is written again for the first listed segment', function () {
+  var st = M.newSequenceState();
+  st.passthrough = pl({ seq: 10, live: 10, map: 'A', segs: ids(10, 12) });
+  M.resequence(st, pl({ seq: 11, live: 11, map: 'A', segs: ids(11, 12).concat([{ id: 13, disc: true, map: 'C' }, { id: 14 }]) }), 'native', cfg.sequencer);
+  // Next poll: Twitch now puts MAP C in the header; our window still starts at 12 (MAP A).
+  var r = M.resequence(st, pl({ seq: 13, live: 13, map: 'C', segs: ids(13, 15) }), 'native', cfg.sequencer).text;
+  var eff = effectiveMaps(r);
+  assert.deepEqual(eff.map(function (e) { return short(e.url) + ' ' + e.map.replace(SEG_BASE, ''); }),
+    ['native-13.mp4 init-C.mp4', 'native-14.mp4 init-C.mp4', 'native-15.mp4 init-C.mp4']);
+  assertMapPlacement(r, 'slid out');
+});
+
+test('TS playlists: stripAds and resequence never write a MAP', function () {
+  ['all-ads.m3u8', 'clean.m3u8', 'ignored-only.m3u8', 'maf-ad.m3u8', 'midroll.m3u8', 'preroll.m3u8'].forEach(function (f) {
+    var st = M.newSequenceState();
+    st.passthrough = fixture('clean.m3u8');
+    var t = M.stripAds(fixture(f), cfg).text;
+    assert.notIncludes(t, '#EXT-X-MAP', f);
+    assert.notIncludes(M.resequence(st, t, 'native', cfg.sequencer).text, '#EXT-X-MAP', f);
+  });
 });

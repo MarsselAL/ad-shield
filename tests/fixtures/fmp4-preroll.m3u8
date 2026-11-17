@@ -1,0 +1,20 @@
+#EXTM3U
+# SYNTHETIC test fixture (Twitch Ad Shield): fMP4 pre-roll, 100% ad (popout token on first load). Shape of a 2026-11-17 capture; URLs and IDs invented. Not real Twitch data.
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-START:TIME-OFFSET=0.000
+#EXT-X-DATERANGE:ID="playlist-session-1",CLASS="twitch-session",START-DATE="2026-11-17T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-SESSIONID="aaaaaaaaaaaaaaaa"
+#EXT-X-DATERANGE:ID="stitched-ad-1-6",CLASS="twitch-stitched-ad",START-DATE="2026-11-17T20:00:00.000Z",DURATION=6.006,X-TV-TWITCH-AD-POD-LENGTH="1",X-TV-TWITCH-AD-POD-POSITION="0",X-TV-TWITCH-AD-ROLL-TYPE="PREROLL",X-TV-TWITCH-AD-URL="https://example.invalid/ad",X-TV-TWITCH-AD-CLICK-TRACKING-URL="https://example.invalid/click"
+#EXT-X-DATERANGE:ID="quartile-start-stitched-ad-1",CLASS="twitch-ad-quartile",START-DATE="2026-11-17T20:00:00.000Z",DURATION=0.000,X-TV-TWITCH-AD-QUARTILE-URLS="https://example.invalid/q0"
+#EXT-X-DISCONTINUITY
+#EXT-X-MAP:URI="https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-init.mp4"
+#EXT-X-PROGRAM-DATE-TIME:2026-11-17T20:00:00.000Z
+#EXTINF:2.002,Amazon|8000000001
+https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-0.mp4
+#EXT-X-PROGRAM-DATE-TIME:2026-11-17T20:00:02.002Z
+#EXTINF:2.002,Amazon|8000000001
+https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-1.mp4
+#EXT-X-PROGRAM-DATE-TIME:2026-11-17T20:00:04.004Z
+#EXTINF:2.002,Amazon|8000000001
+https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-2.mp4

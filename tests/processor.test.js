@@ -402,11 +402,12 @@ function pl(o) {
   var lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', '#EXT-X-MEDIA-SEQUENCE:' + o.seq];
   if (o.live !== undefined) lines.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + o.live);
   if (o.ads) lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=4.000,X-TV-TWITCH-AD-ROLL-TYPE="MIDROLL"');
+  if (o.map) lines.push('#EXT-X-MAP:URI="' + SEGB + 'init-' + o.map + '.mp4"'); // fMP4
   for (var i = o.from; i <= o.to; i++) {
     var ad = o.ads && o.ads.indexOf(i) !== -1;
     lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + i * 2000 + (o.skewMs || 0)).toISOString());
     lines.push('#EXTINF:2.000,' + (ad ? 'Amazon|1' : 'live'));
-    lines.push(SEGB + (ad ? 'ad-' : o.prefix) + i + '.ts');
+    lines.push(SEGB + (ad ? 'ad-' : o.prefix) + i + (o.map ? '.mp4' : '.ts'));
   }
   return lines.join('\n') + '\n';
 }
@@ -475,5 +476,40 @@ test('backup served, one poll misses the deadline: hold (no new segments, no swi
   }).then(function (out) {
     assert.equal(w.proc.stateOf('somechannel').serving, 'stripped');
     assert.notIncludes(out, 'SYNTH-ad-');
+  });
+});
+
+/** For each listed segment (short name): the init segment (MAP) the player would use for it. */
+function segMaps(text) {
+  var cur = null, res = [];
+  String(text).split('\n').forEach(function (l) {
+    if (l.indexOf('#EXT-X-MAP:') === 0) cur = /URI="([^"]*)"/.exec(l)[1].replace(SEGB, '').replace(/^https:\/\/[^/]+\//, '');
+    else if (l && l[0] !== '#') res.push(l.replace(SEGB, '') + ' ' + cur);
+  });
+  return res;
+}
+
+// twitch.tv/lirik 2026-11-17: fMP4 channel, first load gets a 100% pre-roll, a backup is served,
+// then native returns. Each source's segments must be listed under that source's own init
+// segment, or the video does not decode (offline image with sound).
+test('fMP4 first load: 100% pre-roll -> backup under its own MAP -> native under its own MAP', function () {
+  var backup = pl({ seq: 9000, live: 302, from: 302, to: 305, prefix: 'embed-', map: 'B' });
+  var w = makeWorld({ embed: backup });
+  w.settings.playerTypes = ['embed'];
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var preroll = fixture('fmp4-preroll.m3u8');
+  var back = pl({ seq: 0, live: 304, from: 304, to: 307, prefix: 'native-', map: 'A' });
+  return w.proc.onMedia(NATIVE_720, preroll).then(function (out) {
+    assert.notIncludes(out, 'SYNTH-ad');
+    assert.deepEqual(segMaps(out), ['embed-302.mp4 init-B.mp4', 'embed-303.mp4 init-B.mp4', 'embed-304.mp4 init-B.mp4', 'embed-305.mp4 init-B.mp4']);
+    var head = out.split('\n');
+    assert.equal(head.findIndex(function (l) { return l.indexOf('#EXT-X-MAP') === 0; }) + 1,
+      head.findIndex(function (l) { return l.indexOf('#EXT-X-PROGRAM-DATE-TIME') === 0; }), 'backup MAP directly before its first segment');
+    return w.proc.onMedia(NATIVE_720, back).then(function () { return w.proc.onMedia(NATIVE_720, back); });
+  }).then(function (out) {
+    assert.deepEqual(segMaps(out), ['embed-304.mp4 init-B.mp4', 'embed-305.mp4 init-B.mp4', 'native-306.mp4 init-A.mp4', 'native-307.mp4 init-A.mp4']);
+    var p = M.parseMedia(out);
+    assert.deepEqual(p.segs.map(function (s) { return s.disc; }), [false, false, true, false]);
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
   });
 });

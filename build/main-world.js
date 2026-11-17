@@ -631,6 +631,11 @@
      *    follows removed ones (timestamps jump there). HLS cannot express gaps, so numbering
      *    after a middle gap is only right within this one playlist: live playlists the player
      *    sees go through resequence(), which keeps numbers stable across polls.
+     *  - fMP4 (#EXT-X-MAP): MAP lines are not copied where they stand. A kept segment gets the MAP
+     *    in force for it written first (after its DISCONTINUITY) when that differs from the last
+     *    MAP written or a DISCONTINUITY precedes it. A MAP first used by a removed (ad) segment is
+     *    the ad's init segment: it is never written, and a kept segment after it with no MAP of
+     *    its own keeps the previous kept segment's MAP (the ad's must never apply to live video).
      */
     function stripAds(text, cfg) {
       var src = String(text || '');
@@ -649,6 +654,9 @@
       var droppedDisc = 0, leadingRemoved = 0, leadingDisc = 0;
       var gap = false;
       var seqIdx = -1, discSeqIdx = -1;
+      // curMap: last MAP read; claimed: a segment came after it; forAd: first used by a removed
+      // segment; keptMap: MAP of the last kept segment; outMap: last MAP written to out.
+      var curMap = null, mapClaimed = true, mapForAd = false, keptMap = null, outMap = null;
 
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
@@ -656,6 +664,8 @@
         if (line.charAt(0) === '#') {
           if (line.indexOf(cfg.prefetchTag) === 0) {
             if (adContext) { prefetchRemoved++; continue; }
+            var pm = mapClaimed && mapForAd ? keptMap : curMap;
+            if (pm && pm !== outMap) { out.push(pm); outMap = pm; }
             out.push(line); continue;
           }
           if (adContext && (line.indexOf('#EXT-X-PART:') === 0 || line.indexOf('#EXT-X-PRELOAD-HINT') === 0)) continue;
@@ -668,6 +678,7 @@
           }
           if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) { seqIdx = out.length; out.push(line); continue; }
           if (line.indexOf('#EXT-X-DISCONTINUITY-SEQUENCE:') === 0) { discSeqIdx = out.length; out.push(line); continue; }
+          if (line.indexOf('#EXT-X-MAP:') === 0) { curMap = line; mapClaimed = false; continue; }
           if (isSegmentTag(line)) {
             if (line.indexOf('#EXTINF') === 0) extinf = line;
             pending.push(line);
@@ -683,9 +694,17 @@
           removedUrls.push(line);
           if (hasDisc) droppedDisc++;
           if (kept > 0) gap = true;
+          if (!mapClaimed) mapForAd = true;
+          mapClaimed = true;
         } else {
           if (kept === 0) { leadingRemoved = removed; leadingDisc = droppedDisc; }
           if (gap && !hasDisc) pending.unshift('#EXT-X-DISCONTINUITY');
+          if (!mapClaimed) mapForAd = false;
+          mapClaimed = true;
+          var map = mapForAd ? keptMap : curMap;
+          keptMap = map;
+          var di = pending.indexOf('#EXT-X-DISCONTINUITY');
+          if (map && (map !== outMap || di !== -1)) { pending.splice(di + 1, 0, map); outMap = map; }
           for (var p = 0; p < pending.length; p++) out.push(pending[p]);
           out.push(line);
           kept++;
@@ -731,18 +750,23 @@
     }
 
     /**
-     * Parse a media playlist into { header, segs, tail, mediaSeq, discSeq, liveSeq, targetDuration,
-     * endlist }. header: tags before the first segment, without the numbering tags and
-     * TARGETDURATION. segs: { url, tags (without DISCONTINUITY), disc, pdt (ms|null), dur (s),
-     * live (live number|null) }. tail: tags after the last URI (prefetch etc.).
+     * Parse a media playlist into { header, segs, tail, tailMap, mediaSeq, discSeq, liveSeq,
+     * targetDuration, endlist }. header: tags before the first segment, without the numbering
+     * tags, TARGETDURATION and EXT-X-MAP. segs: { url, tags (without DISCONTINUITY and MAP), disc,
+     * map, pdt (ms|null), dur (s), live (live number|null) }. tail: tags after the last URI
+     * (prefetch etc.).
+     * map: the #EXT-X-MAP line in force for the segment (fMP4 init segment; a MAP applies to every
+     * following segment until the next one, RFC 8216 §4.3.2.5), null for MPEG-TS. tailMap: a MAP
+     * after the last URI that differs from the last segment's (it belongs to the tail's prefetch).
      * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first segment; the following
      * ones count up until the first DISCONTINUITY after it (past that, unknown).
      */
     function parseMedia(text) {
       var lines = splitLines(text || '');
-      var r = { header: [], segs: [], tail: [], mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
+      var r = { header: [], segs: [], tail: [], tailMap: null, mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
       var pending = [];
       var started = false;
+      var map = null;
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         if (line === '') continue;
@@ -752,11 +776,12 @@
           if (line.indexOf('#EXT-X-TWITCH-LIVE-SEQUENCE:') === 0) { r.liveSeq = parseIntTag(line); continue; }
           if (line.indexOf('#EXT-X-TARGETDURATION:') === 0) { r.targetDuration = parseFloat(tagValue(line)) || 0; continue; }
           if (line.indexOf('#EXT-X-ENDLIST') === 0) { r.endlist = true; continue; }
+          if (line.indexOf('#EXT-X-MAP:') === 0) { map = line; continue; }
           if (isSegmentTag(line)) { started = true; pending.push(line); continue; }
           if (!started) r.header.push(line); else pending.push(line);
           continue;
         }
-        var seg = { url: line, tags: [], disc: false, pdt: null, dur: 0, live: null };
+        var seg = { url: line, tags: [], disc: false, map: map, pdt: null, dur: 0, live: null };
         for (var p = 0; p < pending.length; p++) {
           var t = pending[p];
           if (t === '#EXT-X-DISCONTINUITY') { seg.disc = true; continue; }
@@ -774,6 +799,7 @@
       for (var q = 0; q < pending.length; q++) {
         if (pending[q].indexOf('#EXTINF') !== 0 && pending[q] !== '#EXT-X-DISCONTINUITY') r.tail.push(pending[q]);
       }
+      if (map !== null && (!r.segs.length || r.segs[r.segs.length - 1].map !== map)) r.tailMap = map;
       if (r.liveSeq !== null) {
         for (var k = 0; k < r.segs.length; k++) {
           if (k > 0 && r.segs[k].disc) break;
@@ -804,8 +830,12 @@
      *    again under a new number.
      *  - New segments get the next number, so MEDIA-SEQUENCE never jumps or goes back.
      *  - #EXT-X-DISCONTINUITY before the first new segment after a source change, a live-number
-     *    gap, a date-time gap, or where the source had one; DISCONTINUITY-SEQUENCE counts the
-     *    ones that slid out, so it is monotonic too.
+     *    gap, a date-time gap, an init segment (EXT-X-MAP) change, or where the source had one;
+     *    DISCONTINUITY-SEQUENCE counts the ones that slid out, so it is monotonic too.
+     *  - fMP4: each window entry keeps the MAP it was given under (parseMedia seg.map). The output
+     *    never takes MAP from the header: the entry's MAP is written before the first listed
+     *    segment, after every DISCONTINUITY and wherever it changes, so a segment is never decoded
+     *    with another source's init segment (picture lost, audio plays).
      *  - The output lists the newest max(source segments, minSegments) segments given (so an
      *    all-stripped poll repeats the newest known ones instead of an empty playlist).
      * state.passthrough: the last playlist served untouched before the first rewrite; its
@@ -821,7 +851,7 @@
       var p = text === null || text === undefined ? null : parseMedia(text);
 
       function remember(s, seq, dn, src) {
-        var e = { seq: seq, url: s.url, tags: s.tags, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
+        var e = { seq: seq, url: s.url, tags: s.tags, map: s.map || null, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
         st.win.push(e);
         st.seen.set(segKey(s), seq);
         st.seen.set('U' + s.url, seq);
@@ -838,7 +868,7 @@
         if (seed && seed.segs.length) {
           var dn0 = seed.discSeq;
           for (var a = 0; a < seed.segs.length; a++) {
-            if (a > 0 && seed.segs[a].disc) dn0++;
+            if (a > 0 && (seed.segs[a].disc || (seed.segs[a].map || null) !== (seed.segs[a - 1].map || null))) dn0++;
             remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
           }
           st.next = seed.mediaSeq + seed.segs.length;
@@ -863,7 +893,7 @@
         }
         if (!hasLive && s.pdt !== null && st.lastEnd !== null && st.lastEnd - s.pdt > repeatTol) repeat = true;
         var last = st.win.length ? st.win[st.win.length - 1] : null;
-        var disc = !!last && (s.disc || sourceKey !== st.lastSource ||
+        var disc = !!last && (s.disc || sourceKey !== st.lastSource || last.map !== (s.map || null) ||
           (hasLive && s.live > st.lastLive + 1) ||
           (s.pdt !== null && st.lastEnd !== null && s.pdt - st.lastEnd > gapTol));
         var dn = last ? last.dn + (disc ? 1 : 0) : st.baseDn;
@@ -891,13 +921,17 @@
       if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
       rest.splice(vi + 1, 0, numbering.join('\n'));
       lines.push(rest.join('\n'));
+      var curMap = null;
       for (var j = 0; j < out.length; j++) {
-        if (j > 0 && out[j].dn !== out[j - 1].dn) lines.push('#EXT-X-DISCONTINUITY');
+        var discHere = j > 0 && out[j].dn !== out[j - 1].dn;
+        if (discHere) lines.push('#EXT-X-DISCONTINUITY');
+        if (out[j].map && (j === 0 || discHere || out[j].map !== curMap)) { lines.push(out[j].map); curMap = out[j].map; }
         for (var t = 0; t < out[j].tags.length; t++) lines.push(out[j].tags[t]);
         lines.push(out[j].url);
       }
       // Prefetch hints belong to the source's newest segment: only when that is our newest too.
       if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+        if (p.tailMap && p.tail.length && p.tailMap !== curMap) lines.push(p.tailMap);
         for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
       }
       return { text: lines.filter(function (l) { return l !== ''; }).join('\n') + '\n', appended: appended, repeat: repeat };
