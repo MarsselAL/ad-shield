@@ -408,6 +408,12 @@ config values:
   `backup:<type>:<resolution>:<fps>:<codecs>`), a live-number or date-time gap, or where the
   source had one. If an appended segment still overlaps what was given (no live numbers, dates
   off by more than 0.5 s), the worker posts `segment-repeat` (once per 20 s per channel).
+  fMP4 channels (`#EXT-X-MAP` init segments): `parseMedia` gives each segment the MAP in force
+  for it, and the sequencer keeps it per window entry. The served playlist never takes MAP from
+  the header: the entry's MAP goes before the first listed segment, after every DISCONTINUITY
+  and wherever it changes (a change also forces a DISCONTINUITY), so backup segments are never
+  decoded with the native init segment or the other way round (picture lost, audio plays).
+  `stripAds` never writes an ad's MAP; a live segment after an ad gets its live MAP again.
   Playlists never rewritten pass through untouched. Known limit: numbering is per variant URL;
   after an ABR switch mid-break, two variants may number the same time differently.
 - **Empty after stripping**: the newest known segments are listed again with their numbers; the
