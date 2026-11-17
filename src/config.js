@@ -252,10 +252,12 @@
       adVideoSelectors: ['video[src*="media-amazon.com"]', 'video[src*="amazon-adsystem.com"]'],
       // Hosts checked on a playing video's currentSrc (covers <source> children).
       adVideoHosts: ['media-amazon.com', 'amazon-adsystem.com'],
-      // Twitch "commercial break" / ad banner overlay selectors. The research did not identify
-      // stable ones (class names changed repeatedly, research-github.md "uBO cosmetic filters"),
-      // so this is intentionally empty. Add verified selectors here.
-      overlaySelectors: [],
+      // Twitch overlay selectors, hidden with display:none. Only verified ones:
+      //  - the player's ad backdrop: an empty, class-less div with an inline dark background
+      //    (rgb(25,23,28)) as first child of .video-player__overlay, rendered by Twitch's React
+      //    player. When the ad video it backs is hidden/paused, Twitch never removes it and it
+      //    covers the playing stream (sound, black picture). Seen on Windows Chrome, 2026-11-17.
+      overlaySelectors: ['.video-player__overlay > div:empty:not([class])[style]'],
       throttleMs: 300
     },
 
