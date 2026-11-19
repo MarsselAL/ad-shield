@@ -613,3 +613,80 @@ test('first poll keeps fewer live segments than minSegments: no poll deadline ei
     assertSameSegments(out, cleanFor('embed'));
   });
 });
+
+// ------------------------------------------------------------------ stitched preroll live numbers
+/**
+ * Twitch stitched preroll as captured live (kaicenat, 2026-11-19): `ads` ad segments, then
+ * DISCONTINUITY and the live segments `from`..`to`. #EXT-X-TWITCH-LIVE-SEQUENCE (o.live, only
+ * once live segments are listed) is the number of the FIRST LIVE segment, not of the first one.
+ */
+function preroll(o) {
+  var lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:5', '#EXT-X-MEDIA-SEQUENCE:' + o.seq];
+  if (o.live !== undefined) lines.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + o.live);
+  lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=16.000,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"');
+  for (var a = o.firstAd || 0; a < o.ads; a++) {
+    if (a === 0) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + a * 2000).toISOString());
+    lines.push('#EXTINF:2.000,Amazon|248888310');
+    lines.push(SEGB + 'preroll-ad-' + a + '.ts');
+  }
+  for (var i = o.from; o.to !== undefined && i <= o.to; i++) {
+    if (i === o.from) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + o.ads * 2000 + (i - o.from) * 2000).toISOString());
+    lines.push('#EXTINF:2.000,live');
+    lines.push(SEGB + 'live-' + i + '.ts');
+  }
+  return lines.join('\n') + '\n';
+}
+
+test('stitched preroll passed through, then live segments appear: the live segments are served, not dropped', function () {
+  var w = makeWorld(allTypes(adOnly('backup-')));
+  w.deps.setTimeout = function (f) { f(); return 1; }; // the poll deadline is already over
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var poll1 = preroll({ seq: 0, ads: 8 });
+  var poll2 = preroll({ seq: 0, live: 58602, ads: 8, from: 58602, to: 58603 });
+  var poll3 = preroll({ seq: 2, live: 58602, firstAd: 2, ads: 8, from: 58602, to: 58605 });
+  var seq2;
+  return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
+    assert.equal(out, poll1, 'ad-only preroll, no clean backup: original');
+    assert.ok(w.names().indexOf('ad-passthrough') !== -1);
+    return w.proc.onMedia(NATIVE_720, poll2);
+  }).then(function (out) {
+    assert.includes(out, SEGB + 'live-58602.ts', 'first live segment served');
+    assert.includes(out, SEGB + 'live-58603.ts', 'second live segment served');
+    seq2 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    return w.proc.onMedia(NATIVE_720, poll3);
+  }).then(function (out) {
+    var urls = segUrls(out);
+    assert.equal(urls[urls.length - 1], SEGB + 'live-58605.ts', 'newest live segment appended');
+    assert.includes(out, SEGB + 'live-58604.ts');
+    assert.equal(urls.filter(function (u) { return u === SEGB + 'live-58602.ts'; }).length <= 1, true, 'no segment twice');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq2, 'MEDIA-SEQUENCE monotonic');
+  });
+});
+
+test('stitched preroll with live segments passed through on the first poll: next polls still serve the live segments', function () {
+  var w = makeWorld(allTypes(adOnly('backup-')));
+  w.deps.setTimeout = function (f) { f(); return 1; };
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var poll1 = preroll({ seq: 0, live: 58602, ads: 8, from: 58602, to: 58603 }); // 2 live < minSegments: thin
+  var poll2 = preroll({ seq: 2, live: 58602, firstAd: 2, ads: 8, from: 58602, to: 58605 });
+  var poll3 = preroll({ seq: 4, live: 58602, firstAd: 4, ads: 8, from: 58602, to: 58607 });
+  var seq2;
+  return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
+    assert.equal(out, poll1, 'first poll too thin to strip, no clean backup: original');
+    return w.proc.onMedia(NATIVE_720, poll2);
+  }).then(function (out) {
+    assert.includes(out, SEGB + 'live-58604.ts', 'new live segment served');
+    assert.includes(out, SEGB + 'live-58605.ts', 'new live segment served');
+    seq2 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    return w.proc.onMedia(NATIVE_720, poll3);
+  }).then(function (out) {
+    var urls = segUrls(out);
+    assert.equal(urls[urls.length - 1], SEGB + 'live-58607.ts', 'newest live segment appended');
+    assert.includes(out, SEGB + 'live-58606.ts');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq2, 'MEDIA-SEQUENCE monotonic');
+  });
+});

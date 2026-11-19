@@ -424,6 +424,65 @@ test('parseMedia: every segment carries the MAP in force for it; MAP lines leave
   assert.equal(M.parseMedia(fixture('clean.m3u8')).segs[0].map, null, 'TS: no MAP');
 });
 
+/** Stitched preroll as captured on Twitch: LIVE-SEQUENCE numbers the first LIVE segment. */
+function stitchedPreroll(liveSeq, ads, live) {
+  var l = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:5', '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq,
+    '#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=15.235,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"'];
+  for (var a = 0; a < ads; a++) {
+    if (a === 0) l.push('#EXT-X-DISCONTINUITY');
+    l.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + a * 2000).toISOString(), '#EXTINF:2.000,Amazon|248888310', SEG_BASE + 'ad-' + a + '.ts');
+  }
+  for (var i = 0; i < live; i++) {
+    if (i === 0) l.push('#EXT-X-DISCONTINUITY');
+    l.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + (ads + i) * 2000).toISOString(), '#EXTINF:2.000,live', SEG_BASE + 'live-' + (liveSeq + i) + '.ts');
+  }
+  return l.join('\n') + '\n';
+}
+
+test('parseMedia: stitched preroll: ad segments get no live number, LIVE-SEQUENCE is the first live segment', function () {
+  var p = M.parseMedia(stitchedPreroll(58602, 8, 3));
+  assert.equal(p.liveSeq, 58602);
+  assert.deepEqual(p.segs.map(function (s) { return s.live; }), [null, null, null, null, null, null, null, null, 58602, 58603, 58604]);
+});
+
+test('parseMedia: live-titled numbering stops at a DISCONTINUITY between live segments and at an ad after the run', function () {
+  var midroll = pl({ seq: 10, live: 10, segs: ids(10, 11).concat([{ id: 12, ad: true }, { id: 13, disc: true }]) });
+  assert.deepEqual(M.parseMedia(midroll).segs.map(function (s) { return s.live; }), [10, 11, null, null], 'ad after the run');
+  var split = pl({ seq: 10, live: 10, segs: ids(10, 11).concat([{ id: 12, disc: true }]) });
+  assert.deepEqual(M.parseMedia(split).segs.map(function (s) { return s.live; }), [10, 11, null], 'DISCONTINUITY between live segments');
+});
+
+test('parseMedia: no live titles: first segment numbered, counting up to the first DISCONTINUITY (unchanged)', function () {
+  var text = ['#EXTM3U', '#EXT-X-MEDIA-SEQUENCE:5', '#EXT-X-TWITCH-LIVE-SEQUENCE:700',
+    '#EXTINF:2.000,', 'a.ts', '#EXTINF:2.000,', 'b.ts', '#EXT-X-DISCONTINUITY', '#EXTINF:2.000,', 'c.ts'].join('\n') + '\n';
+  assert.deepEqual(M.parseMedia(text).segs.map(function (s) { return s.live; }), [700, 701, null]);
+});
+
+test('resequence seeded from a passed-through stitched preroll keeps the live segments that follow', function () {
+  var st = M.newSequenceState();
+  st.passthrough = stitchedPreroll(58602, 8, 2);
+  var next = M.stripAds(stitchedPreroll(58602, 8, 4), cfg).text;
+  var r = M.resequence(st, next, 'native', cfg.sequencer);
+  var urls = segUrls(r.text).map(short);
+  assert.deepEqual(urls.slice(-2), ['live-58604.ts', 'live-58605.ts'], 'new live segments appended');
+  assert.equal(r.appended, 2);
+  assert.equal(tagLines(r.text, '#EXT-X-TWITCH-LIVE-SEQUENCE:')[0], '#EXT-X-TWITCH-LIVE-SEQUENCE:58602', 'header = first live segment listed');
+});
+
+test('parseMedia: ad-only preroll poll that already has LIVE-SEQUENCE (no live segment yet): nothing numbered', function () {
+  var text = stitchedPreroll(58602, 8, 0) + '#EXT-X-DISCONTINUITY\n';
+  assert.deepEqual(M.parseMedia(text).segs.map(function (s) { return s.live; }), [null, null, null, null, null, null, null, null]);
+});
+
+test('resequence seeded from an ad-only preroll with LIVE-SEQUENCE keeps the live segments that follow (kaicenat 2026-11-19)', function () {
+  var st = M.newSequenceState();
+  st.passthrough = stitchedPreroll(58602, 8, 0) + '#EXT-X-DISCONTINUITY\n';
+  var next = M.stripAds(stitchedPreroll(58602, 8, 3), cfg).text;
+  var r = M.resequence(st, next, 'native', cfg.sequencer);
+  assert.deepEqual(segUrls(r.text).map(short).slice(-3), ['live-58602.ts', 'live-58603.ts', 'live-58604.ts']);
+  assert.equal(r.appended, 3);
+});
+
 test('stripAds fMP4 pre-roll (100% ad): no segments and no ad MAP left', function () {
   var r = M.stripAds(fixture('fmp4-preroll.m3u8'), cfg);
   assert.equal(r.kept, 0);

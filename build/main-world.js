@@ -746,15 +746,24 @@
      * map: the #EXT-X-MAP line in force for the segment (fMP4 init segment; a MAP applies to every
      * following segment until the next one, RFC 8216 §4.3.2.5), null for MPEG-TS. tailMap: a MAP
      * after the last URI that differs from the last segment's (it belongs to the tail's prefetch).
-     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first segment; the following
-     * ones count up until the first DISCONTINUITY after it (past that, unknown).
+     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first LIVE segment. When
+     * some #EXTINF titles carry cfg.liveSegmentTitle ("live"), only those segments are numbered:
+     * the first live-titled one gets the header's number, the following live-titled ones count
+     * up until a DISCONTINUITY between them or a segment that is not live (stitched preroll:
+     * ad segments first, then the live ones; the ads get null). Titled segments but none live
+     * (ad-only preroll poll that already carries the header): nothing is numbered. With no titles
+     * at all, the first segment gets the number and the following ones count up until the first
+     * DISCONTINUITY after it. Past that, unknown (null).
+     * cfg is optional (only liveSegmentTitle is read; default "live").
      */
-    function parseMedia(text) {
+    function parseMedia(text, cfg) {
+      var liveTitle = (cfg && cfg.liveSegmentTitle) || 'live';
       var lines = splitLines(text || '');
       var r = { header: [], segs: [], tail: [], tailMap: null, mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
       var pending = [];
       var started = false;
       var map = null;
+      var liveTitled = [], anyLiveTitle = false, anyOtherTitle = false;
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         if (line === '') continue;
@@ -770,10 +779,16 @@
           continue;
         }
         var seg = { url: line, tags: [], disc: false, map: map, pdt: null, dur: 0, live: null };
+        var isLive = false;
         for (var p = 0; p < pending.length; p++) {
           var t = pending[p];
           if (t === '#EXT-X-DISCONTINUITY') { seg.disc = true; continue; }
-          if (t.indexOf('#EXTINF') === 0) seg.dur = parseFloat(tagValue(t)) || 0;
+          if (t.indexOf('#EXTINF') === 0) {
+            seg.dur = parseFloat(tagValue(t)) || 0;
+            var title = extinfTitle(t);
+            isLive = title.indexOf(liveTitle) !== -1;
+            if (!isLive && title) anyOtherTitle = true;
+          }
           if (t.indexOf('#EXT-X-PROGRAM-DATE-TIME:') === 0) {
             var ms = Date.parse(tagValue(t));
             if (!isNaN(ms)) seg.pdt = ms;
@@ -781,6 +796,8 @@
           seg.tags.push(t);
         }
         r.segs.push(seg);
+        liveTitled.push(isLive);
+        if (isLive) anyLiveTitle = true;
         pending = [];
         started = true;
       }
@@ -788,10 +805,17 @@
         if (pending[q].indexOf('#EXTINF') !== 0 && pending[q] !== '#EXT-X-DISCONTINUITY') r.tail.push(pending[q]);
       }
       if (map !== null && (!r.segs.length || r.segs[r.segs.length - 1].map !== map)) r.tailMap = map;
-      if (r.liveSeq !== null) {
+      if (r.liveSeq !== null && anyLiveTitle) {
+        var n = 0;
         for (var k = 0; k < r.segs.length; k++) {
-          if (k > 0 && r.segs[k].disc) break;
-          r.segs[k].live = r.liveSeq + k;
+          if (!liveTitled[k]) { if (n > 0) break; continue; }
+          if (n > 0 && r.segs[k].disc) break;
+          r.segs[k].live = r.liveSeq + n++;
+        }
+      } else if (r.liveSeq !== null && !anyOtherTitle) {
+        for (var k2 = 0; k2 < r.segs.length; k2++) {
+          if (k2 > 0 && r.segs[k2].disc) break;
+          r.segs[k2].live = r.liveSeq + k2;
         }
       }
       return r;
@@ -899,7 +923,11 @@
       var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
       numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
       numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
-      var liveSeq = out.length && out[0].live !== null ? out[0].live : p.liveSeq;
+      // Twitch's meaning: the number of the first live segment listed (parseMedia).
+      var liveSeq = p.liveSeq;
+      for (var lv = 0; lv < out.length; lv++) {
+        if (out[lv].live !== null && out[lv].live !== undefined) { liveSeq = out[lv].live; break; }
+      }
       if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
       rest.splice(vi + 1, 0, numbering.join('\n'));
       lines.push(rest.join('\n'));
