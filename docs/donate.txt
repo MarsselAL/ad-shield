@@ -1,0 +1,4 @@
+# Optional tip link shown in the shared builds (userscript header and INSTALL.txt in the zip).
+# Put ONE public https link on the line below, e.g. https://revolut.me/yourname
+# Leave it empty for no tip text. Never put bank account numbers here: the file is public.
+https://revolut.me/marsel951u

@@ -43,6 +43,15 @@ def files_to_zip(root=ROOT):
     return out
 
 
+def _build_module():
+    """tools/build.py as a module (for donate_url)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("as_build", os.path.join(ROOT, "tools", "build.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def build_zip(out, root=ROOT):
     """Write the zip to `out`; returns the number of files."""
     entries = files_to_zip(root)
@@ -50,9 +59,15 @@ def build_zip(out, root=ROOT):
     if missing:
         raise FileNotFoundError("missing: %s" % ", ".join(missing))
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    tip = _build_module().donate_url(root)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for path, name in entries:
-            z.write(path, name)
+            if tip and name == TOP + "/INSTALL.txt":
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read().rstrip("\n")
+                z.writestr(name, text + "\n\nLike Ad Shield? An optional tip: " + tip + "\n")
+            else:
+                z.write(path, name)
     return len(entries)
 
 
