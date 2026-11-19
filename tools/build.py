@@ -18,6 +18,7 @@ names known to lib.js, string arguments); a bad rule fails the build.
 Also writes dist/ad-shield.user.js (write mode only; dist/ is not in git, so --check does not
 compare it): one userscript for Safari's Userscripts app (docs/IOS.md) with the YouTube scriptlets,
 rules/cosmetic/youtube.css and the Twitch files of build/main-world.js, chosen by location.hostname.
+Its code has comment-only and blank lines removed (strip_js) to keep it small; build/*.js do not.
 """
 import json
 import os
@@ -104,11 +105,183 @@ def scriptlet_table():
     return table
 
 
-def scriptlet_code(table):
-    """(lib.js + runner.js source text, the slim rules as a JSON literal)."""
+def scriptlet_code(table, strip=False):
+    """(lib.js + runner.js source text, the slim rules as a JSON literal). strip: comment-only
+    and blank lines removed (strip_js), for the userscript only."""
     slim = {"rules": [{"hosts": r["hosts"], "scriptlets": r["scriptlets"]} for r in table["rules"]]}
-    code = "".join("\n// ---- %s ----\n%s\n" % (f, read(f)) for f in SCRIPTLET_SOURCES)
+    if strip:
+        code = "".join("// ---- %s ----\n%s\n" % (f, strip_js(read(f), f)) for f in SCRIPTLET_SOURCES)
+    else:
+        code = "".join("\n// ---- %s ----\n%s\n" % (f, read(f)) for f in SCRIPTLET_SOURCES)
     return code, json.dumps(slim, separators=(",", ":"))
+
+
+REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+REGEX_AFTER_WORDS = {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void",
+                     "throw", "instanceof", "yield", "await"}
+
+
+def line_modes(src, name):
+    """For each line of src: (mode at its start, mode at its end before the newline), mode one of
+    'code', 'block' (inside /* */), 'str' (string continued with a trailing backslash), 'tmpl'
+    (inside a template literal). A light lexer: strings, comments, template literals with ${}
+    nesting and regex literals (a '/' after an operator, an opening bracket or a keyword starts
+    one). It raises ValueError when a file does not end in plain code, so a misread fails the
+    build instead of producing a broken userscript."""
+    starts, ends = [], []
+    cur = "code"           # code | line | block | sq | dq | tmpl | re | reclass
+    stack = []             # template nesting: brace depth of each open ${ ... }
+    depth = 0              # brace depth inside the innermost ${ ... } (when stack is not empty)
+    prev = ""              # last significant code character
+    word = ""              # last identifier / keyword in code
+    i, n = 0, len(src)
+
+    def mode():
+        return {"code": "code", "line": "code", "block": "block", "sq": "str", "dq": "str",
+                "tmpl": "tmpl"}.get(cur)
+
+    starts.append("code")
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c == "\n":
+            if cur in ("re", "reclass") or (cur in ("sq", "dq")):
+                raise ValueError("%s: line %d: unterminated string or regex (strip_js)" % (name, len(starts)))
+            if cur == "line":
+                cur = "code"
+            ends.append(mode())
+            starts.append(mode())
+            i += 1
+            continue
+        if cur == "code":
+            if c == "/" and nxt == "/":
+                cur = "line"; i += 2; continue
+            if c == "/" and nxt == "*":
+                cur = "block"; i += 2; continue
+            if c == "/":
+                if prev == "" or prev in REGEX_AFTER or (prev == "w" and word in REGEX_AFTER_WORDS):
+                    cur = "re"
+                else:
+                    prev = "/"
+                i += 1
+                continue
+            if c == "'":
+                cur = "sq"
+            elif c == '"':
+                cur = "dq"
+            elif c == "`":
+                cur = "tmpl"
+            elif c == "{":
+                depth += 1
+                prev = c
+            elif c == "}":
+                if stack and depth == 0:
+                    depth = stack.pop()
+                    cur = "tmpl"
+                else:
+                    depth -= 1
+                    prev = c
+            elif c.isalnum() or c in "_$":
+                j = i
+                while j < n and (src[j].isalnum() or src[j] in "_$"):
+                    j += 1
+                word = src[i:j]
+                prev = "w"
+                i = j
+                continue
+            elif not c.isspace():
+                prev = c
+            i += 1
+            continue
+        if cur == "line":
+            i += 1
+        elif cur == "block":
+            if c == "*" and nxt == "/":
+                cur = "code"; i += 2
+            else:
+                i += 1
+        elif cur in ("sq", "dq"):
+            if c == "\\":
+                i += 2
+                if nxt == "\n":
+                    ends.append("str")
+                    starts.append("str")
+                continue
+            if c == ("'" if cur == "sq" else '"'):
+                cur = "code"; prev = "w"; word = ""
+            i += 1
+        elif cur == "tmpl":
+            if c == "\\":
+                if nxt == "\n":
+                    ends.append("tmpl")
+                    starts.append("tmpl")
+                i += 2
+                continue
+            if c == "`":
+                cur = "code"; prev = "w"; word = ""
+            elif c == "$" and nxt == "{":
+                stack.append(depth)
+                depth = 0
+                cur = "code"; prev = "{"
+                i += 2
+                continue
+            i += 1
+        elif cur == "re":
+            if c == "\\":
+                i += 2; continue
+            if c == "[":
+                cur = "reclass"
+            elif c == "/":
+                cur = "code"; prev = "w"; word = ""
+            i += 1
+        else:  # reclass
+            if c == "\\":
+                i += 2; continue
+            if c == "]":
+                cur = "re"
+            i += 1
+    if cur not in ("code", "line") or stack:
+        raise ValueError("%s: strip_js lost track (ends inside %s)" % (name, cur))
+    ends.append(mode())
+    return list(zip(starts, ends))
+
+
+def strip_js(src, name="source"):
+    """src without whole-line // comments, /* */ blocks that start a line (after indentation) and
+    end one, blank lines and trailing whitespace; code, strings, regexes and template literals
+    are left exactly as they are (line_modes tells which lines start in plain code). Used for the
+    userscript only; build/*.js keep their comments."""
+    lines = src.split("\n")
+    modes = line_modes(src, name)
+    if len(modes) != len(lines):
+        raise ValueError("%s: strip_js line count mismatch" % name)
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        start, end = modes[i]
+        t = line.strip()
+        if start == "code" and t.startswith("//"):
+            i += 1
+            continue
+        if start == "code" and t.startswith("/*"):
+            # The first */ after the opening one closes it, wherever it is.
+            col = line.index("/*") + 2
+            j, k = i, line.find("*/", col)
+            while k == -1 and j + 1 < len(lines):
+                j += 1
+                k = lines[j].find("*/")
+            if k == -1:
+                raise ValueError("%s: unterminated comment at line %d" % (name, i + 1))
+            if not lines[j][k + 2:].strip():
+                i = j + 1
+                continue
+        if not t and start in ("code", "block"):
+            i += 1
+            continue
+        out.append(line if end in ("str", "tmpl") else line.rstrip())
+        i += 1
+    return "\n".join(out)
 
 
 def render_scriptlets():
@@ -240,7 +413,7 @@ def render_userscript():
     userscript for Safari's Userscripts app (page world, document-start, no chrome.*)."""
     version = json.loads(read("manifest.json"))["version"]
     table = scriptlet_table()
-    sl_code, sl_data = scriptlet_code(table)
+    sl_code, sl_data = scriptlet_code(table, strip=True)
     sl_hosts = []
     for r in table["rules"]:
         for h in r["hosts"]:
@@ -252,6 +425,10 @@ def render_userscript():
     for h in sl_hosts + css_hosts + tw_hosts:
         if h not in all_hosts:
             all_hosts.append(h)
+    # A host covers its subdomains (runner.js, the @match pairs below), so m.youtube.com of a
+    # mobile-only rule needs no entry of its own next to youtube.com.
+    sl_hosts = [h for h in sl_hosts if not any(h.endswith("." + o) for o in sl_hosts)]
+    all_hosts = [h for h in all_hosts if not any(h.endswith("." + o) for o in all_hosts)]
 
     def field(key, value):
         return "// @%-13s %s\n" % (key, value)
@@ -280,13 +457,13 @@ def render_userscript():
             "  var TWITCH_HOSTS = %s;\n" % json.dumps(tw_hosts),
             "  var TWITCH_SKIP = %s;\n" % json.dumps(exclude_hosts(tw_exclude)),
             "  var YOUTUBE_CSS = %s;\n" % js_string(read(YOUTUBE_CSS)),
-            USERSCRIPT_RUNTIME,
-            "\n// YouTube: same code as build/scriptlets-main.js.\nfunction youtubeScriptlets() {\n",
+            strip_js(USERSCRIPT_RUNTIME, "USERSCRIPT_RUNTIME") + "\n",
+            "// YouTube: same code as build/scriptlets-main.js.\nfunction youtubeScriptlets() {\n",
             sl_code,
-            "\nasScriptletRunner.run(win, asScriptlets, %s);\n}\n" % sl_data,
-            "\n// Twitch: same files as %s; they share root.__TAS__ and page.js removes it.\nfunction twitch() {\n" % MAIN_WORLD]
+            "asScriptletRunner.run(win, asScriptlets, %s);\n}\n" % sl_data,
+            "// Twitch: same files as %s; they share root.__TAS__ and page.js removes it.\nfunction twitch() {\n" % MAIN_WORLD]
     for f in BUNDLES[MAIN_WORLD]:
-        body.append("\n// ---- %s ----\n%s\n;\n" % (f, read(f)))
+        body.append("// ---- %s ----\n%s\n;\n" % (f, strip_js(read(f), f)))
     body.append("}\n})(window);\n")
     return "".join(head + body)
 

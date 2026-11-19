@@ -29,7 +29,7 @@ Userscripts popup.
 
 | Site | Status |
 |---|---|
-| YouTube (m.youtube.com, www.youtube.com in Safari) | Ad data is removed from the player response before the player reads it (the same rules as the Chrome extension, `rules/scriptlets.json`). The 17-second "fake buffering" wait is cut short, and ad slots are hidden with `rules/cosmetic/youtube.css`. |
+| YouTube (m.youtube.com, www.youtube.com in Safari) | Ad data is removed from the player response before the player reads it, using the same rules as the Chrome extension (`rules/scriptlets.json`). On iPhone this also covers Shorts ads (in every response, including ones read through `JSON.parse`), the ad items in the list under the player on m.youtube.com (`get_watch`, rule `youtube-mobile`), and the player data YouTube prefetches for tapped links (`resolve_url`). The 17-second "fake buffering" wait is cut short, and leftover ad slots are hidden with `rules/cosmetic/youtube.css`. That file covers every m.youtube.com selector in EasyList. |
 | Twitch (m.twitch.tv, www.twitch.tv) | The same worker and playlist code as the extension: during an ad it switches to an ad-free backup stream. **This only works if Safari on iPhone plays Twitch through Twitch's JavaScript worker (Media Source).** If Twitch hands the stream to Safari's built-in HLS player instead, no script can see the playlist, and Twitch ads still play. Not yet tested on a real iPhone (see "Status of testing"). |
 
 ## What it doesn't do on iOS
@@ -51,7 +51,8 @@ there. Safari with the Userscripts extension is the free route.
 
 ## How the file is built
 
-`python3 -I tools/build.py` writes `dist/ad-shield.user.js` next to the extension bundles. It holds:
+`python3 -I tools/build.py` writes `dist/ad-shield.user.js` next to the extension bundles, with comments and blank lines
+stripped (the extension's `build/*.js` keep theirs). It holds:
 
 - The YouTube scriptlets: `src/scriptlets/lib.js` and `src/scriptlets/runner.js`, plus
   `rules/scriptlets.json`.
@@ -70,7 +71,11 @@ in a simulated page.
 - **YouTube on iPhone: works.** Tested 19 Nov 2026 on Marsel's iPhone (Safari, Userscripts 1.8.6,
   page injection), with the build of commit 65d8389: no ads on m.youtube.com. (An earlier failed
   try came from a bad save: the file had become a PDF in the wrong folder.)
-- **Twitch on iPhone: not tested yet.** The open question is whether Twitch in iOS Safari plays
+- **19 Nov 2026 build (not yet retested on the phone):** adds the Shorts, `get_watch` and
+  `resolve_url` rules above. The file is now about 119 KB instead of 160 KB, because comments are
+  stripped from the userscript only, so Safari has less to parse on every page load.
+- **Twitch on iPhone: not tested yet.** Other projects using the same worker method have reported
+  it working in the Userscripts app, but those reports are anecdotal. The open question is whether Twitch in iOS Safari plays
   through its worker (Media Source, which the script can intercept) or through native HLS (which it
   can't). To check, connect the iPhone to a Mac and open Safari's **Develop** menu (Web Inspector).
   In the console, `window.__tas_page_installed__` should be `true`. Then look in the Network tab
