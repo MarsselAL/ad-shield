@@ -709,6 +709,7 @@ test('YouTube rules: fetch / XHR pruning applies to /youtubei/v1/player, not to 
   };
   var win = fakeWin('www.youtube.com', { bodies: bodies });
   R.run(win, c.lib, RULES, log);
+  c.parses = 0; // setup: edit-request-body parses its JSON edit values once
   var x = new win.XMLHttpRequest();
   x.open('POST', '/youtubei/v1/browse?prettyPrint=false');
   x.send();
@@ -771,6 +772,7 @@ test('YouTube rules: /youtubei/v1/player_xyz and /youtubei/v1/playerX are not ma
   var bodies = { '/youtubei/v1/player_xyz?prettyPrint=false': PLAYER, '/youtubei/v1/playerX': PLAYER };
   var win = fakeWin('www.youtube.com', { bodies: bodies });
   R.run(win, c.lib, RULES, log);
+  c.parses = 0; // setup: edit-request-body parses its JSON edit values once
   var x = new win.XMLHttpRequest();
   x.open('POST', '/youtubei/v1/player_xyz?prettyPrint=false');
   x.send();
@@ -1180,6 +1182,233 @@ test('rules: youtube-enforcement-dismiss runs on youtube.com only', function () 
   assert.ok(names('m.youtube.com').indexOf('youtube-enforcement-dismiss') !== -1, 'm.youtube.com');
   ['example.com', 'notyoutube.com', 'www.youtube-nocookie.com'].forEach(function (h) {
     assert.equal(names(h).indexOf('youtube-enforcement-dismiss'), -1, h);
+  });
+});
+
+// ------------------------------------------------------------------ edit-request-body (YouTube /player request)
+// uBO's "channel" tag edit: the generic scriptlet tests use it (the shipped rule uses "yahi", see the rules test)
+var ERB_ARGS = ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
+  'context.client.clientScreen="CHANNEL"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr'];
+function erbArgs() { return ERB_ARGS.slice(); }
+function ruleErbArgs() {
+  var s = R.pick(RULES, 'www.youtube.com').filter(function (x) { return x[0] === 'edit-request-body'; });
+  assert.equal(s.length, 1, 'one edit-request-body rule on www.youtube.com');
+  return s[0].slice(1);
+}
+function playerRequestBody(o) {
+  o = o || {};
+  var b = {
+    videoId: 'kJQP7kiw5Fk',
+    context: { client: { clientName: o.clientName || 'WEB', clientScreen: 'WATCH_FULL_SCREEN', userAgent: 'Mozilla/5.0 (Macintosh)' } },
+    playbackContext: { contentPlaybackContext: { referer: o.referer || 'https://www.youtube.com/watch?v=kJQP7kiw5Fk', html5Preference: 'HTML5_PREF_WANTS' } },
+    cpn: 'abc'
+  };
+  if (!o.noAttestation) b.attestationRequest = { omitBotguardData: true };
+  return JSON.stringify(b);
+}
+function assertEditedBody(text, msg) {
+  var o = JSON.parse(text);
+  assert.equal(o.context.client.clientScreen, 'CHANNEL', msg + ': clientScreen');
+  assert.equal(o.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr', msg + ': referer');
+  assert.equal(o.context.client.userAgent, 'Mozilla/5.0 (Macintosh)', msg + ': userAgent untouched');
+  assert.equal(o.playbackContext.contentPlaybackContext.html5Preference, 'HTML5_PREF_WANTS', msg + ': other keys kept');
+  assert.deepEqual(Object.keys(o), ['videoId', 'context', 'playbackContext', 'cpn', 'attestationRequest'], msg + ': key order kept');
+}
+/** fetch that records its arguments and answers {} */
+function recordingFetch(win) {
+  win.sent = [];
+  var Resp = win.Response;
+  win.fetch = function fetch(input, init) { win.sent.push({ input: input, init: init, n: arguments.length }); return Promise.resolve(new Resp('{}')); };
+}
+
+test('edit-request-body: /player fetch with a string body and attestationRequest is edited', function () {
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  run(win, 'edit-request-body', erbArgs());
+  var init = { method: 'POST', body: playerRequestBody(), credentials: 'same-origin' };
+  return win.fetch('/youtubei/v1/player?prettyPrint=false', init).then(function () {
+    var s = win.sent[0];
+    assert.equal(s.input, '/youtubei/v1/player?prettyPrint=false', 'same URL');
+    assert.ok(s.init !== init, 'a copy of init');
+    assert.equal(s.init.credentials, 'same-origin', 'other init fields kept');
+    assert.equal(init.body, playerRequestBody(), "the page's own init object is not changed");
+    assertEditedBody(s.init.body, 'fetch');
+    // already #reloadxhr: not appended twice
+    return win.fetch('https://www.youtube.com/youtubei/v1/player', { method: 'POST', body: playerRequestBody({ referer: 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr' }) });
+  }).then(function () {
+    assertEditedBody(win.sent[1].init.body, 'already tagged referer');
+  });
+});
+
+test('edit-request-body: untouched for /next, /player without the needle, non-string bodies and non-WEB clients', function () {
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  var c = countingLib();
+  c.lib.scriptlets['edit-request-body'](win, erbArgs(), log);
+  var cases = [
+    ['/youtubei/v1/next?prettyPrint=false', { method: 'POST', body: playerRequestBody() }],
+    ['/youtubei/v1/player/heartbeat?prettyPrint=false', { method: 'POST', body: playerRequestBody() }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody({ noAttestation: true }) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: { attestationRequest: 1 } }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: new Uint8Array([123, 125]) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody({ clientName: 'MWEB' }) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: '{"attestationRequest":' }]
+  ];
+  var parsesBefore = c.parses;
+  return Promise.all(cases.map(function (k) { return win.fetch(k[0], k[1]); })).then(function () {
+    cases.forEach(function (k, i) {
+      assert.ok(win.sent[i].init === k[1], 'same init object: ' + i);
+      assert.ok(win.sent[i].init.body === k[1].body, 'same body: ' + i);
+    });
+    assert.equal(c.parses - parsesBefore, 2, 'only the two needle-bearing /player string bodies (MWEB, truncated) were parsed');
+    return win.fetch('/youtubei/v1/player?prettyPrint=false');
+  }).then(function () {
+    assert.equal(win.sent[cases.length].n, 1, 'plain fetch(url) passed through with its own arguments');
+  });
+});
+
+test('edit-request-body: XMLHttpRequest.send(string) on /player edited; /next, needle-free and non-string untouched', function () {
+  var win = fakeWin('www.youtube.com');
+  var bodies = [];
+  win.XMLHttpRequest.prototype.send = function (b) { bodies.push(b); };
+  run(win, 'edit-request-body', erbArgs());
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/player?prettyPrint=false');
+  x.send(playerRequestBody());
+  assertEditedBody(bodies[0], 'XHR');
+  x.open('POST', '/youtubei/v1/next?prettyPrint=false'); // the same xhr reused for another URL
+  x.send(playerRequestBody());
+  assert.equal(bodies[1], playerRequestBody(), '/next untouched');
+  x.open('POST', '/youtubei/v1/player');
+  x.send(playerRequestBody({ noAttestation: true }));
+  assert.equal(bodies[2], playerRequestBody({ noAttestation: true }), 'no needle: untouched');
+  var blob = { size: 3 };
+  x.open('POST', '/youtubei/v1/player');
+  x.send(blob);
+  assert.ok(bodies[3] === blob, 'non-string body untouched');
+  x.send();
+  assert.equal(bodies[4], undefined, 'no body');
+});
+
+/** Request / Response / gzip stream fakes: "gzip" data is 'GZ:' + text. */
+function requestWin(opts) {
+  opts = opts || {};
+  var win = fakeWin('www.youtube.com');
+  function Stream(data) { this.data = data; }
+  Stream.prototype.pipeThrough = function (t) { return new Stream(t.run(this.data)); };
+  function CResp(body) { this._data = body instanceof Stream ? body.data : body; }
+  Object.defineProperty(CResp.prototype, 'body', { get: function () { return new Stream(this._data); } });
+  CResp.prototype.text = function () { return Promise.resolve(String(this._data)); };
+  CResp.prototype.arrayBuffer = function () { return Promise.resolve(this._data); };
+  win.Response = CResp;
+  win.codec = [];
+  if (!opts.noCodec) {
+    win.DecompressionStream = function (f) { win.codec.push('gunzip ' + f); this.run = function (d) { if (String(d).indexOf('GZ:') !== 0) throw new Error('not gzip'); return String(d).slice(3); }; };
+    win.CompressionStream = function (f) { win.codec.push('gzip ' + f); this.run = function (d) { return 'GZ:' + d; }; };
+  }
+  function Req(input, init) {
+    init = init || {};
+    var src = typeof input === 'string' ? { url: input, method: 'GET', headers: new FakeHeaders(), _body: null } : input;
+    this.url = src.url;
+    this.method = init.method || src.method;
+    this.headers = init.headers ? new FakeHeaders(init.headers) : new FakeHeaders(src.headers);
+    this._body = init.body !== undefined ? init.body : src._body;
+    this.bodyUsed = false;
+    this.signal = src.signal;
+    win.clones = win.clones || 0;
+  }
+  Object.defineProperty(Req.prototype, 'body', { get: function () { return this._body === null ? null : new Stream(this._body); } });
+  Req.prototype.clone = function () { win.clones++; return new Req(this); };
+  Req.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(String(this._body)); };
+  win.Request = Req;
+  recordingFetch(win);
+  return win;
+}
+
+test('edit-request-body: fetch(Request) on /player edited, gzip bodies gunzipped and gzipped again', function () {
+  var win = requestWin();
+  run(win, 'edit-request-body', erbArgs());
+  var plain = new win.Request('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody(), headers: { 'content-type': 'application/json' } });
+  var gz = new win.Request('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: 'GZ:' + playerRequestBody(), headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' } });
+  gz.signal = 'sig';
+  return win.fetch(plain).then(function () {
+    var s = win.sent[0];
+    assert.ok(s.input !== plain && s.input instanceof win.Request, 'a new Request');
+    assert.equal(s.input.url, plain.url, 'same URL');
+    assert.equal(s.input.method, 'POST', 'same method');
+    assert.equal(s.input.headers.get('content-type'), 'application/json', 'headers kept');
+    assertEditedBody(s.input._body, 'Request');
+    assert.notOk(plain.bodyUsed, "the page's Request body is not consumed");
+    assert.deepEqual(win.codec, [], 'no codec for a plain body');
+    return win.fetch(gz);
+  }).then(function () {
+    var s = win.sent[1];
+    assert.deepEqual(win.codec, ['gunzip gzip', 'gzip gzip'], 'gunzip, then gzip');
+    assert.equal(s.input.headers.get('content-encoding'), 'gzip', 'still gzip');
+    assert.equal(String(s.input._body).slice(0, 3), 'GZ:', 'body gzipped again');
+    assertEditedBody(String(s.input._body).slice(3), 'gzip Request');
+    assert.equal(s.input.signal, 'sig', 'Request built from the original (signal kept)');
+  });
+});
+
+test('edit-request-body: fetch(Request) untouched for /next, no needle, no codec, unknown encoding, GET', function () {
+  var win = requestWin();
+  run(win, 'edit-request-body', erbArgs());
+  var next = new win.Request('/youtubei/v1/next?prettyPrint=false', { method: 'POST', body: playerRequestBody() });
+  var noNeedle = new win.Request('/youtubei/v1/player', { method: 'POST', body: playerRequestBody({ noAttestation: true }) });
+  var br = new win.Request('/youtubei/v1/player', { method: 'POST', body: 'xx', headers: { 'content-encoding': 'br' } });
+  var get = new win.Request('/youtubei/v1/player');
+  var notGzip = new win.Request('/youtubei/v1/player', { method: 'POST', body: playerRequestBody(), headers: { 'content-encoding': 'gzip' } });
+  var reqs = [next, noNeedle, br, get, notGzip];
+  return Promise.all(reqs.map(function (r) { return win.fetch(r); })).then(function () {
+    var inputs = win.sent.map(function (x) { return x.input; });
+    assert.equal(inputs.length, reqs.length, 'all sent');
+    reqs.forEach(function (r, i) { assert.ok(inputs.indexOf(r) !== -1, 'same Request object: ' + i); });
+    assert.equal(win.clones, 2, 'only the needle-free POST and the bad gzip body were read (from clones)');
+    var noCodec = requestWin({ noCodec: true });
+    run(noCodec, 'edit-request-body', erbArgs());
+    var gz = new noCodec.Request('/youtubei/v1/player', { method: 'POST', body: 'GZ:' + playerRequestBody(), headers: { 'content-encoding': 'gzip' } });
+    return noCodec.fetch(gz).then(function () {
+      assert.ok(noCodec.sent[0].input === gz, 'no CompressionStream: sent as it came');
+      assert.equal(noCodec.clones, 0, 'not read');
+    });
+  });
+});
+
+test('edit-request-body: bad arguments install nothing; no JSON.stringify / JSON.parse / Promise.prototype.then patch', function () {
+  var win = fakeWin('www.youtube.com');
+  var fetch0 = win.fetch, send0 = win.XMLHttpRequest.prototype.send;
+  [[], ['/player/', 'attestationRequest'], ['/player/', '', 'a=1'], ['/player/', 'x', 'a=notjson'], ['/player/', 'x', 'a==1'], ['/player/', 'x', 'nonsense']].forEach(function (args) {
+    run(win, 'edit-request-body', args);
+    assert.ok(win.fetch === fetch0 && win.XMLHttpRequest.prototype.send === send0, 'nothing installed for ' + JSON.stringify(args));
+  });
+  var parse0 = win.JSON.parse, stringify0 = win.JSON.stringify, then0 = win.Promise.prototype.then;
+  run(win, 'edit-request-body', erbArgs());
+  assert.ok(win.fetch !== fetch0 && win.XMLHttpRequest.prototype.send !== send0, 'fetch and XHR send wrapped');
+  assert.ok(win.JSON.stringify === stringify0 && win.JSON.parse === parse0, 'JSON untouched');
+  assert.notOk(Object.prototype.hasOwnProperty.call(win.Promise.prototype, 'then'), 'no then on the page Promise');
+  assert.ok(win.Promise.prototype.then === then0, 'then untouched');
+  assert.ok(L.scriptlets['edit-request-body'].frames, 're-applied to same-origin child frames');
+});
+
+test('rules: edit-request-body (uBO "yahi" edit) for the youtubei /player request on youtube.com only', function () {
+  var args = ruleErbArgs();
+  assert.deepEqual(args, ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
+    'params="YAHI"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
+  assert.equal(args.join(' ').indexOf('CHANNEL'), -1, 'not clientScreen CHANNEL (UNPLAYABLE, measured 2026-11-19)');
+  ['example.com', 'notyoutube.com'].forEach(function (h) {
+    assert.equal(R.pick(RULES, h).filter(function (s) { return s[0] === 'edit-request-body'; }).length, 0, h);
+  });
+  var about = RULES.rules.filter(function (r) { return r.id === 'youtube'; })[0].about;
+  ['ef0ac51', 'dcf5811', '1fbf62c'].forEach(function (sha) { assert.includes(about, sha); });
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  R.run(win, L, RULES, log);
+  return win.fetch('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody() }).then(function () {
+    var o = JSON.parse(win.sent[0].init.body);
+    assert.equal(o.params, 'YAHI', 'params');
+    assert.equal(o.context.client.clientScreen, 'WATCH_FULL_SCREEN', 'clientScreen untouched');
+    assert.equal(o.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr', 'referer');
   });
 });
 

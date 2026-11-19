@@ -61,6 +61,7 @@ over CDP, so nothing is exposed on `window`.
 | `adjust-setTimeout [native code] 17000 0.001` | on | kept; delay compared before any string work | uBO ships it |
 | `prune-on-assign` ytInitialPlayerResponse / ytInitialData | on | kept | one-time |
 | `youtube-ad-skip`, `youtube-enforcement-dismiss` | 1.1.5 limits | kept | fallbacks, already limited |
+| `edit-request-body` on the youtubei `/player` request | - | **new**: `params` YAHI + referer `#reloadxhr` (client WEB, `attestationRequest` bodies only) | uBO's request tagging against fake buffering, without its JSON.stringify hook |
 
 ## Not changed
 
@@ -86,12 +87,20 @@ Done:
   poll asks all backup types at once, serving the most preferred clean answer (Purple ec29b68 / d9cafb2).
 - YouTube: prune `endpoint.watchEndpoint.unserializedPrefetchData.playerResponse` ad keys in
   resolve_url responses (uBO fed4e61, 2026-10-31).
+- YouTube fake buffering (with Ad Shield, ad videos started after 4-16 s of a 0x0 player): the
+  `/player` request body gets uBO's tag edit (uAssets ef0ac51 / dcf5811 / 1fbf62c), done by
+  `edit-request-body` inside the fetch / XHR send wrappers, not by a JSON.stringify hook. YouTube
+  sends that request as `fetch(Request)` with a gzip body, so the scriptlet reads a clone, gunzips,
+  edits and gzips again (Compression/DecompressionStream). uBO's first tag, clientScreen CHANNEL,
+  made YouTube answer UNPLAYABLE (support answer 3037019) in our headless runs; the "yahi" edit
+  (`params` YAHI + referer `#reloadxhr`), uBO's next tag, plays. Limit: a direct watch-page load
+  takes its player response from the HTML, not from `/player`, so only in-page navigation and
+  reloads are edited.
 
 Rejected:
 - 360p "bridge" during prerolls (TTV-AB Low Quality Fallback): brings back the blur; its users report it
   sticking at low quality (#102).
 - Buffer-gap seeks and blank ad segments: seeks and holes are what froze 1.1.x.
-- uBO's fake-buffering request tagging (JSON.stringify edit on /player) and SSAP seekTo: needs global
-  Promise.then / JSON.stringify hooks, the class of hook removed for the FPS dips. Revisit only if
-  fake buffering is reported.
+- uBO's SSAP seekTo and its fake-buffering detector (Map.has / Array.push / Promise.then proxies,
+  tag rotation, loadVideoById reload): global hooks, the class removed for the FPS dips.
 - YouTube embed (`serializedThirdPartyEmbedConfig`) edits and uBO's snackbar CSS (uBO itself disabled it).

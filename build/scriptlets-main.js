@@ -520,6 +520,173 @@ var asScriptlets = (function () {
   }
   preventFetch.frames = true;
 
+  /**
+   * edit-request-body(url, needle, edit...): JSON request bodies of matching fetch / XHR requests
+   * are edited before they are sent. needle: a top-level key the body must have (also a plain
+   * indexOf pre-check on the text). Each edit is one of
+   *   path==<json>   condition: nothing is edited unless every condition holds;
+   *   path=<json>    set the value (the parent object must exist; nothing is created);
+   *   path+=<text>   append text to the string at path unless it already ends with it.
+   * Paths are dotted (a.b.c). A body is re-serialised only when an edit changed something.
+   * Bodies handled: a string fetch init.body or XMLHttpRequest.send(string), and a POST Request
+   * passed to fetch (read from a clone; gzip bodies (Content-Encoding: gzip, what YouTube sends)
+   * are gunzipped and gzipped again with the page's DecompressionStream / CompressionStream, and
+   * sent untouched where those are missing). Everything else, and every non-matching URL, goes out
+   * as it came after one URL test. No JSON.stringify or Promise hook.
+   */
+  function compileEdits(list) {
+    var out = { conds: [], sets: [], appends: [] };
+    for (var i = 0; i < list.length; i++) {
+      var s = String(list[i]), m, parts;
+      try {
+        if ((m = /^([^=+]+)==([\s\S]*)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.conds.push({ parts: parts, value: nativeParse(m[2]) });
+        } else if ((m = /^([^=+]+)\+=([\s\S]+)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.appends.push({ parts: parts, text: m[2] });
+        } else if ((m = /^([^=+]+)=([\s\S]*)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.sets.push({ parts: parts, value: nativeParse(m[2]) });
+        } else {
+          return null;
+        }
+      } catch (e) {
+        return null; // value is not JSON
+      }
+    }
+    return out.sets.length || out.appends.length ? out : null;
+  }
+
+  function getAt(obj, parts, n) {
+    var o = obj;
+    for (var i = 0; i < n; i++) {
+      if (!isObj(o) || !hasOwn.call(o, parts[i])) return undefined;
+      o = o[parts[i]];
+    }
+    return o;
+  }
+
+  function sameJson(a, b) {
+    if (a === b) return true;
+    if (!isObj(a) || !isObj(b)) return false;
+    try { return nativeStringify(a) === nativeStringify(b); } catch (e) { return false; }
+  }
+
+  /** Edit obj in place; the number of values changed (0 when a condition fails). */
+  function applyEdits(obj, needle, edits) {
+    if (!isObj(obj) || !hasOwn.call(obj, needle)) return 0;
+    var i, e, parent, key, n = 0;
+    for (i = 0; i < edits.conds.length; i++) {
+      e = edits.conds[i];
+      if (!sameJson(getAt(obj, e.parts, e.parts.length), e.value)) return 0;
+    }
+    for (i = 0; i < edits.sets.length; i++) {
+      e = edits.sets[i];
+      parent = getAt(obj, e.parts, e.parts.length - 1);
+      key = e.parts[e.parts.length - 1];
+      if (isObj(parent) && !sameJson(parent[key], e.value)) { parent[key] = e.value; n++; }
+    }
+    for (i = 0; i < edits.appends.length; i++) {
+      e = edits.appends[i];
+      parent = getAt(obj, e.parts, e.parts.length - 1);
+      key = e.parts[e.parts.length - 1];
+      if (isObj(parent) && hasOwn.call(parent, key) && typeof parent[key] === 'string') {
+        var v = parent[key];
+        if (v.length < e.text.length || v.slice(v.length - e.text.length) !== e.text) { parent[key] = v + e.text; n++; }
+      }
+    }
+    return n;
+  }
+
+  function editRequestBody(win, args, log) {
+    var match = makeMatcher(args[0]);
+    var needle = args[1] ? String(args[1]) : '';
+    var edits = compileEdits(arraySlice.call(args, 2));
+    if (!args[0] || !needle || !edits) return;
+
+    /** The edited text, or null when the body stays as it is. */
+    function editText(text, url) {
+      if (typeof text !== 'string' || text.indexOf(needle) === -1) return null;
+      var obj;
+      try { obj = nativeParse(text); } catch (e) { return null; }
+      if (!applyEdits(obj, needle, edits)) return null;
+      log('edit-request-body', url);
+      return nativeStringify(obj);
+    }
+
+    function viaCodec(Ctor, body) { // body (string / bytes) through a gzip (de)compression stream
+      return new win.Response(new win.Response(body).body.pipeThrough(new Ctor('gzip')));
+    }
+
+    /** Promise of the Request to send: an edited copy of req, or req itself. */
+    function editRequest(req, url) {
+      var enc = '';
+      try { enc = String(req.headers.get('content-encoding') || '').toLowerCase(); } catch (e) { /* none */ }
+      var gzip = enc === 'gzip';
+      if ((enc && !gzip) || (gzip && (typeof win.DecompressionStream !== 'function' || typeof win.CompressionStream !== 'function'))) {
+        return win.Promise.resolve(req);
+      }
+      var copy = req.clone();
+      var textP = gzip ? viaCodec(win.DecompressionStream, copy.body).text() : copy.text();
+      return textP.then(function (text) {
+        var out = editText(text, url);
+        if (out === null) return req;
+        var bodyP = gzip ? viaCodec(win.CompressionStream, out).arrayBuffer() : win.Promise.resolve(out);
+        return bodyP.then(function (body) { return new win.Request(req, { body: body }); });
+      }).then(null, function () { return req; });
+    }
+
+    wrap(win, win, 'fetch', function (t, self, a) {
+      try {
+        var url = urlOf(a[0]);
+        if (!match(url)) return reflectApply(t, self, a);
+        var init = a[1];
+        if (isObj(init) && init.body !== undefined && init.body !== null) {
+          var out = editText(init.body, url);
+          if (out !== null) {
+            var copy = {};
+            for (var k in init) copy[k] = init[k];
+            copy.body = out;
+            a = [a[0], copy];
+          }
+          return reflectApply(t, self, a);
+        }
+        var req = a[0];
+        if (isObj(req) && typeof req.clone === 'function' && typeof win.Request === 'function' &&
+            String(req.method).toUpperCase() === 'POST' && req.body !== null && !req.bodyUsed) {
+          var rest = arraySlice.call(a, 1);
+          return editRequest(req, url).then(function (r) {
+            return reflectApply(t, self, [r].concat(rest));
+          });
+        }
+      } catch (e) { /* send it as it came */ }
+      return reflectApply(t, self, a);
+    });
+
+    var XP = win.XMLHttpRequest && win.XMLHttpRequest.prototype;
+    if (!XP) return;
+    var pending = new WeakMap(); // xhr -> url of the matching request opened on it
+    wrap(win, XP, 'open', function (t, xhr, a) {
+      try {
+        var url = String(a[1]);
+        if (match(url)) pending.set(xhr, url); else pending.delete(xhr);
+      } catch (e) { /* plain request */ }
+      return reflectApply(t, xhr, a);
+    });
+    wrap(win, XP, 'send', function (t, xhr, a) {
+      try {
+        var url = pending.get(xhr);
+        if (url !== undefined && typeof a[0] === 'string') {
+          var out = editText(a[0], url);
+          if (out !== null) a = [out];
+        }
+      } catch (e) { /* send it as it came */ }
+      return reflectApply(t, xhr, a);
+    });
+  }
+  editRequestBody.frames = true;
+
   /** prevent-setTimeout(needle, delay): callbacks whose source matches (and delay equals) never run. */
   function preventSetTimeout(win, args, log) {
     var needle = args[0] ? String(args[0]) : '';
@@ -957,6 +1124,7 @@ var asScriptlets = (function () {
       'json-prune-xhr-response': jsonPruneXhrResponse,
       'prune-on-assign': pruneOnAssign,
       'prevent-fetch': preventFetch,
+      'edit-request-body': editRequestBody,
       'prevent-setTimeout': preventSetTimeout,
       'adjust-setTimeout': adjustSetTimeout,
       'prevent-promise-then-callback': preventPromiseThen,
@@ -1057,6 +1225,6 @@ var asScriptletRunner = (function () {
 
 
 try {
-  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
+  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"YAHI\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
 } catch (e) { /* never break the page */ }
 })();
