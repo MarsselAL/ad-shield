@@ -25,6 +25,11 @@ Modes
         - the main player's video state every 2 s (did it advance?), Twitch's visible ad UI,
           the extension's "Ad blocked" toast, chat lines, channel points, navigation;
         - [TAS] console lines, console errors split into extension vs Twitch;
+        - playback health of the main <video> every 2 s (in-page listeners, re-attached when
+          Twitch replaces the element): waiting/stalled events and stall ms, decoded/dropped
+          frames, resolution over time (time at each height, below 720p), paused ms and pause
+          events not caused by the harness. "Playback health" in report.md, side by side
+          with --compare-without-extension;
         - a screenshot every 30 s, Performance.getMetrics every 10 s, Chrome CPU/RSS via ps.
       Phases: watch N minutes, quality switch (localStorage + reload), refresh, channel switch
       (if --switch-to, in-app navigation), VOD (if --vod).
@@ -86,6 +91,7 @@ TWITCH = {
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+EXPECTED_VERSION = "2.0.0"  # --smoke checks the manifest version against this
 SW_PATH = "src/background/service-worker.js"
 CONFIG_JS = os.path.join(ROOT, "src", "config.js")
 INTERESTING = re.compile(r"usher\.ttvnw\.net|\.m3u8|gql\.twitch\.tv|edge\.ads\.twitch\.tv|amazon-adsystem|media-amazon\.com")
@@ -684,7 +690,7 @@ def run_smoke(args):
                     break
                 time.sleep(0.25)
             report["sw_state_initial"] = st
-            check("manifest version 1.1.5", st and st.get("version") == "1.1.5", st and st.get("version"))
+            check("manifest version %s" % EXPECTED_VERSION, st and st.get("version") == EXPECTED_VERSION, st and st.get("version"))
             ids = sorted(s["id"] for s in st.get("scripts", [])) if st else None
             check("only the general content scripts are registered (Twitch ones are static in manifest.json)",
                   ids == GENERAL_SCRIPTS, ids)
@@ -1054,6 +1060,195 @@ return {
 })()"""
 
 
+# --------------------------------------------------------------------------- playback health
+# Shared by live_test (Twitch) and youtube_test. Installed once per document on first use: the
+# state lives in a closure held by a non-enumerable window property with a random name (per
+# harness process), with one record per <video> in a WeakMap. Listeners on the current main
+# video count waiting / stalled / pause events; a 250 ms timer adds up the time the playhead did
+# not advance while not paused (stallMs), the time paused (pausedMs) and decoded / dropped frames
+# from getVideoPlaybackQuality() (counter resets on a new source are handled). Each sample call
+# looks the main video up again and re-attaches when the site replaced the element (SPA).
+# Pauses inside a window opened by health_mark() (harness clicks, play(), SPA navigation), on an
+# ended video or on an element already removed from the page are not counted as real pauses.
+HEALTH_KEY = "_h" + os.urandom(6).hex()
+HEALTH_COUNTERS = ("waiting", "stalled", "pauses", "harnessPauses", "stallMs", "pausedMs", "frames", "dropped", "reattached")
+
+_HEALTH_BODY = r"""
+const K = '__HEALTH_KEY__';
+const find = () => (__HEALTH_FIND__) || null;
+let H = window[K];
+if (!H) {
+  H = { doc: Math.random().toString(36).slice(2, 10), m: new WeakMap(), cur: null, gen: 0, harnessUntil: 0,
+        last: performance.now(), tot: { waiting: 0, stalled: 0, pauses: 0, harnessPauses: 0, stallMs: 0, pausedMs: 0,
+                                        frames: 0, dropped: 0, reattached: 0 } };
+  Object.defineProperty(window, K, { value: H, enumerable: false, configurable: false, writable: false });
+  const quality = v => { try { const q = v.getVideoPlaybackQuality(); return [q.totalVideoFrames, q.droppedVideoFrames]; }
+                         catch (e) { return [0, 0]; } };
+  H.attach = (v) => {
+    if (!H.m.has(v)) {
+      const q = quality(v);
+      H.m.set(v, { id: ++H.gen, lastCT: v.currentTime, lastTot: q[0], lastDrop: q[1] });
+      v.addEventListener('waiting', () => { if (H.cur === v) H.tot.waiting++; });
+      v.addEventListener('stalled', () => { if (H.cur === v) H.tot.stalled++; });
+      v.addEventListener('pause', () => {
+        if (H.cur !== v || v.ended || !v.isConnected) return;
+        if (performance.now() < H.harnessUntil) H.tot.harnessPauses++; else H.tot.pauses++;
+      });
+    }
+    if (H.cur !== v) { if (H.cur) H.tot.reattached++; H.cur = v; H.m.get(v).lastCT = v.currentTime; }
+  };
+  H.tick = () => {
+    const now = performance.now(), dt = Math.min(now - H.last, 5000);
+    H.last = now;
+    if (!H.cur || !H.cur.isConnected) { const n = find(); if (n) H.attach(n); }
+    const v = H.cur;
+    if (!v) return;
+    const r = H.m.get(v);
+    if (v.paused) { if (!v.ended) H.tot.pausedMs += dt; }
+    else if (!v.ended && v.currentTime === r.lastCT) H.tot.stallMs += dt;
+    r.lastCT = v.currentTime;
+    const q = quality(v);
+    let dT = q[0] - r.lastTot, dD = q[1] - r.lastDrop;
+    if (dT < 0 || dD < 0) { dT = q[0]; dD = q[1]; }  // new source on the same element: counters restarted
+    H.tot.frames += dT; H.tot.dropped += dD; r.lastTot = q[0]; r.lastDrop = q[1];
+  };
+  setInterval(H.tick, 250);
+}
+const n = find();
+if (n) H.attach(n);
+H.tick();
+const v = H.cur;
+return Object.assign({ doc: H.doc, el: v ? H.m.get(v).id : null, elements: H.gen, video: !!v,
+  ct: v ? +v.currentTime.toFixed(2) : null, paused: v ? v.paused : null, ended: v ? v.ended : null,
+  readyState: v ? v.readyState : null, w: v ? v.videoWidth : null, h: v ? v.videoHeight : null },
+  JSON.parse(JSON.stringify(H.tot)));
+"""
+
+HEALTH_MARK_JS = ("(() => { const H = window['__HEALTH_KEY__']; if (H) H.harnessUntil = performance.now() + %d; "
+                  "return !!H; })()").replace("__HEALTH_KEY__", HEALTH_KEY)
+
+
+def health_js(find_expr, prelude=""):
+    """Page expression: install (once per document) + sample. find_expr returns the main <video>."""
+    body = _HEALTH_BODY.replace("__HEALTH_KEY__", HEALTH_KEY).replace("__HEALTH_FIND__", find_expr)
+    return "(() => {" + prelude + body + "})()"
+
+
+HEALTH_TWITCH_JS = health_js("mainVideo()", PAGE_PRELUDE)
+
+
+def health_sample(cdp, sid, js, group):
+    """One health sample (dict); `group` keeps deltas inside one phase / one video."""
+    try:
+        s = cdp.evaluate(sid, js, timeout=10) or {}
+    except CDPError as e:
+        s = {"error": str(e)[:200]}
+    s["t"] = time.time()
+    s["group"] = group
+    return s
+
+
+def health_mark(cdp, sid, ms=3000):
+    """Pauses in the next `ms` are caused by the harness (click, play(), navigation)."""
+    try:
+        cdp.evaluate(sid, HEALTH_MARK_JS % int(ms), timeout=5)
+    except CDPError:
+        pass
+
+
+def health_summary(samples):
+    """Totals over consecutive samples of the same group (the first sample of a group is the
+    baseline). A new document (page load) restarts the page counters, so its first values count
+    in full. Resolution time is attributed to the earlier sample's size, playing time only."""
+    tot = dict.fromkeys(HEALTH_COUNTERS, 0)
+    heights, below720, playing_ms, observed_ms = {}, 0.0, 0.0, 0.0
+    series, changes, prev, t0, elements = [], [], None, None, set()
+    for s in samples:
+        if not s or s.get("error") or s.get("doc") is None:
+            continue
+        if t0 is None:
+            t0 = s["t"]
+        if s.get("el") is not None:
+            elements.add((s["doc"], s["el"]))
+        d = dict.fromkeys(HEALTH_COUNTERS, 0)
+        if prev is not None and prev.get("group") == s.get("group"):
+            dt = (s["t"] - prev["t"]) * 1000.0
+            observed_ms += dt
+            for k in HEALTH_COUNTERS:
+                v = s.get(k) or 0
+                dv = v - (prev.get(k) or 0) if prev["doc"] == s["doc"] else v
+                d[k] = v if dv < 0 else dv
+                tot[k] += d[k]
+            if prev.get("video") and not prev.get("paused"):
+                h = prev.get("h") or 0
+                heights[str(h)] = heights.get(str(h), 0.0) + dt
+                playing_ms += dt
+                if h < 720:
+                    below720 += dt
+        res = "%sx%s" % (s.get("w"), s.get("h")) if s.get("video") else "none"
+        if not changes or changes[-1][1] != res:
+            changes.append([round(s["t"] - t0, 1), res])
+        series.append({"t": round(s["t"] - t0, 1), "group": s.get("group"), "res": res, "paused": s.get("paused"),
+                       "dFrames": d["frames"], "dDropped": d["dropped"], "dStallMs": round(d["stallMs"]),
+                       "dWaiting": d["waiting"], "dStalled": d["stalled"], "dPauses": d["pauses"]})
+        prev = s
+    return {
+        "samples": len(series), "observed_s": round(observed_ms / 1000.0, 1),
+        "stall_events": tot["waiting"] + tot["stalled"], "waiting_events": tot["waiting"], "stalled_events": tot["stalled"],
+        "stall_ms": round(tot["stallMs"]),
+        "frames_total": tot["frames"], "frames_dropped": tot["dropped"],
+        "dropped_pct": round(100.0 * tot["dropped"] / tot["frames"], 2) if tot["frames"] else None,
+        "resolution_changes": changes[:40],
+        "ms_at_height": {k: round(v) for k, v in sorted(heights.items(), key=lambda kv: -int(kv[0]))},
+        "playing_ms": round(playing_ms), "below_720p_ms": round(below720),
+        "below_720p_pct": round(100.0 * below720 / playing_ms, 1) if playing_ms else None,
+        "paused_ms": round(tot["pausedMs"]), "pause_events": tot["pauses"], "harness_pause_events": tot["harnessPauses"],
+        "video_elements": len(elements), "reattached": tot["reattached"],
+        "series": series,
+    }
+
+
+def _health_res(h):
+    ch = h.get("resolution_changes") or []
+    s = " -> ".join("%s@%ss" % (r, t) for t, r in ch[:6])
+    return s + (" ..." if len(ch) > 6 else "")
+
+
+def _health_heights(h):
+    return ", ".join("%sp %.0fs" % (k, v / 1000.0) for k, v in (h.get("ms_at_height") or {}).items()) or "-"
+
+
+HEALTH_MD_HEAD = ["| Scope | Observed s | Stall events (waiting/stalled) | Stall ms | Frames (dropped, %) | Paused ms | Pauses (harness) | Below 720p s (%) | Time at height | Resolution | Video elements |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+
+
+def health_md_row(scope, h):
+    if not h or not h.get("samples"):
+        return "| %s | no samples | | | | | | | | | |" % _cell(scope)
+    return "| %s | %s | %s (%s/%s) | %s | %s (%s, %s%%) | %s | %s (%s) | %.1f (%s%%) | %s | %s | %s |" % (
+        _cell(scope), h["observed_s"], h["stall_events"], h["waiting_events"], h["stalled_events"], h["stall_ms"],
+        h["frames_total"], h["frames_dropped"], h["dropped_pct"], h["paused_ms"], h["pause_events"], h["harness_pause_events"],
+        h["below_720p_ms"] / 1000.0, h["below_720p_pct"], _cell(_health_heights(h)), _cell(_health_res(h)), h["video_elements"])
+
+
+HEALTH_COMPARE_ROWS = [
+    ("Observed (s)", "observed_s"), ("Stall events (waiting + stalled)", "stall_events"), ("Stall time (ms)", "stall_ms"),
+    ("Frames decoded", "frames_total"), ("Frames dropped", "frames_dropped"), ("Dropped %", "dropped_pct"),
+    ("Time below 720p (ms)", "below_720p_ms"), ("Below 720p (% of playing)", "below_720p_pct"),
+    ("Paused (ms)", "paused_ms"), ("Pause events (not harness)", "pause_events"),
+    ("Pause events (harness)", "harness_pause_events"), ("Video elements seen", "video_elements"),
+]
+
+
+def health_compare_md(named):
+    """Side-by-side table: named = [(column label, health summary), ...]."""
+    md = ["| Metric | " + " | ".join(_cell(n) for n, _ in named) + " |", "|---" * (len(named) + 1) + "|"]
+    for title, key in HEALTH_COMPARE_ROWS:
+        md.append("| %s | %s |" % (title, " | ".join(_cell((h or {}).get(key)) for _, h in named)))
+    md.append("| Time at height | %s |" % " | ".join(_cell(_health_heights(h or {})) for _, h in named))
+    return md
+
+
 def chrome_usage(root_pid):
     """CPU% and RSS (MB) summed over Chrome's process tree, via ps."""
     try:
@@ -1096,6 +1291,7 @@ class LiveRecorder:
         self.states = []         # fast samples (video, ad UI, toast, chat) every 2 s
         self.screens = []
         self.gates = []          # consent / mature / play actions
+        self.health = []         # playback health of the main <video> every 2 s (see HEALTH_*)
 
     def session_type(self, sid):
         if sid == self.sid:
@@ -1171,6 +1367,11 @@ class LiveRecorder:
         self.states.append(s)
         return s
 
+    def health_sample(self):
+        s = health_sample(self.cdp, self.sid, HEALTH_TWITCH_JS, self.phase)
+        self.health.append(s)
+        return s
+
     def sample(self):
         s = {"t": time.time(), "phase": self.phase}
         try:
@@ -1196,6 +1397,7 @@ class LiveRecorder:
             pass
 
     def trusted_click(self, x, y):
+        health_mark(self.cdp, self.sid)
         for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
             self.cdp.send("Input.dispatchMouseEvent", {"type": typ, "x": x, "y": y, "button": "left",
                                                        "clickCount": 0 if typ == "mouseMoved" else 1}, session=self.sid)
@@ -1237,6 +1439,7 @@ class LiveRecorder:
         return acted
 
     def ensure_playing(self):
+        health_mark(self.cdp, self.sid)
         try:
             r = self.cdp.evaluate(self.sid, PLAY_JS, timeout=15)
         except CDPError as e:
@@ -1266,12 +1469,14 @@ def watch(rec, seconds, phase, screenshot_every=30, sample_every=10, state_every
     start = time.time()
     first_state = len(rec.states)
     first_pl = len(rec.playlists)
+    first_health = len(rec.health)
     next_state = next_sample = next_shot = start
     next_gate = start + 10
     while time.time() - start < seconds:
         now = time.time()
         if now >= next_state:
             s = rec.state()
+            rec.health_sample()
             next_state += state_every
             v = s.get("video")
             if v and v.get("paused") and now - start > 6 and len(rec.states) - first_state >= 3:
@@ -1288,7 +1493,10 @@ def watch(rec, seconds, phase, screenshot_every=30, sample_every=10, state_every
             rec.screenshot("%s-%03d" % (phase, int(now - start)))
             next_shot += screenshot_every
         rec.pump(0.4)
-    return summarize_phase(rec, phase, seconds, rec.states[first_state:], rec.playlists[first_pl:])
+    res = summarize_phase(rec, phase, seconds, rec.states[first_state:], rec.playlists[first_pl:])
+    res["health"] = health_summary(rec.health[first_health:])
+    res["health"].pop("series", None)  # the run keeps the full series
+    return res
 
 
 def summarize_phase(rec, phase, seconds, states, playlists):
@@ -1338,6 +1546,7 @@ def spa_navigate(rec, path, phase):
     """In-app navigation (React Router listens to popstate); falls back to Page.navigate."""
     rec.phase = phase
     before = rec.cdp.evaluate(rec.sid, "location.pathname")
+    health_mark(rec.cdp, rec.sid, 15000)
     rec.cdp.evaluate(rec.sid, "history.pushState({}, '', %s); dispatchEvent(new PopStateEvent('popstate', { state: {} })); true"
                      % json.dumps(path))
     method = "spa"
@@ -1541,6 +1750,9 @@ def collect_run(result, rec, cdp):
     result["samples"] = rec.samples
     result["states"] = rec.states
     result["screenshots"] = rec.screens
+    # Only samples taken inside watch() (grouped by phase), so the run total = sum of the phases.
+    result["health"] = health_summary(rec.health)
+    result["health_samples"] = rec.health
 
 
 def _cell(x):
@@ -1603,9 +1815,32 @@ def summarize_md(report):
         if ext_errs:
             md += ["", "Extension errors (first 10):", ""]
             md += ["- [%s/%s/%s] %s" % (p.get("phase"), p.get("session_type"), p.get("source"), _cell(p.get("text"))[:200]) for p in ext_errs[:10]]
+        md += ["", "### Playback health (%s)" % r["label"], ""] + HEALTH_MD_HEAD
+        for p in r.get("phases", []):
+            if p.get("health") is not None:
+                md.append(health_md_row(p["phase"], p["health"]))
+        md.append(health_md_row("**run total**", r.get("health")))
         end = r.get("page_health_end") or {}
         md += ["", "Page at end: url `%s`, chat=%s, chatLines=%s, points=%s, loggedOut=%s, viewport=%s" % (
             end.get("url"), end.get("chat"), end.get("chatLines"), end.get("points"), end.get("loggedOut"), end.get("viewport")), ""]
+    runs = [r for r in report["runs"] if r.get("health")]
+    if len(runs) >= 2:
+        md += ["## Playback health: with vs without the extension", "",
+               "Totals over the watch phases of each run (same channel, run one after the other, so the stream "
+               "itself may differ).", ""]
+        md += health_compare_md([("with extension" if r.get("with_extension") else "without extension", r["health"])
+                                 for r in runs])
+        phases = [p["phase"] for p in runs[0].get("phases", []) if p.get("health")]
+        for name in phases:
+            per = [(r["label"], next((p.get("health") for p in r.get("phases", []) if p.get("phase") == name), None))
+                   for r in runs]
+            md += ["", "Phase `%s`: stall events %s; stall ms %s; dropped %% %s; below 720p %% %s; pauses %s" % (
+                name, *[" vs ".join("%s %s" % (lbl, _cell((h or {}).get(k))) for lbl, h in per)
+                        for k in ("stall_events", "stall_ms", "dropped_pct", "below_720p_pct", "pause_events")])]
+        md.append("")
+    md += ["Playback health: stall ms = time the playhead did not advance while the video was not paused "
+           "(250 ms in-page timer); frames from getVideoPlaybackQuality(); time at height counts playing time "
+           "between 2 s samples; pauses exclude ones within the harness's own click / play() / navigation window.", ""]
     md += ["Notes: fresh logged-out profile (channel points n/a; Twitch may serve fewer or different ads than to a "
            "logged-in viewer). 'Ad served' counts raw network responses (before the extension's worker rewrites them); "
            "'ad UI visible' is what the viewer saw.", ""]
