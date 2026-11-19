@@ -59,7 +59,7 @@
     },
     {
       "id": "youtube-skip",
-      "about": "Fallbacks: for ads that still play (e.g. server-side inserted) mute, jump to the end of the ad, click Skip, unmute afterwards (research B recipe 11); and close YouTube's anti-adblock dialog properly (close() releases its scroll lock and backdrop) and resume a video it paused without the viewer (B.3); pauses from media keys, headphones or picture-in-picture (media session actions) are left alone.",
+      "about": "Fallbacks: for ads that still play (e.g. server-side inserted) mute, jump to the end of the ad, click Skip, unmute afterwards (research B recipe 11); and close YouTube's anti-adblock dialog properly (close() releases its scroll lock and backdrop) and resume a video it paused without the viewer while it is open or just closed (B.3); no repeated seeks within one ad and none in ads over 90 s (stitched streams); pauses from media keys, headphones or picture-in-picture (media session actions) are left alone.",
       "hosts": [
         "youtube.com"
       ],

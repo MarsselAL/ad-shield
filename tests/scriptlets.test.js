@@ -312,6 +312,109 @@ test('json-prune-xhr-response: only matching requests; text and json response ty
   assert.throws(function () { return j.responseText; }, 'native error kept for responseText of a json request');
 });
 
+// ------------------------------------------------------------------ needle pre-check (no work on ad-free payloads)
+/** A second copy of lib.js whose captured JSON.parse counts its calls, so skipped parses show. */
+function countingLib() {
+  var orig = JSON.parse, c = { parses: 0 };
+  JSON.parse = function (s, r) { c.parses++; return orig.call(JSON, s, r); };
+  try { load('src/scriptlets/lib.js'); c.lib = asScriptlets; } finally { JSON.parse = orig; asScriptlets = L; }
+  c.run = function (win, name, args) { c.lib.scriptlets[name](win, args || [], log); };
+  return c;
+}
+/** obj behind a Proxy that records every look at it (the pruner always looks at the root); the
+ * promise machinery's look for a .then is not counted. */
+function watched(obj, touches) {
+  function note(n) {
+    return function (target, key) {
+      if (!(n === 'get' && key === 'then')) touches.push(n);
+      return Reflect[n].apply(Reflect, arguments);
+    };
+  }
+  return new Proxy(obj, { get: note('get'), has: note('has'), ownKeys: note('ownKeys'), deleteProperty: note('deleteProperty'), getOwnPropertyDescriptor: note('getOwnPropertyDescriptor') });
+}
+var FEED_PATHS = '..contents.[-].richItemRenderer.content.adSlotRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd';
+
+test('makePruner.mayMatch: true only when the text has the last word of some path', function () {
+  var p = L.makePruner('adPlacements playerResponse.adSlots [].playerResponse.playerAds ' + FEED_PATHS + ' ..contents.[-].searchPyvRenderer');
+  assert.equal(typeof p.mayMatch, 'function');
+  ['"adPlacements":[]', '{"adSlots":1}', 'playerAds', 'adSlotRenderer', 'searchPyvRenderer', '"isAd":true'].forEach(function (t) {
+    assert.ok(p.mayMatch(t), t);
+  });
+  ['{"videoDetails":{}}', 'playerResponse', 'reelWatchEndpoint adClientParams', ''].forEach(function (t) {
+    assert.notOk(p.mayMatch(t), t);
+  });
+  assert.ok(L.makePruner('[-].[]').mayMatch('{"x":1}'), 'a path with no key in it: every text is a candidate');
+});
+
+test('json-prune: JSON.parse of a needle-free string is not walked; with a needle it is pruned as before', function () {
+  var win = fakeWin();
+  var touches = [];
+  var nativeParse = win.JSON.parse;
+  win.JSON.parse = function parse(s, r) { return watched(nativeParse(s, r), touches); };
+  run(win, 'json-prune', [FEED_PATHS + ' adPlacements', 'responseContext']);
+  var o = win.JSON.parse('{"responseContext":{},"contents":[{"videoRenderer":{"videoId":"a"}}]}');
+  assert.deepEqual(touches, [], 'no needle: the parsed object is returned as is, never looked at');
+  assert.equal(o.contents[0].videoRenderer.videoId, 'a');
+  touches.length = 0;
+  var f = win.JSON.parse(JSON.stringify(feed()));
+  assert.ok(touches.length > 0, 'needle present: pruned');
+  assert.deepEqual(feedIds(f), ['a', 'b', 'more', 'AD', 'c'], 'same result as without the pre-check');
+  var withReviver = win.JSON.parse('{"responseContext":{}}', function (k, v) { if (k === '') v.adPlacements = [1]; return v; });
+  assert.equal(withReviver.adPlacements, undefined, 'a reviver can add keys the text lacks: still pruned');
+});
+
+test('json-prune-fetch-response: needle-free body not parsed, same Response object; needle body pruned', function () {
+  var c = countingLib();
+  var win = fakeWin('www.youtube.com', { bodies: { '/youtubei/v1/next': '{"responseContext":{},"contents":[]}', '/youtubei/v1/player': PLAYER } });
+  var sent = [];
+  var origFetch = win.fetch;
+  win.fetch = function fetch(u) { return origFetch(u).then(function (r) { sent.push(r); return r; }); };
+  c.run(win, 'json-prune-fetch-response', ['adPlacements adSlots playerAds ' + FEED_PATHS, '/youtubei/']);
+  return win.fetch('/youtubei/v1/next').then(function (r) {
+    assert.ok(r === sent[0], 'the original Response object');
+    assert.equal(c.parses, 0, 'no JSON.parse of an ad-free body');
+    return win.fetch('/youtubei/v1/player');
+  }).then(function (r) {
+    assert.ok(r !== sent[1], 'pruned copy');
+    assert.equal(c.parses, 1);
+    return r.text();
+  }).then(function (t) { assertPlayerClean(JSON.parse(t)); });
+});
+
+test('json-prune: Response.json of a Response json-prune-fetch-response already pruned is not pruned again', function () {
+  var win = fakeWin('www.youtube.com', { bodies: { '/youtubei/v1/player': PLAYER } });
+  var touches = [];
+  var nativeJson = win.Response.prototype.json;
+  win.Response.prototype.json = function json() { return nativeJson.call(this).then(function (o) { return watched(o, touches); }); };
+  run(win, 'json-prune', ['adPlacements adSlots playerAds']);
+  run(win, 'json-prune-fetch-response', ['adPlacements adSlots playerAds', '/youtubei/']);
+  return win.fetch('/youtubei/v1/player').then(function (r) { return r.json(); }).then(function (o) {
+    assert.deepEqual(touches, [], 'already pruned: .json() result not walked again');
+    assertPlayerClean(o);
+    touches.length = 0;
+    return new win.Response(PLAYER).json();
+  }).then(function (o) {
+    assert.ok(touches.length > 0, 'any other Response: pruned');
+    assertPlayerClean(o);
+  });
+});
+
+test('json-prune-xhr-response: needle-free string body not parsed; needle body pruned', function () {
+  var c = countingLib();
+  var win = fakeWin('www.youtube.com', { bodies: { '/youtubei/v1/next': '{"responseContext":{},"contents":[]}', '/youtubei/v1/player': PLAYER } });
+  c.run(win, 'json-prune-xhr-response', ['adPlacements adSlots playerAds ' + FEED_PATHS, '/youtubei/']);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/next');
+  x.send();
+  assert.equal(x.responseText, '{"responseContext":{},"contents":[]}');
+  assert.equal(x.response, x.responseText);
+  assert.equal(c.parses, 0, 'no JSON.parse of an ad-free body');
+  x.open('POST', '/youtubei/v1/player');
+  x.send();
+  assertPlayerClean(JSON.parse(x.responseText));
+  assert.equal(c.parses, 1);
+});
+
 test('prevent-fetch: matching URL answered locally with an empty 200, others sent', function () {
   var win = fakeWin('x.com');
   run(win, 'prevent-fetch', ['/pagead/']);
@@ -593,6 +696,7 @@ test('youtube-ad-skip: ad-showing mutes, seeks to the end, clicks Skip; restores
   assert.equal(video.muted, false, 'sound restored');
   // same stream as the content (server-side ad): no seek past the video
   playerEl.classList.add('ad-showing');
+  video.duration = 60; // short enough that only the same-stream check stops the seek
   video.currentTime = 30;
   observers[0].cb([]);
   assert.equal(video.currentTime, 30, 'no seek inside the content stream');
@@ -611,6 +715,82 @@ test('youtube-ad-skip: ad-showing mutes, seeks to the end, clicks Skip; restores
   playerEl.classList.remove('ad-showing');
   observers[0].cb([]);
   assert.equal(video.muted, true, 'viewer mute kept');
+});
+
+/** A player with an ad-skip observer; video.seeks counts writes to currentTime, page.stats getStatsForNerds calls. */
+function adSkipPage() {
+  var listeners = {}, observers = [];
+  var doc = { addEventListener: function (type, fn) { listeners[type] = fn; } };
+  var win = fakeWin('www.youtube.com', { document: doc });
+  win.MutationObserver = fakeObserverClass(observers);
+  run(win, 'youtube-ad-skip', []);
+  var page = { clicks: 0, stats: 0, ssap: false };
+  var skip = { click: function () { page.clicks++; } };
+  page.player = fakeEl('DIV', {}, ['html5-video-player']);
+  page.player.getStatsForNerds = function () { page.stats++; return { debug_info: page.ssap ? 'SSAP, AD' : 'x' }; };
+  var t = 0;
+  page.video = { tagName: 'VIDEO', muted: false, duration: 600, src: 'blob:content', seeks: 0, closest: function () { return page.player; } };
+  Object.defineProperty(page.video, 'currentTime', { get: function () { return t; }, set: function (v) { page.video.seeks++; t = v; } });
+  page.setTime = function (v) { t = v; };
+  page.player.querySelector = function (sel) { return sel === 'video' ? page.video : (page.player.classList.contains('ad-showing') ? skip : null); };
+  listeners.loadedmetadata({ target: page.video });
+  page.mutate = function () { observers[0].cb([]); };
+  page.ad = function (src, duration) {
+    page.player.classList.add('ad-showing');
+    page.video.src = src; page.video.duration = duration; t = 0;
+    page.mutate();
+  };
+  page.adEnds = function () {
+    page.player.classList.remove('ad-showing');
+    page.video.src = 'blob:content'; page.video.duration = 600; t = 0;
+    page.mutate();
+  };
+  return page;
+}
+
+test('youtube-ad-skip: one seek per ad however many class changes; SSAP check only right before a seek', function () {
+  var p = adSkipPage();
+  p.mutate(); p.mutate();
+  assert.equal(p.stats, 0, 'no ad: getStatsForNerds not called');
+  p.ad('blob:ad', 15);
+  assert.equal(p.video.seeks, 1);
+  assert.equal(p.stats, 1, 'checked once, before the seek');
+  // the player has not reached the end yet (MSE seek pending) and ytp-autohide etc. keep toggling
+  p.setTime(2);
+  p.player.classList.add('ytp-autohide'); p.mutate();
+  p.player.classList.remove('ytp-autohide'); p.mutate();
+  p.mutate();
+  assert.equal(p.video.seeks, 1, 'no repeated seeks into the same ad');
+  assert.equal(p.stats, 1, 'no getStatsForNerds per class change');
+  assert.equal(p.clicks, 4, 'Skip still clicked on every check');
+  // a second ad in the same break (new src / duration): seeked once too
+  p.player.classList.add('ad-showing');
+  p.video.src = 'blob:ad-2'; p.video.duration = 6; p.setTime(0); p.mutate(); p.mutate();
+  assert.equal(p.video.seeks, 2, 'next ad of the break');
+  p.adEnds();
+  assert.equal(p.video.muted, false, 'sound back');
+  p.ad('blob:ad', 15);
+  assert.equal(p.video.seeks, 3, 'ad-showing cleared in between: the same src / duration is a new ad');
+  // SSAP: no seek, and the player is asked once per ad, not per class change
+  p.adEnds();
+  p.ssap = true;
+  var before = p.stats;
+  p.ad('blob:ssap', 20); p.mutate(); p.mutate();
+  assert.equal(p.video.seeks, 3, 'SSAP: no seek');
+  assert.equal(p.stats, before + 1, 'SSAP verdict remembered for this ad');
+});
+
+test('youtube-ad-skip: no seek in an "ad" longer than 90 s (a stitched stream); mute and Skip still work', function () {
+  var p = adSkipPage();
+  p.ad('blob:long', 91);
+  assert.equal(p.video.seeks, 0, 'no seek');
+  assert.equal(p.stats, 0, 'nothing to ask the player');
+  assert.equal(p.video.muted, true, 'muted');
+  assert.equal(p.clicks, 1, 'Skip clicked');
+  p.adEnds();
+  assert.equal(p.video.muted, false);
+  p.ad('blob:short', 90);
+  assert.equal(p.video.seeks, 1, '90 s: still seeked');
 });
 
 // ------------------------------------------------------------------ YouTube anti-adblock dialog
@@ -642,7 +822,7 @@ function enforcementPage(opts) {
   page.inDom = opts.inDom !== false;
   page.player = fakeEl('DIV', {}, ['html5-video-player']);
   page.video = {
-    tagName: 'VIDEO', ended: false,
+    tagName: 'VIDEO', ended: false, seeking: false, readyState: 4,
     closest: function (sel) { return sel === '.html5-video-player' ? page.player : null; },
     play: function () { page.plays++; return Promise.reject(new Error('NotAllowedError')); }
   };
@@ -723,8 +903,50 @@ test('youtube-enforcement-dismiss: involuntary pause after enforcement -> play()
   assert.ok(p.plays <= 4, 'throttled: ' + p.plays);
   var capped = p.plays;
   p.now += 60000;
+  p.dialog.opened = true; // shown again a minute later (resumes are tied to an open / just-closed dialog)
   p.pause();
   assert.equal(p.plays, capped + 1, 'resumes again later');
+});
+
+test('youtube-enforcement-dismiss: no resume once the dialog closed more than 3 s ago', function () {
+  var p = enforcementPage();
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  p.now += 2999;
+  p.pause();
+  assert.equal(p.plays, 1, 'just after the dialog was closed: resumed');
+  p.now += 2;
+  p.pause();
+  assert.equal(p.plays, 1, 'later pauses are the player\'s (quality / source switch, ad -> content): no resume');
+  p.now += 600000;
+  p.pause();
+  assert.equal(p.plays, 1, 'not for the rest of the page either');
+  p.dialog.opened = true;
+  p.pause();
+  assert.equal(p.closes, 2, 'dialog back: closed again');
+  assert.equal(p.plays, 2, 'and the pause it caused undone');
+});
+
+test('youtube-enforcement-dismiss: no resume while the video is seeking or lacks data (readyState < 3)', function () {
+  var p = enforcementPage();
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  p.video.seeking = true;
+  p.pause();
+  assert.equal(p.plays, 0, 'seeking');
+  p.video.seeking = false;
+  [0, 1, 2].forEach(function (rs) { p.video.readyState = rs; p.pause(); });
+  assert.equal(p.plays, 0, 'readyState < HAVE_FUTURE_DATA');
+  p.video.readyState = 3;
+  p.pause();
+  assert.equal(p.plays, 1, 'HAVE_FUTURE_DATA, not seeking: resumed');
+});
+
+test('youtube-enforcement-dismiss: resumes while the dialog stays open, however long', function () {
+  var p = enforcementPage();
+  p.dialog.close = function () { throw new Error('cannot close'); };
+  p.listeners.animationstart({ animationName: 'as-yt-enf', target: p.enf });
+  p.now += 60000;
+  p.pause();
+  assert.equal(p.plays, 1, 'dialog still open a minute later: its pause is undone');
 });
 
 test('youtube-enforcement-dismiss: no enforcement seen or no userActivation -> no play()', function () {
@@ -774,6 +996,7 @@ test('youtube-enforcement-dismiss: pauses from media keys / headphones / PiP (me
   ['stop', 'seekto', 'previoustrack', 'nexttrack'].forEach(function (action) {
     ms.setActionHandler(action, function () {});
     p.now += 60000;
+    p.dialog.opened = true; // the dialog is back, so only the media action stops the resume
     ms.handlers[action]({ action: action });
     p.pause();
     assert.equal(p.plays, 1, action + ': no resume');
