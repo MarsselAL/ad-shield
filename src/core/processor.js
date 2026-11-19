@@ -16,7 +16,12 @@
  *                              served (and its type pinned). docs/DESIGN-v2.md "Twitch".
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
- *                              (m3u8.resequence, DISCONTINUITY at the boundaries).
+ *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
+ *                              page's own token was rewritten to (cfg.forcedPlayerType) is never
+ *                              tried. Stripping would leave no segment (or, before anything was
+ *                              served, fewer than sequencer.minSegments): no poll deadline, the
+ *                              search runs to its end, and with no clean backup the original
+ *                              playlist is served unmodified ('ad-passthrough'), never an empty one.
  *  any exception    -> the original playlist text is returned untouched.
  */
 (function (root) {
@@ -131,7 +136,9 @@
       }
 
       function backupOrder(c) {
-        var order = settings().playerTypes.slice();
+        // The page's own token is already this type (gql.rewritePlayerType): its playlist is the
+        // native one, ads included, so asking for it again cannot help.
+        var order = settings().playerTypes.filter(function (t) { return !cfg.forcedPlayerType || t !== cfg.forcedPlayerType; });
         if (c.pinned) {
           var i = order.indexOf(c.pinned);
           if (i > 0) { order.splice(i, 1); order.unshift(c.pinned); }
@@ -279,7 +286,9 @@
           var ch = c;
           var planP = plan(ch, info, text, ads).then(null, function (e) {
             log.warn('backup search failed, stripping', e && e.message);
-            return { kind: ads ? 'stripped' : 'native', stripped: ads ? M.stripAds(text, cfg) : null };
+            if (!ads) return { kind: 'native' };
+            var st = M.stripAds(text, cfg);
+            return { kind: st.removed > 0 && st.kept < 1 ? 'original' : 'stripped', stripped: st };
           });
           // Answers leave in request order, so an older slow answer never overtakes a newer
           // one, and state changes (switch events, numbering) happen in that order too.
@@ -320,10 +329,18 @@
           emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
         }
         var stripped = M.stripAds(text, cfg);
-        rememberAdSegments(stripped.removedUrls);
-        if (!canSwap(c)) return Promise.resolve({ kind: 'stripped', stripped: stripped });
-        return withDeadline(search(c, info.variant)).then(function (b) {
-          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped };
+        // Too thin to serve stripped: nothing left, or (nothing served yet for this channel) fewer
+        // than the sequencer's minimum, so a fresh player would give up. No poll deadline then:
+        // wait for the whole search (each step has its own timeouts); still nothing clean ->
+        // the original playlist, ad included (an ad that plays beats a dead player).
+        var thin = stripped.removed > 0 && (stripped.kept < 1 ||
+          (c.kind === 'live' && !c.served && stripped.kept < cfg.sequencer.minSegments));
+        if (!thin) rememberAdSegments(stripped.removedUrls);
+        var fallback = thin ? { kind: 'original', stripped: stripped } : { kind: 'stripped', stripped: stripped };
+        if (!canSwap(c)) return Promise.resolve(fallback);
+        var found = search(c, info.variant);
+        return (thin ? found : withDeadline(found)).then(function (b) {
+          return b ? { kind: 'backup', b: b } : fallback;
         });
       }
 
@@ -347,6 +364,8 @@
 
       /** Apply a plan (in request order) and build the answer. */
       function finalize(c, url, original, pl) {
+        c.served = true;
+        if (pl.kind === 'original') return serveOriginal(c, url, original, pl.stripped);
         if (pl.kind === 'native') {
           if (c.inBreak) endBreak(c);
           setServing(c, 'native');
@@ -365,6 +384,18 @@
         // Stripped native: ad segments removed; resequence keeps the numbering continuous (an
         // all-ad poll lists the newest segments the player already has, under their numbers).
         return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
+      }
+
+      /** Stripping would leave too little and no backup is clean: the native playlist as is. */
+      function serveOriginal(c, url, original, stripped) {
+        // The player must be able to load the ad segments (the worker blanks remembered ones).
+        for (var i = 0; i < stripped.removedUrls.length; i++) adSegments.delete(stripped.removedUrls[i]);
+        if (!c.flags.passthrough) {
+          c.flags.passthrough = true;
+          emit('ad-passthrough', { channel: c.id, midroll: c.midroll, kept: stripped.kept, removed: stripped.removed });
+        }
+        setServing(c, 'native');
+        return sequenced(c, url, original, original, 'native');
       }
 
       function serveStripped(c, original, stripped) {

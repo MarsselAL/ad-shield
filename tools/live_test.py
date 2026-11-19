@@ -772,7 +772,7 @@ def run_smoke(args):
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
         check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 8 and opts["lists"] == 3
-              and opts["order"].split("\n")[0] == "popout", opts)
+              and opts["order"].split("\n")[0] == "embed", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
                                     " return document.querySelectorAll('#pt-errors li').length; })()")

@@ -142,16 +142,19 @@ test('media with ads: token via page message, clean embed backup served, event p
     assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN));
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
-    assert.deepEqual(tokenReqs, ['popout', 'embed'], 'default order, no autoplay');
+    assert.deepEqual(tokenReqs, ['embed'], 'default order: embed first, popout (the page token type) skipped, no autoplay');
     var events = msgs.filter(function (m) { return m.type === 'event'; }).map(function (m) { return m.name; });
     assert.ok(events.indexOf('ad-blocked-backup') !== -1);
   });
 });
 
 test('all backups have ads: stripped playlist served; ad segment fetch answered locally with blank TS', function () {
+  // Three live segments stay after stripping (enough to serve stripped on a first poll).
+  var seg106 = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-106.ts';
   var routes = {};
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
-  routes[NATIVE_720] = PREROLL;
+  routes[NATIVE_720] = PREROLL.replace('#EXT-X-TWITCH-PREFETCH:' + seg106 + '\n',
+    '#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:12.008Z\n#EXTINF:2.000,live\n' + seg106 + '\n');
   cfg.backupPlayerTypes.forEach(function (t) {
     routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-' + t + '-720p60.m3u8'] = PREROLL;
   });

@@ -8,7 +8,7 @@ var G = ns.gql;
 // ------------------------------------------------------------------ settings
 test('defaults: playerTypes come from config, no autoplay (360p)', function () {
   var d = S.defaults();
-  assert.deepEqual(d.playerTypes, ['popout', 'embed', 'site', 'mobile_web']);
+  assert.deepEqual(d.playerTypes, ['embed', 'site', 'mobile_web', 'popout']);
   assert.equal(d.enabled, true);
   assert.equal(d.blockTrackers, false);
   d.playerTypes.push('x');
@@ -16,7 +16,9 @@ test('defaults: playerTypes come from config, no autoplay (360p)', function () {
 });
 test('normalize: the 1.x default order (stored on install) becomes the 2.0 default; own orders are kept', function () {
   var old = S.normalize({ playerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay'] });
-  assert.deepEqual(old.playerTypes, ['popout', 'embed', 'site', 'mobile_web']);
+  assert.deepEqual(old.playerTypes, ['embed', 'site', 'mobile_web', 'popout']);
+  var old20 = S.normalize({ playerTypes: ['popout', 'embed', 'site', 'mobile_web'] });
+  assert.deepEqual(old20.playerTypes, ['embed', 'site', 'mobile_web', 'popout'], 'earlier 2.0 default migrated');
   var own = S.normalize({ playerTypes: ['site', 'popout', 'autoplay'] });
   assert.deepEqual(own.playerTypes, ['site', 'popout', 'autoplay'], 'a list the viewer chose stays');
 });
