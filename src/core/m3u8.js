@@ -50,6 +50,7 @@
       if (line.indexOf('#EXT-X-DATERANGE') !== 0) return false;
       var cls = daterangeClass(line);
       if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) return false;
+      if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) return false;
       if (cls && cfg.adDaterangeClasses.indexOf(cls) !== -1) return true;
       for (var i = 0; i < cfg.adMarkers.length; i++) {
         if (line.indexOf(cfg.adMarkers[i]) !== -1) return true;
@@ -57,11 +58,24 @@
       return false;
     }
 
-    /** True if the media playlist contains any ad marker (ignored DATERANGE classes excluded). */
+    /** An #EXTINF line whose title marks an ad: Amazon|..., or (live playlist) not `live`. */
+    function isAdTitle(extinfLine, live, cfg) {
+      var title = extinfTitle(extinfLine);
+      for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
+        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
+      }
+      return live && title.indexOf(cfg.liveSegmentTitle) === -1;
+    }
+
+    /**
+     * True if the media playlist has an ad: a stitched-ad marker (ignored and client-side
+     * DATERANGE classes excluded), or an ad segment title (Amazon|..., or not `live` in a live
+     * playlist). A client-side ad DATERANGE (twitch-maf-ad) over live segments is not an ad.
+     */
     function hasAds(text, cfg) {
       if (!text) return false;
       var s = String(text);
-      // Fast path: no marker and no ad DATERANGE class anywhere.
+      // Any marker or ad DATERANGE class anywhere? (else only segment titles can say "ad")
       var any = false;
       for (var i = 0; i < cfg.adMarkers.length && !any; i++) {
         if (s.indexOf(cfg.adMarkers[i]) !== -1) any = true;
@@ -69,15 +83,17 @@
       for (var c = 0; c < cfg.adDaterangeClasses.length && !any; c++) {
         if (s.indexOf('"' + cfg.adDaterangeClasses[c] + '"') !== -1) any = true;
       }
-      if (!any) return false;
+      var live = isLivePlaylist(s);
       var lines = splitLines(s);
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j];
+        if (line.charAt(0) !== '#') continue;
         if (line.indexOf('#EXT-X-DATERANGE') === 0) {
-          if (isIgnoredDaterange(line, cfg)) continue;
-          if (isAdDaterange(line, cfg)) return true;
+          if (any && isAdDaterange(line, cfg)) return true;
           continue;
         }
+        if (line.indexOf('#EXTINF') === 0 && isAdTitle(line, live, cfg)) return true;
+        if (!any) continue;
         for (var k = 0; k < cfg.adMarkers.length; k++) {
           if (line.indexOf(cfg.adMarkers[k]) !== -1) return true;
         }
@@ -93,14 +109,15 @@
       return false;
     }
 
-    /** List DATERANGE classes found, split into ad / ignored / unknown (for diagnostics). */
+    /** List DATERANGE classes found, split into ad / ignored / client / unknown (diagnostics). */
     function classifyDateranges(text, cfg) {
-      var res = { ad: [], ignored: [], unknown: [] };
+      var res = { ad: [], ignored: [], client: [], unknown: [] };
       splitLines(text || '').forEach(function (line) {
         if (line.indexOf('#EXT-X-DATERANGE') !== 0) return;
         var cls = daterangeClass(line);
         var bucket;
         if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) bucket = res.ignored;
+        else if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) bucket = res.client;
         else if (isAdDaterange(line, cfg)) bucket = res.ad;
         else bucket = res.unknown;
         var name = cls || '(no class)';

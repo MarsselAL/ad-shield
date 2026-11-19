@@ -23,8 +23,25 @@ test('hasAds: midroll detected', function () {
 test('hasAds: only ignored DATERANGE classes (incl. one whose ID mentions stitched-ad) is NOT an ad', function () {
   assert.notOk(M.hasAds(fixture('ignored-only.m3u8'), cfg));
 });
-test('hasAds: twitch-maf-ad detected even when CLASS is not the first attribute', function () {
-  assert.ok(M.hasAds(fixture('maf-ad.m3u8'), cfg));
+// TTV-AB issue #98: twitch-maf-ad (client-side ad, a separate video beside the stream) appears in
+// playlists whose segments are all `live`. It is not a stitched ad: nothing to replace or strip.
+test('hasAds: twitch-maf-ad DATERANGE over all-live segments is NOT an ad (client-side ad)', function () {
+  assert.notOk(M.hasAds(fixture('maf-ad.m3u8'), cfg));
+  assert.equal(cfg.adMarkers.filter(function (m) { return m.indexOf('maf') !== -1; }).length, 0);
+  assert.equal(cfg.adDaterangeClasses.indexOf('twitch-maf-ad'), -1);
+  assert.ok(cfg.clientAdDaterangeClasses.indexOf('twitch-maf-ad') !== -1);
+});
+test('hasAds: twitch-maf-ad together with a stitched ad segment is an ad (by the segment)', function () {
+  var t = fixture('maf-ad.m3u8').replace('#EXTINF:2.000,live\nhttps://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-301.ts',
+    '#EXTINF:2.000,Amazon|123\nhttps://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-ad-301.ts');
+  assert.ok(t !== fixture('maf-ad.m3u8'));
+  assert.ok(M.hasAds(t, cfg));
+});
+test('hasAds: ad segment titles alone (no marker) are ads in a live playlist', function () {
+  assert.ok(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,Amazon|9\nb.ts\n', cfg), 'Amazon title');
+  assert.ok(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,\nb.ts\n', cfg), 'untitled in live');
+  assert.notOk(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,live\nb.ts\n', cfg), 'all live');
+  assert.notOk(M.hasAds('#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXT-X-ENDLIST\n', cfg), 'VOD untitled');
 });
 test('hasAds: CUE-OUT marker detected', function () {
   assert.ok(M.hasAds('#EXTM3U\n#EXT-X-CUE-OUT:30\n#EXTINF:2.000,live\nseg.ts\n', cfg));
@@ -46,6 +63,9 @@ test('classifyDateranges splits ad / ignored / unknown classes', function () {
   assert.deepEqual(clean.ad, []);
   assert.deepEqual(clean.unknown, []);
   assert.ok(clean.ignored.indexOf('timestamp') !== -1);
+  var maf = M.classifyDateranges(fixture('maf-ad.m3u8'), cfg);
+  assert.deepEqual(maf.ad, []);
+  assert.deepEqual(maf.client, ['twitch-maf-ad']);
 });
 // Regression (live probe 2026-11-11): every live playlist carries a twitch-trigger DATERANGE
 // even with no ad segments; it must not count as an ad.
@@ -116,11 +136,24 @@ test('stripAds clean playlist: unchanged (prefetch kept)', function () {
   assert.equal(r.removed, 0);
   assert.equal(r.text, src);
 });
-test('stripAds maf-ad (client-side): nothing removable, live segments kept, ad DATERANGE dropped', function () {
-  var r = M.stripAds(fixture('maf-ad.m3u8'), cfg);
+test('stripAds maf-ad only (client-side): nothing changed (DATERANGE and prefetch kept)', function () {
+  var src = fixture('maf-ad.m3u8');
+  var r = M.stripAds(src, cfg);
   assert.equal(r.removed, 0);
   assert.equal(r.kept, 2);
-  assert.notIncludes(r.text, 'CLASS="twitch-maf-ad"');
+  assert.equal(r.text, src);
+});
+test('stripAds stitched ad + maf-ad: ad segment removed, maf-ad DATERANGE kept with tracking URLs neutralised', function () {
+  var src = '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n' +
+    '#EXT-X-DATERANGE:ID="m1",CLASS="twitch-maf-ad",START-DATE="2025-11-11T20:00:00.000Z",X-TV-TWITCH-AD-CLICK-TRACKING-URL="https://ads.example.invalid/t?x=1"\n' +
+    '#EXT-X-DATERANGE:ID="s1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=2.000\n' +
+    '#EXTINF:2.000,live\nlive-10.ts\n#EXTINF:2.000,live\nlive-11.ts\n#EXTINF:2.000,Amazon|1\nad-12.ts\n';
+  var r = M.stripAds(src, cfg);
+  assert.equal(r.removed, 1);
+  assert.deepEqual(r.removedUrls, ['ad-12.ts']);
+  assert.notIncludes(r.text, 'twitch-stitched-ad');
+  assert.includes(r.text, 'CLASS="twitch-maf-ad"');
+  assert.notIncludes(r.text, 'ads.example.invalid');
 });
 test('stripAds VOD (ENDLIST): untitled segments are NOT treated as ads', function () {
   var vod = '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.000,\n0.ts\n#EXTINF:10.000,\n1.ts\n#EXT-X-ENDLIST\n';

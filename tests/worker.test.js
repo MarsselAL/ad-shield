@@ -142,9 +142,26 @@ test('media with ads: token via page message, clean embed backup served, event p
     assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN));
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
-    assert.deepEqual(tokenReqs, ['embed'], 'default order: embed first, popout (the page token type) skipped, no autoplay');
+    // embed: prewarmed when the master was seen; the media poll with ads asks every type at once.
+    assert.deepEqual(tokenReqs, ['embed', 'site', 'mobile_web'], 'default order: embed first, popout (the page token type) skipped, no autoplay');
     var events = msgs.filter(function (m) { return m.type === 'event'; }).map(function (m) { return m.name; });
     assert.ok(events.indexOf('ad-blocked-backup') !== -1);
+  });
+});
+
+test('live master: answered without waiting for the backup prewarm (one embed token request)', function () {
+  var routes = {};
+  routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
+  var scope = makeScope(routes);
+  scope.postMessage = function (m) { scope.posted.push(m); }; // the page never answers the token request
+  runInWorker(scope);
+  return scope.fetch(MASTER_URL).then(function (r) { return r.text(); }).then(function (t) {
+    assert.includes(t, 'SYNTH-720p60.m3u8');
+    var reqs = ourMessages(scope, 'token-request').map(function (m) { return m.playerType; });
+    assert.deepEqual(reqs, ['embed']);
+    return scope.fetch(MASTER_URL);
+  }).then(function () {
+    assert.equal(ourMessages(scope, 'token-request').length, 1, 'one prewarm per channel per backupMasterTtlMs');
   });
 });
 
@@ -287,11 +304,12 @@ test('switched off while a media playlist is being processed: original playlist 
   runInWorker(scope);
   var origPost = scope.postMessage;
   scope.postMessage = function (m) {
-    // The first token request means processing has started: flip the switch right then.
-    if (m[KEY] && m[KEY].type === 'token-request' && !scope.flipped) { scope.flipped = true; scope.dispatch(offMessage()); }
+    // The first token request of the media poll means processing has started: flip the switch
+    // right then (the master's prewarm request comes before and is ignored).
+    if (scope.armed && m[KEY] && m[KEY].type === 'token-request' && !scope.flipped) { scope.flipped = true; scope.dispatch(offMessage()); }
     return origPost.call(scope, m);
   };
-  return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); }).then(function (r) {
+  return scope.fetch(MASTER_URL).then(function () { scope.armed = true; return scope.fetch(NATIVE_720); }).then(function (r) {
     return r.text();
   }).then(function (t) {
     assert.ok(scope.flipped, 'switch flipped mid-processing');

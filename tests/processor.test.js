@@ -96,7 +96,8 @@ test('clean media playlist passes through untouched', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, CLEAN).then(function (out) {
     assert.equal(out, CLEAN);
-    assert.equal(w.tokens.length, 0);
+    assert.deepEqual(w.tokens, ['embed'], 'only the master prewarm');
+    assert.equal(w.fetched.length, 1, 'only the prewarmed backup master');
     assert.deepEqual(w.names(), []);
   });
 });
@@ -117,7 +118,7 @@ test('ads in embed, clean in site: site chosen (matching 720p60 variant) and pin
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('site'));
-    assert.deepEqual(w.tokens, ['embed', 'site']);
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web'], 'all asked at once (embed prewarmed with the master)');
     assert.ok(w.fetched.indexOf(backupMedia720('site')) !== -1, 'fetched the 720p60 backup variant');
     assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
     var names = w.names();
@@ -138,7 +139,7 @@ test('backup without the chosen resolution is skipped for this poll (no lockout)
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('site'));
-    assert.deepEqual(w.tokens, ['embed', 'site']);
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
     assert.equal(w.fetched.filter(function (u) { return u.indexOf('SYNTH-embed-') !== -1 && u.indexOf('usher') === -1; }).length, 0,
       'no other embed variant fetched');
     assert.notOk((w.proc.stateOf('somechannel').lockouts.embed || 0) > w.t, 'embed not locked out');
@@ -238,7 +239,9 @@ test('types with ads are locked out briefly: next poll makes no token requests',
     return w.proc.onMedia(NATIVE_720, PREROLL);
   }).then(function (out) {
     assert.deepEqual(w.tokens, []);
-    assert.notOk(M.hasAds(out, cfg));
+    // (The window may re-list a segment the player already got in the passed-through first poll.)
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.notIncludes(out, ',Amazon|');
     w.t += cfg.playerTypeLockoutMs + 1;
     w.tokens = [];
     return w.proc.onMedia(NATIVE_720, PREROLL);
@@ -281,12 +284,23 @@ test('token error for one type: locked out, next type used', function () {
   });
 });
 
-test('client-side ad marker only (twitch-maf-ad) everywhere: reported as unremovable, live kept', function () {
-  var w = makeWorld(allTypes(fixture('maf-ad.m3u8')));
+// TTV-AB #98: a client-side ad (twitch-maf-ad) is a separate video beside the stream; the
+// playlist's segments are all live. Nothing to replace: no backup search, no stripping.
+test('client-side ad marker only (twitch-maf-ad), all segments live: untouched, no backup search, no events', function () {
+  var maf = fixture('maf-ad.m3u8');
+  var w = makeWorld(allTypes(cleanFor('x')));
   w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, fixture('maf-ad.m3u8')).then(function (out) {
-    assert.equal(M.countSegments(out), 2);
-    assert.ok(w.names().indexOf('ad-unremovable') !== -1);
+  var tokens = w.tokens.slice();
+  return w.proc.onMedia(NATIVE_720, maf).then(function (out) {
+    assert.equal(out, maf, 'byte for byte');
+    return w.proc.onMedia(NATIVE_720, maf);
+  }).then(function (out) {
+    assert.equal(out, maf);
+    assert.deepEqual(w.tokens, tokens, 'no token beyond the master prewarm');
+    assert.equal(w.fetched.filter(function (u) { return u.indexOf('https://usher.ttvnw.net/') !== 0; }).length, 0, 'no backup media fetch');
+    assert.ok(w.fetched.length <= 1, 'at most the prewarmed master');
+    assert.deepEqual(w.names(), []);
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
   });
 });
 
@@ -343,7 +357,8 @@ test('custom playerType order from settings is respected', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('embed'));
-    assert.deepEqual(w.tokens, ['embed']);
+    assert.deepEqual(w.tokens, ['embed', 'site']);
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
   });
 });
 
@@ -688,5 +703,157 @@ test('stitched preroll with live segments passed through on the first poll: next
     assert.equal(urls[urls.length - 1], SEGB + 'live-58607.ts', 'newest live segment appended');
     assert.includes(out, SEGB + 'live-58606.ts');
     assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq2, 'MEDIA-SEQUENCE monotonic');
+  });
+});
+
+// ------------------------------------------------------------------ join-time prewarm, parallel search
+// Purple ec29b68 / d9cafb2: prewarm the first backup type's token + master when the live master is
+// seen; on an ad poll ask every candidate type at once and take the most preferred clean answer.
+
+test('prewarm: live master answered at once (token pending), first backup type asked once per channel per TTL', function () {
+  var w = makeWorld({});
+  var pending = [];
+  w.deps.getToken = function (ch, type) { w.tokens.push(type); return new Promise(function (r) { pending.push(r); }); };
+  w.settings.playerTypes = ['popout', 'site', 'embed']; // popout = the page token type: skipped
+  w.proc = __TAS__.createProcessor(w.deps);
+  var out = w.proc.onMaster(MASTER_URL, MASTER);
+  assert.equal(typeof out, 'string', 'synchronous answer');
+  assert.ok(w.proc.knowsMedia(NATIVE_720));
+  assert.deepEqual(w.tokens, ['site']);
+  w.t += 1000;
+  w.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(w.tokens, ['site'], 'no second prewarm within backupMasterTtlMs');
+  pending.forEach(function (r) { r(null); });
+  return flush().then(function () {
+    w.t += cfg.backupMasterTtlMs;
+    w.proc.onMaster(MASTER_URL, MASTER);
+    assert.deepEqual(w.tokens, ['site', 'site'], 'again after the TTL');
+  });
+});
+
+test('prewarm: none for VOD masters or with no backup types', function () {
+  var w = makeWorld({});
+  w.proc.onMaster('https://usher.ttvnw.net/vod/123456.m3u8?sig=a&token=b', MASTER);
+  assert.deepEqual(w.tokens, []);
+  w.settings.playerTypes = [];
+  w.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(w.tokens, []);
+});
+
+test('prewarm: the ad poll reuses the prewarmed master (done or still in flight): one embed token, one embed master', function () {
+  function embedUshers(w) { return w.fetched.filter(function (u) { return u.indexOf('tok-embed') !== -1; }).length; }
+  var w1 = makeWorld({ embed: cleanFor('embed') });
+  w1.proc.onMaster(MASTER_URL, MASTER);
+  return flush().then(function () {
+    assert.equal(embedUshers(w1), 1, 'prewarm finished');
+    return w1.proc.onMedia(NATIVE_720, PREROLL);
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+    assert.equal(w1.tokens.filter(function (t) { return t === 'embed'; }).length, 1);
+    assert.equal(embedUshers(w1), 1);
+    var w2 = makeWorld({ embed: cleanFor('embed') });
+    w2.proc.onMaster(MASTER_URL, MASTER);
+    return w2.proc.onMedia(NATIVE_720, PREROLL).then(function (out2) { // prewarm still in flight
+      assertSameSegments(out2, cleanFor('embed'));
+      assert.equal(w2.tokens.filter(function (t) { return t === 'embed'; }).length, 1);
+      assert.equal(embedUshers(w2), 1);
+    });
+  });
+});
+
+/** World whose backup media fetches each wait for release(type). */
+function gatedWorld(media) {
+  var w = makeWorld(media);
+  var gates = {};
+  w.release = function (type) { gates[type].open(); };
+  cfg.backupPlayerTypes.forEach(function (t) {
+    var g = {}; g.p = new Promise(function (r) { g.open = r; }); gates[t] = g;
+  });
+  var fast = w.deps.fetchText;
+  w.asked = [];
+  w.deps.fetchText = function (url) {
+    w.asked.push(url);
+    var m = /SYNTH-([a-z_]+)-720p60\.m3u8$/.exec(url);
+    return m && gates[m[1]] ? gates[m[1]].p.then(function () { return fast(url); }) : fast(url);
+  };
+  w.deps.setTimeout = function () { return 0; }; // the poll deadline never fires here
+  w.deps.clearTimeout = function () {};
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w;
+}
+
+test('parallel: every candidate type is asked before any answers (popout skipped)', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
+    ['embed', 'site', 'mobile_web'].forEach(function (t) {
+      assert.ok(w.asked.indexOf(backupMedia720(t)) !== -1, t + ' media requested');
+    });
+    assert.equal(w.asked.filter(function (u) { return u.indexOf('popout') !== -1; }).length, 0);
+    w.release('embed'); w.release('site'); w.release('mobile_web');
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'), 'all clean: the preferred type');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
+  });
+});
+
+test('parallel: a clean less-preferred type is served without waiting for a slower preferred one', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: PREROLL });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    w.release('mobile_web');
+    w.release('site');
+    return p; // embed still pending, no deadline timer fires
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('site'));
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:site');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
+    assert.ok(w.proc.stateOf('somechannel').lockouts.mobile_web > w.t, 'type with ads locked out');
+    w.release('embed');
+    return flush();
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'site', 'a late clean answer does not change the pin');
+  });
+});
+
+test('parallel: the preferred type wins when its clean answer is known with the others', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    w.release('site'); w.release('embed'); // same turn
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+  });
+});
+
+test('parallel: one search per channel; a poll during it starts no new requests', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p1 = w.proc.onMedia(NATIVE_720, PREROLL3);
+  var tokens, fetched;
+  return flush().then(function () {
+    tokens = w.tokens.length; fetched = w.asked.length;
+    var p2 = w.proc.onMedia(NATIVE_720, PREROLL3);
+    return flush().then(function () {
+      assert.equal(w.tokens.length, tokens);
+      assert.equal(w.asked.length, fetched);
+      w.release('embed'); w.release('site'); w.release('mobile_web');
+      return Promise.all([p1, p2]);
+    });
+  }).then(function (outs) {
+    assertSameSegments(outs[0], cleanFor('embed'));
+  });
+});
+
+test('parallel: at most maxBackupTypesPerPoll types asked', function () {
+  var w = makeWorld(allTypes(PREROLL));
+  w.deps.cfg = Object.assign({}, cfg, { maxBackupTypesPerPoll: 2 });
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.deepEqual(w.tokens, ['embed', 'site']);
   });
 });

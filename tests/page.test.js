@@ -137,3 +137,25 @@ test('no degrade message to workers any more (strip-only mode was recovery-only)
   var hellos = env.messages(cfg.events.toBridge).filter(function (m) { return m.type === 'hello'; });
   assert.equal(hellos[0].degraded, undefined);
 });
+
+// Parallel backup search (Purple d9cafb2): the worker asks for several playerTypes at once; each
+// gets its own GQL request right away (no queue), with the playerType the worker asked for.
+test('enabled: concurrent worker token requests each start their own GQL request at once', function () {
+  env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  var w = new Worker(TWITCH_WORKER);
+  var before = env.fetches.length;
+  var types = ['embed', 'site', 'mobile_web'];
+  types.forEach(function (t, i) { workerSays(w, { type: 'token-request', id: 30 + i, channel: 'somechannel', playerType: t }); });
+  var sent = env.fetches.slice(before);
+  assert.equal(sent.length, 3, 'all three requested synchronously');
+  sent.forEach(function (f, i) {
+    assert.equal(f.input, cfg.gql.url);
+    assert.includes(f.init.body, '"playerType":"' + types[i] + '"', 'not rewritten to the page token type');
+  });
+  var p = Promise.resolve();
+  for (var k = 0; k < 6; k++) p = p.then(function () {});
+  return p.then(function () {
+    var replies = w.posted.map(function (m) { return m[KEY]; }).filter(function (m) { return m.type === 'token-response'; });
+    assert.deepEqual(replies.map(function (m) { return m.id; }).sort(), [30, 31, 32]);
+  });
+});

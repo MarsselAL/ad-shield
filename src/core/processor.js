@@ -8,12 +8,19 @@
  * Algorithm (docs/research-technique.md §4.2/§4.4):
  *  master playlist  -> remember variants (RESOLUTION, FRAME-RATE, CODECS) per media URL;
  *                      with preferAvc drop HEVC/AV1 variants when AVC exists.
+ *                      Live: prewarm the first backup type's token + master in the background
+ *                      (once per channel per backupMasterTtlMs; Purple ec29b68).
  *  media playlist   -> no ads: serve it; after nativeSwitchBackPolls clean polls end the break.
- *                   -> ads:    try backup playerTypes in order (pinned type first); for each, get a
- *                              token, fetch the backup master, take the variant of the same
+ *                      Ads = stitched markers or ad segment titles (m3u8.hasAds); a client-side
+ *                      ad DATERANGE (twitch-maf-ad) over live segments is not an ad.
+ *                   -> ads:    ask all backup playerTypes at once (Purple d9cafb2); for each, get
+ *                              a token, fetch the backup master, take the variant of the same
  *                              resolution and codec family as the player's (none: skip the type
- *                              for this poll), fetch its media playlist; the first ad-free one is
- *                              served (and its type pinned). docs/DESIGN-v2.md "Twitch".
+ *                              for this poll), fetch its media playlist. Served: the most
+ *                              preferred ad-free one known when a result arrives (no waiting for
+ *                              slower preferred types); its type is pinned. Pinned type with its
+ *                              master cached: checked alone first (one fetch per poll), the rest
+ *                              only if it fails. docs/DESIGN-v2.md "Twitch".
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
  *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
@@ -66,7 +73,7 @@
           c = {
             key: key, kind: kind, id: id, masterUrl: null,
             pinned: null, inBreak: false, midroll: false, serving: 'native',
-            lockouts: {}, backupMasters: {}, flags: {}
+            lockouts: {}, backupMasters: {}, masterReqs: {}, attempts: {}, flags: {}
           };
           channels.set(key, c);
           bound(channels, 50);
@@ -113,6 +120,7 @@
             if (variants[i].url) media.set(variants[i].url, { key: key, variant: variants[i] });
           }
           bound(media, cfg.maxTrackedPlaylists);
+          if (u.kind === 'live') prewarm(c);
           return out;
         } catch (e) {
           log.warn('master processing failed, passing through', e && e.message);
@@ -160,63 +168,140 @@
         return v;
       }
 
-      function tryBackups(c, target) {
-        var order = backupOrder(c);
-        var tries = 0;
-        var idx = 0;
-        function next() {
-          if (idx >= order.length || tries >= cfg.maxBackupTypesPerPoll) return Promise.resolve(null);
-          var type = order[idx++];
-          if ((c.lockouts[type] || 0) > now()) return next();
-          tries++;
-          return attempt(type).then(function (res) { return res || next(); }, function (e) {
-            log.debug('backup', type, 'error', e && e.message);
-            lock(c, type);
-            return next();
+      function notLocked(c) {
+        return function (type) { return (c.lockouts[type] || 0) <= now(); };
+      }
+
+      /** A cached backup master usable now (the type being served keeps its master past the TTL). */
+      function cachedMaster(c, type) {
+        var cached = c.backupMasters[type];
+        if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) return cached;
+        return null;
+      }
+
+      /**
+       * Backup master for a type: cached, or token + usher fetch. One request per type and channel
+       * at a time (the join-time prewarm and a search share it). Resolves null when unusable.
+       */
+      function backupMaster(c, type) {
+        var cached = cachedMaster(c, type);
+        if (cached) return Promise.resolve(cached);
+        if (c.masterReqs[type]) return c.masterReqs[type];
+        var p = new Promise(function (resolve) { resolve(deps.getToken(c.id, type)); }).then(function (tok) {
+          if (!tok || !tok.value || !tok.signature) return null;
+          var usher = M.buildUsherUrl(c.masterUrl, tok.value, tok.signature, cfg.forcedPlayerType ? cfg.usherDropParams : []);
+          return deps.fetchText(usher).then(function (res) {
+            if (!res || res.status !== 200) return null;
+            var variants = M.parseMaster(res.text);
+            if (!variants.length) return null;
+            var entry = { variants: variants, at: now() };
+            c.backupMasters[type] = entry;
+            return entry;
           });
-        }
-        function attempt(type) {
-          var cached = c.backupMasters[type];
-          var masterP;
-          // The type being served keeps its master past the TTL, so a steady-state backup poll is
-          // one fetch (a failing media fetch drops it below).
-          if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) {
-            masterP = Promise.resolve(cached);
-          } else {
-            masterP = Promise.resolve(deps.getToken(c.id, type)).then(function (tok) {
-              if (!tok || !tok.value || !tok.signature) return null;
-              var usher = M.buildUsherUrl(c.masterUrl, tok.value, tok.signature, cfg.forcedPlayerType ? cfg.usherDropParams : []);
-              return deps.fetchText(usher).then(function (res) {
-                if (!res || res.status !== 200) return null;
-                var variants = M.parseMaster(res.text);
-                if (!variants.length) return null;
-                var entry = { variants: variants, at: now() };
-                c.backupMasters[type] = entry;
-                return entry;
-              });
-            });
+        });
+        c.masterReqs[type] = p;
+        function clear() { if (c.masterReqs[type] === p) delete c.masterReqs[type]; }
+        p.then(clear, clear);
+        return p;
+      }
+
+      /**
+       * Join-time prewarm (Purple ec29b68): when a live master is seen, fetch the first backup
+       * type's token and master in the background so a preroll's search starts one step ahead.
+       * At most once per channel per backupMasterTtlMs; never blocks the master answer.
+       */
+      function prewarm(c) {
+        if (!canSwap(c)) return;
+        var t = now();
+        if (c.prewarmAt && t - c.prewarmAt < cfg.backupMasterTtlMs) return;
+        var type = backupOrder(c).filter(notLocked(c))[0];
+        if (!type) return;
+        c.prewarmAt = t;
+        backupMaster(c, type).then(function (e) {
+          log.debug('prewarm', type, e ? 'ready' : 'unavailable');
+        }, function (e) {
+          log.debug('prewarm', type, 'failed', e && e.message);
+        });
+      }
+
+      /**
+       * One type for one target variant: resolves { type, text, variant } when its media playlist
+       * at the same resolution and codec family is ad-free, else null (never rejects). A request
+       * for the same type and target still in flight is joined, not repeated.
+       */
+      function attempt(c, type, target) {
+        var key = type + '|' + target.url;
+        if (c.attempts[key]) return c.attempts[key];
+        var p = backupMaster(c, type).then(function (entry) {
+          if (!entry) { lock(c, type); return null; }
+          // Same resolution and codec family as the player's variant, or this type is skipped
+          // for this poll (no lockout: the player may pick a resolution it has next poll).
+          var v = M.pickVariant(entry.variants, target, cfg);
+          if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
+          return deps.fetchText(v.url).then(function (res) {
+            if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
+            if (M.hasAds(res.text, cfg)) {
+              // This type has its own ad: new token next time, skip it for a moment.
+              delete c.backupMasters[type];
+              lock(c, type);
+              log.debug('backup', type, 'also has ads');
+              return null;
+            }
+            return { type: type, text: res.text, variant: v };
+          });
+        }).then(null, function (e) {
+          log.debug('backup', type, 'error', e && e.message);
+          lock(c, type);
+          return null;
+        });
+        c.attempts[key] = p;
+        p.then(function () { if (c.attempts[key] === p) delete c.attempts[key]; });
+        return p;
+      }
+
+      /**
+       * All types at once (Purple d9cafb2). Resolves with the most preferred clean result known
+       * when a result arrives (a slower preferred type is not waited for), or null once every
+       * type has answered without a clean one.
+       */
+      function race(c, types, target) {
+        return new Promise(function (resolve) {
+          var results = [];
+          var left = types.length;
+          var done = false;
+          function decide() {
+            if (done) return;
+            for (var i = 0; i < types.length; i++) {
+              if (results[i]) { done = true; resolve(results[i]); return; }
+            }
+            if (left === 0) { done = true; resolve(null); }
           }
-          return masterP.then(function (entry) {
-            if (!entry) { lock(c, type); return null; }
-            // Same resolution and codec family as the player's variant, or this type is skipped
-            // for this poll (no lockout: the player may pick a resolution it has next poll).
-            var v = M.pickVariant(entry.variants, target, cfg);
-            if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
-            return deps.fetchText(v.url).then(function (res) {
-              if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
-              if (M.hasAds(res.text, cfg)) {
-                // This type has its own ad: new token next time, skip it for a moment.
-                delete c.backupMasters[type];
-                lock(c, type);
-                log.debug('backup', type, 'also has ads');
-                return null;
-              }
-              c.pinned = type;
-              return { type: type, text: res.text, variant: v };
+          types.forEach(function (type, i) {
+            attempt(c, type, target).then(function (r) {
+              results[i] = r || null;
+              left--;
+              // Results that land in the same turn are compared before choosing.
+              Promise.resolve().then(decide);
             });
           });
+        });
+      }
+
+      function tryBackups(c, target) {
+        var order = backupOrder(c).filter(notLocked(c)).slice(0, cfg.maxBackupTypesPerPoll);
+        if (!order.length) return Promise.resolve(null);
+        var found;
+        // Steady state: the pinned type with its master at hand is checked alone (one fetch per
+        // poll); only when it fails are the others asked, all at once.
+        if (c.pinned && order[0] === c.pinned && cachedMaster(c, c.pinned) && order.length > 1) {
+          found = attempt(c, c.pinned, target).then(function (r) { return r || race(c, order.slice(1), target); });
+        } else {
+          found = race(c, order, target);
         }
-        return next();
+        return found.then(function (r) {
+          if (r) c.pinned = r.type;
+          return r;
+        });
       }
 
       /** One backup search per channel at a time; later polls join the one in flight. */
@@ -403,7 +488,7 @@
           if (stripped.removed === 0) {
             if (!c.flags.unremovable) {
               c.flags.unremovable = true;
-              // Markers but no ad segments: client-side inserted ad (twitch-maf-ad) or unknown format.
+              // Markers but no ad segments (e.g. a stitched-ad DATERANGE before its segments).
               emit('ad-unremovable', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(original, cfg).ad });
             }
             setServing(c, 'stripped');

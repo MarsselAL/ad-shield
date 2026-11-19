@@ -47,19 +47,27 @@
 
     // Substrings that mark a media playlist as containing an ad.
     // Source: research-technique.md §2.1, ryanbr vaft AdSignifiers (R l.64), checked 2026-11-11.
+    // A playlist also has an ad when a live playlist lists a segment whose #EXTINF title is not
+    // `live`, or one titled Amazon|... (m3u8.hasAds). twitch-maf-ad is NOT an ad marker: see
+    // clientAdDaterangeClasses.
     adMarkers: [
       'stitched-ad',
       'EXT-X-CUE-OUT',
-      'twitch-stitched',
-      'EXT-X-DATERANGE:CLASS="twitch-maf-ad"'
+      'twitch-stitched'
     ],
 
     // DATERANGE classes that mark ads (used when classifying / removing DATERANGE lines).
     // Source: research-technique.md §2.1 (same list as adMarkers, class form) and
-    // research-github.md "How current Twitch ads are delivered" (twitch-stitched-ad, twitch-maf-ad).
+    // research-github.md "How current Twitch ads are delivered" (twitch-stitched-ad).
     // 'twitch-trigger' was removed on 2026-11-11: a live probe showed it in EVERY playlist of a
     // live channel (all playerTypes, zero ad segments), so treating it as an ad was a false positive.
-    adDaterangeClasses: ['twitch-stitched-ad', 'twitch-maf-ad'],
+    adDaterangeClasses: ['twitch-stitched-ad'],
+
+    // Client-side ads: the player shows a separate ad video beside the stream; the playlist keeps
+    // only `live` segments (TTV-AB issue #98). Not an ad signal: no backup search, no stripping;
+    // the playlist passes through untouched. When a playlist is stripped for real (stitched) ads,
+    // these DATERANGE lines are kept with their tracking URLs neutralised (adUrlAttributePattern).
+    clientAdDaterangeClasses: ['twitch-maf-ad'],
 
     // DATERANGE classes that appear in normal playlists and are NOT ads. Lines with these
     // classes are ignored by detection and kept by stripping.
@@ -501,6 +509,7 @@
       if (line.indexOf('#EXT-X-DATERANGE') !== 0) return false;
       var cls = daterangeClass(line);
       if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) return false;
+      if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) return false;
       if (cls && cfg.adDaterangeClasses.indexOf(cls) !== -1) return true;
       for (var i = 0; i < cfg.adMarkers.length; i++) {
         if (line.indexOf(cfg.adMarkers[i]) !== -1) return true;
@@ -508,11 +517,24 @@
       return false;
     }
 
-    /** True if the media playlist contains any ad marker (ignored DATERANGE classes excluded). */
+    /** An #EXTINF line whose title marks an ad: Amazon|..., or (live playlist) not `live`. */
+    function isAdTitle(extinfLine, live, cfg) {
+      var title = extinfTitle(extinfLine);
+      for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
+        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
+      }
+      return live && title.indexOf(cfg.liveSegmentTitle) === -1;
+    }
+
+    /**
+     * True if the media playlist has an ad: a stitched-ad marker (ignored and client-side
+     * DATERANGE classes excluded), or an ad segment title (Amazon|..., or not `live` in a live
+     * playlist). A client-side ad DATERANGE (twitch-maf-ad) over live segments is not an ad.
+     */
     function hasAds(text, cfg) {
       if (!text) return false;
       var s = String(text);
-      // Fast path: no marker and no ad DATERANGE class anywhere.
+      // Any marker or ad DATERANGE class anywhere? (else only segment titles can say "ad")
       var any = false;
       for (var i = 0; i < cfg.adMarkers.length && !any; i++) {
         if (s.indexOf(cfg.adMarkers[i]) !== -1) any = true;
@@ -520,15 +542,17 @@
       for (var c = 0; c < cfg.adDaterangeClasses.length && !any; c++) {
         if (s.indexOf('"' + cfg.adDaterangeClasses[c] + '"') !== -1) any = true;
       }
-      if (!any) return false;
+      var live = isLivePlaylist(s);
       var lines = splitLines(s);
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j];
+        if (line.charAt(0) !== '#') continue;
         if (line.indexOf('#EXT-X-DATERANGE') === 0) {
-          if (isIgnoredDaterange(line, cfg)) continue;
-          if (isAdDaterange(line, cfg)) return true;
+          if (any && isAdDaterange(line, cfg)) return true;
           continue;
         }
+        if (line.indexOf('#EXTINF') === 0 && isAdTitle(line, live, cfg)) return true;
+        if (!any) continue;
         for (var k = 0; k < cfg.adMarkers.length; k++) {
           if (line.indexOf(cfg.adMarkers[k]) !== -1) return true;
         }
@@ -544,14 +568,15 @@
       return false;
     }
 
-    /** List DATERANGE classes found, split into ad / ignored / unknown (for diagnostics). */
+    /** List DATERANGE classes found, split into ad / ignored / client / unknown (diagnostics). */
     function classifyDateranges(text, cfg) {
-      var res = { ad: [], ignored: [], unknown: [] };
+      var res = { ad: [], ignored: [], client: [], unknown: [] };
       splitLines(text || '').forEach(function (line) {
         if (line.indexOf('#EXT-X-DATERANGE') !== 0) return;
         var cls = daterangeClass(line);
         var bucket;
         if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) bucket = res.ignored;
+        else if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) bucket = res.client;
         else if (isAdDaterange(line, cfg)) bucket = res.ad;
         else bucket = res.unknown;
         var name = cls || '(no class)';
@@ -1325,12 +1350,19 @@
  * Algorithm (docs/research-technique.md §4.2/§4.4):
  *  master playlist  -> remember variants (RESOLUTION, FRAME-RATE, CODECS) per media URL;
  *                      with preferAvc drop HEVC/AV1 variants when AVC exists.
+ *                      Live: prewarm the first backup type's token + master in the background
+ *                      (once per channel per backupMasterTtlMs; Purple ec29b68).
  *  media playlist   -> no ads: serve it; after nativeSwitchBackPolls clean polls end the break.
- *                   -> ads:    try backup playerTypes in order (pinned type first); for each, get a
- *                              token, fetch the backup master, take the variant of the same
+ *                      Ads = stitched markers or ad segment titles (m3u8.hasAds); a client-side
+ *                      ad DATERANGE (twitch-maf-ad) over live segments is not an ad.
+ *                   -> ads:    ask all backup playerTypes at once (Purple d9cafb2); for each, get
+ *                              a token, fetch the backup master, take the variant of the same
  *                              resolution and codec family as the player's (none: skip the type
- *                              for this poll), fetch its media playlist; the first ad-free one is
- *                              served (and its type pinned). docs/DESIGN-v2.md "Twitch".
+ *                              for this poll), fetch its media playlist. Served: the most
+ *                              preferred ad-free one known when a result arrives (no waiting for
+ *                              slower preferred types); its type is pinned. Pinned type with its
+ *                              master cached: checked alone first (one fetch per poll), the rest
+ *                              only if it fails. docs/DESIGN-v2.md "Twitch".
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
  *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
@@ -1383,7 +1415,7 @@
           c = {
             key: key, kind: kind, id: id, masterUrl: null,
             pinned: null, inBreak: false, midroll: false, serving: 'native',
-            lockouts: {}, backupMasters: {}, flags: {}
+            lockouts: {}, backupMasters: {}, masterReqs: {}, attempts: {}, flags: {}
           };
           channels.set(key, c);
           bound(channels, 50);
@@ -1430,6 +1462,7 @@
             if (variants[i].url) media.set(variants[i].url, { key: key, variant: variants[i] });
           }
           bound(media, cfg.maxTrackedPlaylists);
+          if (u.kind === 'live') prewarm(c);
           return out;
         } catch (e) {
           log.warn('master processing failed, passing through', e && e.message);
@@ -1477,63 +1510,140 @@
         return v;
       }
 
-      function tryBackups(c, target) {
-        var order = backupOrder(c);
-        var tries = 0;
-        var idx = 0;
-        function next() {
-          if (idx >= order.length || tries >= cfg.maxBackupTypesPerPoll) return Promise.resolve(null);
-          var type = order[idx++];
-          if ((c.lockouts[type] || 0) > now()) return next();
-          tries++;
-          return attempt(type).then(function (res) { return res || next(); }, function (e) {
-            log.debug('backup', type, 'error', e && e.message);
-            lock(c, type);
-            return next();
+      function notLocked(c) {
+        return function (type) { return (c.lockouts[type] || 0) <= now(); };
+      }
+
+      /** A cached backup master usable now (the type being served keeps its master past the TTL). */
+      function cachedMaster(c, type) {
+        var cached = c.backupMasters[type];
+        if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) return cached;
+        return null;
+      }
+
+      /**
+       * Backup master for a type: cached, or token + usher fetch. One request per type and channel
+       * at a time (the join-time prewarm and a search share it). Resolves null when unusable.
+       */
+      function backupMaster(c, type) {
+        var cached = cachedMaster(c, type);
+        if (cached) return Promise.resolve(cached);
+        if (c.masterReqs[type]) return c.masterReqs[type];
+        var p = new Promise(function (resolve) { resolve(deps.getToken(c.id, type)); }).then(function (tok) {
+          if (!tok || !tok.value || !tok.signature) return null;
+          var usher = M.buildUsherUrl(c.masterUrl, tok.value, tok.signature, cfg.forcedPlayerType ? cfg.usherDropParams : []);
+          return deps.fetchText(usher).then(function (res) {
+            if (!res || res.status !== 200) return null;
+            var variants = M.parseMaster(res.text);
+            if (!variants.length) return null;
+            var entry = { variants: variants, at: now() };
+            c.backupMasters[type] = entry;
+            return entry;
           });
-        }
-        function attempt(type) {
-          var cached = c.backupMasters[type];
-          var masterP;
-          // The type being served keeps its master past the TTL, so a steady-state backup poll is
-          // one fetch (a failing media fetch drops it below).
-          if (cached && (now() - cached.at < cfg.backupMasterTtlMs || c.serving === 'backup:' + type)) {
-            masterP = Promise.resolve(cached);
-          } else {
-            masterP = Promise.resolve(deps.getToken(c.id, type)).then(function (tok) {
-              if (!tok || !tok.value || !tok.signature) return null;
-              var usher = M.buildUsherUrl(c.masterUrl, tok.value, tok.signature, cfg.forcedPlayerType ? cfg.usherDropParams : []);
-              return deps.fetchText(usher).then(function (res) {
-                if (!res || res.status !== 200) return null;
-                var variants = M.parseMaster(res.text);
-                if (!variants.length) return null;
-                var entry = { variants: variants, at: now() };
-                c.backupMasters[type] = entry;
-                return entry;
-              });
-            });
+        });
+        c.masterReqs[type] = p;
+        function clear() { if (c.masterReqs[type] === p) delete c.masterReqs[type]; }
+        p.then(clear, clear);
+        return p;
+      }
+
+      /**
+       * Join-time prewarm (Purple ec29b68): when a live master is seen, fetch the first backup
+       * type's token and master in the background so a preroll's search starts one step ahead.
+       * At most once per channel per backupMasterTtlMs; never blocks the master answer.
+       */
+      function prewarm(c) {
+        if (!canSwap(c)) return;
+        var t = now();
+        if (c.prewarmAt && t - c.prewarmAt < cfg.backupMasterTtlMs) return;
+        var type = backupOrder(c).filter(notLocked(c))[0];
+        if (!type) return;
+        c.prewarmAt = t;
+        backupMaster(c, type).then(function (e) {
+          log.debug('prewarm', type, e ? 'ready' : 'unavailable');
+        }, function (e) {
+          log.debug('prewarm', type, 'failed', e && e.message);
+        });
+      }
+
+      /**
+       * One type for one target variant: resolves { type, text, variant } when its media playlist
+       * at the same resolution and codec family is ad-free, else null (never rejects). A request
+       * for the same type and target still in flight is joined, not repeated.
+       */
+      function attempt(c, type, target) {
+        var key = type + '|' + target.url;
+        if (c.attempts[key]) return c.attempts[key];
+        var p = backupMaster(c, type).then(function (entry) {
+          if (!entry) { lock(c, type); return null; }
+          // Same resolution and codec family as the player's variant, or this type is skipped
+          // for this poll (no lockout: the player may pick a resolution it has next poll).
+          var v = M.pickVariant(entry.variants, target, cfg);
+          if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
+          return deps.fetchText(v.url).then(function (res) {
+            if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
+            if (M.hasAds(res.text, cfg)) {
+              // This type has its own ad: new token next time, skip it for a moment.
+              delete c.backupMasters[type];
+              lock(c, type);
+              log.debug('backup', type, 'also has ads');
+              return null;
+            }
+            return { type: type, text: res.text, variant: v };
+          });
+        }).then(null, function (e) {
+          log.debug('backup', type, 'error', e && e.message);
+          lock(c, type);
+          return null;
+        });
+        c.attempts[key] = p;
+        p.then(function () { if (c.attempts[key] === p) delete c.attempts[key]; });
+        return p;
+      }
+
+      /**
+       * All types at once (Purple d9cafb2). Resolves with the most preferred clean result known
+       * when a result arrives (a slower preferred type is not waited for), or null once every
+       * type has answered without a clean one.
+       */
+      function race(c, types, target) {
+        return new Promise(function (resolve) {
+          var results = [];
+          var left = types.length;
+          var done = false;
+          function decide() {
+            if (done) return;
+            for (var i = 0; i < types.length; i++) {
+              if (results[i]) { done = true; resolve(results[i]); return; }
+            }
+            if (left === 0) { done = true; resolve(null); }
           }
-          return masterP.then(function (entry) {
-            if (!entry) { lock(c, type); return null; }
-            // Same resolution and codec family as the player's variant, or this type is skipped
-            // for this poll (no lockout: the player may pick a resolution it has next poll).
-            var v = M.pickVariant(entry.variants, target, cfg);
-            if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
-            return deps.fetchText(v.url).then(function (res) {
-              if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
-              if (M.hasAds(res.text, cfg)) {
-                // This type has its own ad: new token next time, skip it for a moment.
-                delete c.backupMasters[type];
-                lock(c, type);
-                log.debug('backup', type, 'also has ads');
-                return null;
-              }
-              c.pinned = type;
-              return { type: type, text: res.text, variant: v };
+          types.forEach(function (type, i) {
+            attempt(c, type, target).then(function (r) {
+              results[i] = r || null;
+              left--;
+              // Results that land in the same turn are compared before choosing.
+              Promise.resolve().then(decide);
             });
           });
+        });
+      }
+
+      function tryBackups(c, target) {
+        var order = backupOrder(c).filter(notLocked(c)).slice(0, cfg.maxBackupTypesPerPoll);
+        if (!order.length) return Promise.resolve(null);
+        var found;
+        // Steady state: the pinned type with its master at hand is checked alone (one fetch per
+        // poll); only when it fails are the others asked, all at once.
+        if (c.pinned && order[0] === c.pinned && cachedMaster(c, c.pinned) && order.length > 1) {
+          found = attempt(c, c.pinned, target).then(function (r) { return r || race(c, order.slice(1), target); });
+        } else {
+          found = race(c, order, target);
         }
-        return next();
+        return found.then(function (r) {
+          if (r) c.pinned = r.type;
+          return r;
+        });
       }
 
       /** One backup search per channel at a time; later polls join the one in flight. */
@@ -1720,7 +1830,7 @@
           if (stripped.removed === 0) {
             if (!c.flags.unremovable) {
               c.flags.unremovable = true;
-              // Markers but no ad segments: client-side inserted ad (twitch-maf-ad) or unknown format.
+              // Markers but no ad segments (e.g. a stitched-ad DATERANGE before its segments).
               emit('ad-unremovable', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(original, cfg).ad });
             }
             setServing(c, 'stripped');

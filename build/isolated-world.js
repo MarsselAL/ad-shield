@@ -47,19 +47,27 @@
 
     // Substrings that mark a media playlist as containing an ad.
     // Source: research-technique.md §2.1, ryanbr vaft AdSignifiers (R l.64), checked 2026-11-11.
+    // A playlist also has an ad when a live playlist lists a segment whose #EXTINF title is not
+    // `live`, or one titled Amazon|... (m3u8.hasAds). twitch-maf-ad is NOT an ad marker: see
+    // clientAdDaterangeClasses.
     adMarkers: [
       'stitched-ad',
       'EXT-X-CUE-OUT',
-      'twitch-stitched',
-      'EXT-X-DATERANGE:CLASS="twitch-maf-ad"'
+      'twitch-stitched'
     ],
 
     // DATERANGE classes that mark ads (used when classifying / removing DATERANGE lines).
     // Source: research-technique.md §2.1 (same list as adMarkers, class form) and
-    // research-github.md "How current Twitch ads are delivered" (twitch-stitched-ad, twitch-maf-ad).
+    // research-github.md "How current Twitch ads are delivered" (twitch-stitched-ad).
     // 'twitch-trigger' was removed on 2026-11-11: a live probe showed it in EVERY playlist of a
     // live channel (all playerTypes, zero ad segments), so treating it as an ad was a false positive.
-    adDaterangeClasses: ['twitch-stitched-ad', 'twitch-maf-ad'],
+    adDaterangeClasses: ['twitch-stitched-ad'],
+
+    // Client-side ads: the player shows a separate ad video beside the stream; the playlist keeps
+    // only `live` segments (TTV-AB issue #98). Not an ad signal: no backup search, no stripping;
+    // the playlist passes through untouched. When a playlist is stripped for real (stitched) ads,
+    // these DATERANGE lines are kept with their tracking URLs neutralised (adUrlAttributePattern).
+    clientAdDaterangeClasses: ['twitch-maf-ad'],
 
     // DATERANGE classes that appear in normal playlists and are NOT ads. Lines with these
     // classes are ignored by detection and kept by stripping.
