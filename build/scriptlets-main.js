@@ -289,12 +289,34 @@ var asScriptlets = (function () {
     return n;
   }
 
+  function isBracket(seg) { return seg === '[]' || seg === '[-]'; }
+
+  /**
+   * The words a JSON text must contain for the paths to remove anything: the last non-bracket
+   * segment of each path (every key of a path must be present for a removal). null when some path
+   * is brackets only (no word to look for: every text is a candidate).
+   */
+  function needlesOf(paths) {
+    var all = paths.plain.concat(paths.deep), out = [];
+    for (var i = 0; i < all.length; i++) {
+      var segs = all[i], word = '';
+      for (var j = segs.length - 1; j >= 0 && !word; j--) if (!isBracket(segs[j])) word = segs[j];
+      if (!word) return null;
+      if (out.indexOf(word) === -1) out.push(word);
+    }
+    return out;
+  }
+
   /**
    * pruner(obj) -> number of things removed. required: paths that must all be present in obj,
    * otherwise nothing is pruned (e.g. "responseContext" for YouTube API responses only).
+   * pruner.mayMatch(text): cheap pre-check on a JSON text (plain indexOf of the needle words);
+   * false means pruning its parsed value would remove nothing, so callers skip the parse / walk.
+   * (Keys written with \u escapes in the text would be missed; YouTube does not write them.)
    */
   function makePruner(props, required) {
     var paths = compilePaths(props), req = compilePaths(required);
+    var needles = needlesOf(paths);
     var fn = function (obj) {
       if (!isObj(obj)) return 0;
       try {
@@ -308,14 +330,29 @@ var asScriptlets = (function () {
       }
     };
     fn.empty = !paths.plain.length && !paths.deep.length;
+    fn.mayMatch = function (text) {
+      if (!needles) return true;
+      try {
+        var s = String(text);
+        for (var k = 0; k < needles.length; k++) if (s.indexOf(needles[k]) !== -1) return true;
+        return false;
+      } catch (e) {
+        return true;
+      }
+    };
     return fn;
   }
+
+  // Responses made by pruneResponse: already pruned, so json-prune's Response.json skips them.
+  var prunedResponses = new WeakSet();
 
   function jsonPrune(win, args, log) {
     var prune = makePruner(args[0], args[1]);
     if (prune.empty) return;
     wrap(win, win.JSON, 'parse', function (t, self, a) {
       var r = reflectApply(t, self, a);
+      // No needle in the text (and no reviver that could add keys): nothing to remove, no walk.
+      if (typeof a[0] === 'string' && typeof a[1] !== 'function' && !prune.mayMatch(a[0])) return r;
       if (isObj(r) && prune(r)) log('json-prune', 'JSON.parse');
       return r;
     });
@@ -323,6 +360,7 @@ var asScriptlets = (function () {
     wrap(win, RP, 'json', function (t, self, a) {
       var p = reflectApply(t, self, a);
       try {
+        if (prunedResponses.has(self)) return p;
         return p.then(function (o) {
           if (isObj(o) && prune(o)) log('json-prune', 'Response.json');
           return o;
@@ -334,11 +372,15 @@ var asScriptlets = (function () {
   }
   jsonPrune.frames = true;
 
-  /** A pruned copy of a fetch Response (same status, headers, url), or resp itself. */
+  /**
+   * A pruned copy of a fetch Response (same status, headers, url), or resp itself: untouched (no
+   * parse, no copy) when the body has no needle word, is not JSON or loses nothing.
+   */
   function pruneResponse(win, resp, prune) {
     try {
       if (!isObj(resp) || typeof resp.clone !== 'function' || resp.bodyUsed) return resp;
       return resp.clone().text().then(function (text) {
+        if (!prune.mayMatch(text)) return resp;
         var obj;
         try { obj = nativeParse(text); } catch (e) { return resp; }
         if (!isObj(obj) || !prune(obj)) return resp;
@@ -347,6 +389,7 @@ var asScriptlets = (function () {
         ['url', 'redirected', 'type'].forEach(function (k) {
           try { defineProperty(out, k, { value: resp[k], configurable: true }); } catch (e) { /* keep default */ }
         });
+        prunedResponses.add(out);
         return out;
       }, function () { return resp; });
     } catch (e) {
@@ -399,7 +442,7 @@ var asScriptlets = (function () {
         if (c && c.raw === raw) return c.out;
         var out = raw;
         if (typeof raw === 'string') {
-          if (raw) {
+          if (raw && prune.mayMatch(raw)) {
             var o = nativeParse(raw);
             if (isObj(o) && prune(o)) { out = nativeStringify(o); log('json-prune-xhr-response', 'responseText'); }
           }
@@ -614,10 +657,16 @@ var asScriptlets = (function () {
    * ad-showing, mute its video, jump to the end of the ad and click the skip button if present;
    * unmute afterwards if we muted. Event-driven: one capture listener for loadedmetadata/playing
    * on the document finds each player once and puts one MutationObserver on its class attribute.
-   * No seeking when the ad is part of the content stream (SSAP: same video src as the content, or
-   * the player's debug info says SSAP), because the stream's end is the end of the video.
+   * The observer runs on every class change (ytp-autohide on each mouse move, ...), so the seek
+   * happens at most once per ad (per video src + duration; forgotten when ad-showing clears):
+   * repeated seeks into an MSE stream stall the player. No seek when the ad is longer than
+   * MAX_SEEK_AD s (almost always a stitched stream whose end is the end of the real video;
+   * skippable long ads get the Skip click) or part of the content stream (SSAP: same video src as
+   * the content, or the player's debug info says SSAP; getStatsForNerds is asked only right
+   * before a seek, once per ad), because the stream's end is the end of the video.
    */
   var SKIP_BUTTONS = '.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button';
+  var MAX_SEEK_AD = 90; // s; longer "ads" are stitched streams, never seeked
 
   function youtubeAdSkip(win, args, log) {
     var doc = win.document;
@@ -636,21 +685,27 @@ var asScriptlets = (function () {
     function attach(player) {
       var c = checks.get(player);
       if (c) return c;
-      var mutedByUs = false, contentSrc = '';
+      var mutedByUs = false, contentSrc = '', handled = ''; // handled: src|duration of the ad already seeked (or found SSAP)
       c = function () {
         try {
           var v = player.querySelector('video');
           if (!player.classList.contains('ad-showing')) {
             if (v && v.src) contentSrc = v.src;
+            handled = '';
             if (mutedByUs) { mutedByUs = false; if (v && v.muted) v.muted = false; }
             return;
           }
           if (v) {
             if (!v.muted) { v.muted = true; mutedByUs = true; }
-            var d = v.duration;
-            if (isFinite(d) && d > 0 && v.currentTime < d - 0.25 && !(contentSrc && v.src === contentSrc) && !isSsap(player)) {
-              v.currentTime = d;
-              log('youtube-ad-skip', 'seek');
+            var d = v.duration, ad = v.src + '|' + d;
+            // cheap checks first; the player's debug info only right before a seek
+            if (ad !== handled && isFinite(d) && d > 0 && d <= MAX_SEEK_AD && v.currentTime < d - 0.25 &&
+                !(contentSrc && v.src === contentSrc)) {
+              handled = ad;
+              if (!isSsap(player)) {
+                v.currentTime = d;
+                log('youtube-ad-skip', 'seek');
+              }
             }
           }
           var b = player.querySelector(SKIP_BUTTONS);
@@ -681,9 +736,12 @@ var asScriptlets = (function () {
    * Hiding it with CSS leaves all of that in place, so this closes it instead: close() on the
    * dialog (Polymer then releases its scroll lock and backdrop; remove() if there is no close()),
    * close any opened tp-yt-iron-overlay-backdrop, clear overflow:hidden on html / body and the
-   * no-scroll attribute / class on html / body / ytd-app. After an enforcement dialog was seen on
-   * the page, a player video that pauses without user activation (not ended, no ad showing) is
-   * resumed, at most RESUME_MAX times per RESUME_WINDOW ms so we never fight the page in a loop.
+   * no-scroll attribute / class on html / body / ytd-app. While the dialog is open, or within
+   * RESUME_AFTER_CLOSE ms after we last found it open (and closed it), a player video that pauses
+   * without user activation (not ended, not seeking, readyState >= 3 HAVE_FUTURE_DATA, no ad
+   * showing) is resumed, at most RESUME_MAX times per RESUME_WINDOW ms so we never fight the page
+   * in a loop. Other pauses are the player's own (source / quality switches, ad -> content,
+   * seeks, buffering) and are left alone: resuming those desynchronised audio and video.
    * Event-driven: a capture listener for animationstart (rules/cosmetic/youtube.css gives the
    * element a 1 ms animation 'as-yt-enf') and one for pause (also finds the dialog when the CSS
    * hook is missing). No MutationObserver, no timers except one delayed re-check of the lock.
@@ -694,12 +752,14 @@ var asScriptlets = (function () {
   var ENFORCEMENT_ANIMATION = 'as-yt-enf';
   var RESUME_MAX = 3;
   var RESUME_WINDOW = 10000;
+  var RESUME_AFTER_CLOSE = 3000; // ms after we last found the dialog open: its pauses may still come
   var MEDIA_ACTION_GRACE = 1500; // ms after a media-session action in which a pause is the viewer's
 
   function youtubeEnforcementDismiss(win, args, log) {
     var doc = win.document;
     if (!doc || typeof doc.addEventListener !== 'function') return;
     var seen = false;
+    var lastOpen = -Infinity; // when handle() last found the dialog open
     var resumes = [];
 
     function now() {
@@ -734,10 +794,18 @@ var asScriptlets = (function () {
       } catch (e) { /* leave it */ }
     }
 
+    function dialogOf(enf) {
+      try {
+        return typeof enf.closest === 'function' ? enf.closest('tp-yt-paper-dialog') : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     /** Close the dialog around enf if it is open; true when something was closed. */
     function closeDialog(enf) {
       try {
-        var dlg = typeof enf.closest === 'function' ? enf.closest('tp-yt-paper-dialog') : null;
+        var dlg = dialogOf(enf);
         if (!dlg || dlg.opened === false) return false;
         if (typeof dlg.close === 'function') dlg.close();
         else if (typeof dlg.remove === 'function') dlg.remove();
@@ -754,6 +822,8 @@ var asScriptlets = (function () {
         if (!enf) return;
         var first = !seen;
         seen = true;
+        var dlg = dialogOf(enf);
+        if (dlg && dlg.opened !== false) lastOpen = now(); // also when close() fails: still open
         if (closeDialog(enf) || first) {
           closeBackdrops();
           unlock();
@@ -790,7 +860,9 @@ var asScriptlets = (function () {
     } catch (e) { /* no media session */ }
 
     function resume(v, player) {
-      if (v.ended || (player.classList && player.classList.contains('ad-showing'))) return;
+      if (now() - lastOpen >= RESUME_AFTER_CLOSE) return; // no enforcement dialog open / just closed
+      if (v.ended || v.seeking || !(v.readyState >= 3)) return; // the player's own pause
+      if (player.classList && player.classList.contains('ad-showing')) return;
       if (now() - lastMediaAction < MEDIA_ACTION_GRACE) return; // media key / headphones / PiP
       var nav = win.navigator;
       var ua = nav && nav.userActivation;
@@ -817,7 +889,7 @@ var asScriptlets = (function () {
         var player = v.closest('.html5-video-player');
         if (!player) return;
         handle(doc.querySelector(ENFORCEMENT));
-        if (seen) resume(v, player);
+        resume(v, player);
       } catch (err) { /* leave the video alone */ }
     }, true);
   }
