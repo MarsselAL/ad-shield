@@ -88,7 +88,7 @@ def main():
         return report()
 
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
-    check(m.get("version") == "1.1.5", "version must be 1.1.5")
+    check(m.get("version") == "2.0.0", "version must be 2.0.0")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
     check(m.get("name") == "Ad Shield", "name must be Ad Shield")
     check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")
@@ -194,9 +194,10 @@ def main():
         for f in files:
             exists(f, "%s entry" % name)
     main_files = bundles.get("build/main-world.js", [])
-    check("src/page/page.js" in main_files and "src/page/recovery.js" in main_files
-          and main_files.index("src/page/recovery.js") < main_files.index("src/page/page.js"),
-          "page.js must come after recovery.js in the main-world bundle")
+    check("src/page/page.js" in main_files and "src/page/health.js" in main_files
+          and main_files.index("src/page/health.js") < main_files.index("src/page/page.js"),
+          "page.js must come after health.js in the main-world bundle")
+    check("src/page/recovery.js" not in main_files, "recovery.js was removed in 2.0")
     check(main_files[-1:] == ["src/page/page.js"], "page.js must be the last file of the main-world bundle")
     worlds = {c.get("world", "ISOLATED"): c.get("js", []) for c in cs}
     check(worlds.get("MAIN") == ["build/main-world.js"], "MAIN-world content script must be build/main-world.js")

@@ -56,9 +56,16 @@
     return { ok: errors.length === 0, value: errors.length === 0 ? cleaned : null, errors: errors };
   }
 
+  /** An earlier release's default order (stored on install, never chosen by the viewer). */
+  function isPreviousDefault(list) {
+    var key = list.join(',');
+    return (cfg.previousDefaultPlayerTypes || []).some(function (old) { return old.join(',') === key; });
+  }
+
   /**
    * Merge a stored (possibly partial, possibly corrupt) settings object with the defaults.
-   * Invalid fields fall back to their default; never throws.
+   * Invalid fields fall back to their default, and an earlier default playerType order becomes
+   * the current one; never throws.
    */
   function normalize(stored) {
     var d = defaults();
@@ -67,7 +74,7 @@
     Object.keys(d).forEach(function (k) {
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
-        out.playerTypes = v.ok ? v.value : d.playerTypes;
+        out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {

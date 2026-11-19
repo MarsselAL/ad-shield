@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '1.0.0',
+    version: '2.0.0',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -131,16 +131,19 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
-    // Backup playerType order. Source: research-technique.md §4.1 (ryanbr v68.5.7, current):
-    // site, popout, mobile_web, embed, then autoplay (360p, platform android) only as last resort.
-    backupPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay'],
+    // Backup playerType order. docs/DESIGN-v2.md "Twitch": popout, embed, site, mobile_web.
+    // No autoplay or picture-by-picture: both are capped at 360p (vaft #450), and a backup is
+    // only used at the resolution the player chose anyway (m3u8.pickVariant).
+    backupPlayerTypes: ['popout', 'embed', 'site', 'mobile_web'],
+    // Earlier default orders. A stored list equal to one of these was never chosen by the
+    // viewer (the background stores normalised defaults on install), so settings.normalize
+    // replaces it with the current default.
+    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay']],
     // playerTypes the options page accepts. The first five are research-technique.md §4.1,
     // frontpage is research-github.md (Purple B-012), picture-by-picture is video-swap-new (§4.1).
     knownPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay', 'frontpage', 'picture-by-picture'],
-    // These are never "pinned" as the preferred backup. Source: research-technique.md §4.1.
-    neverPinPlayerTypes: ['autoplay'],
-    // Must be last in the list if present. Source: research-technique.md §4.1 (endless loading
-    // when autoplay is the committed backup).
+    // Must be last in a viewer's own list if present (options page validation).
+    // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
     maxPlayerTypes: 8,
 
@@ -157,18 +160,12 @@
     maxBackupTypesPerPoll: 5,        // max playerTypes tried for one playlist poll
     playerTypeLockoutMs: 5000,       // a failed type is skipped for this long (R: 5 s, §4.1)
     backupMasterTtlMs: 60000,        // cached backup master per type
-    lastCleanMaxAgeMs: 6000,         // last clean playlist may be served this long when stripping empties it
-                                     // (was 20 s: the player saw no new segments for that long)
     // One media-playlist poll waits at most this long for the backup search; then the stripped
     // playlist is served and the search goes on in the background (one per channel). The
     // player's buffer must not drain while we wait. Our choice (Twitch polls about every 2 s).
     backupPollDeadlineMs: 1800,
     // Clean native polls in a row needed before leaving a backup (debounces native<->backup flapping).
     nativeSwitchBackPolls: 2,
-    // While a backup is being served and one poll's backup search fails or times out, keep
-    // serving what the player already has (no new segments) this long before falling back to
-    // the stripped native playlist, so one slow poll does not flip the source twice.
-    backupHoldMs: 4000,
     // At most one 'segment-repeat' event per channel per this interval (repeat detector).
     repeatEventMinIntervalMs: 20000,
     // Player-facing numbering of rewritten live media playlists (m3u8.resequence). Segments
@@ -187,41 +184,21 @@
     adSegmentCacheTtlMs: 120000,     // ad segment URLs remembered (P/R: 120 s, §2.3)
     maxTrackedPlaylists: 200,        // memory bound for playlist/variant maps
 
-    // Recovery (page). research-technique.md §5.
-    recovery: {
-      watchWindowMs: 20000,          // after a playlist switch, watch the video this long (extended by re-arms)
-      checkIntervalMs: 1000,         // sample interval while watching (no timer otherwise)
-      stallThresholdMs: 3000,        // playhead not advancing for 3 ticks = stalled (research-2026-11-13 F9)
-      pausedStallMs: 2000,           // paused, not by the user, this long = stalled -> play()
-      userGestureWindowMs: 1500,     // a pause this soon after a click/key on the player is the user's
-      minKickIntervalMs: 8000,       // at least this long between two soft actions (research-2026-11-13 F6)
-      maxSoftKicks: 2,               // soft actions per watch (research-2026-11-13 §4 item 4: max 2 per break)
-      maxKicksPerWindow: 6,          // soft actions overall ...
-      kickWindowMs: 120000,          // ... per 2 minutes
-      drainingBufferSec: 0.5,        // frozen with less than this buffered ahead -> pause/play nudge (F6)
-      gapToleranceSec: 0.25,         // buffered ranges closer than this count as continuous
-      gapSeekOffsetSec: 0.05,        // seek to the start of the next range + this (F9)
-      hardReloadAfterMs: 15000,      // a stall must last this long after the first soft action before a hard reload
-      reloadCooldownMs: 15000,       // no hard reload within this long of the previous one
-      giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
-      healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
-      rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
-      // Frozen picture with sound (research-2026-11-13 C5/F7): the audio clock keeps currentTime
-      // moving while no video frames are decoded (or there is no video track: videoWidth 0).
-      frozenPictureMinAdvanceSec: 0.5, // playhead must advance at least this much per sample ...
-      frozenPictureMinFrames: 1,     // ... while fewer than this many frames were decoded
-      frozenPictureTicks: 4,         // this many such samples in a row = stalled ('frozen-picture')
-      frozenPictureWatchMs: 40000,   // a watch armed by ad-end lasts at least this long (the wedge follows breaks)
-      repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
-      maxReloadsPerWindow: 3,        // hard reloads per channel ...
-      reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only
-      preserveWindowMs: 5000,        // localStorage values are pinned this long around a reload
-      preservedLocalStorageKeys: ['video-quality', 'video-muted', 'volume', 'lowLatencyModeEnabled'] // §5
+    // Playback health (page, src/page/health.js). docs/DESIGN-v2.md "Metrics" / "The one nudge".
+    health: {
+      sampleMs: 2000,                // sample the main <video> this often, only while it plays
+      reportMs: 30000,               // at most one 'health' event (debug only) per this long
+      nudge: {
+        windowAfterSwitchMs: 30000,  // only this soon after a playlist switch (vaft #476/#492)
+        frozenMs: 5000,              // playhead not advancing this long ...
+        minBufferAheadSec: 1,        // ... with at least this much buffered ahead = wedged
+        minIntervalMs: 60000,        // at most one nudge per this long (and one per ad break)
+        userGestureWindowMs: 1500    // a click/key on the player this recently: leave it alone
+      }
     },
 
-    // Selectors / React keys used for the player reload. Source: research-technique.md §5.
+    // Selectors for the player's main <video> and its container (user-gesture tracking).
     player: {
-      rootSelector: '#root',
       videoSelector: 'video',
       playerContainerSelector: '.video-player'
     },
@@ -231,7 +208,7 @@
     // Only a fallback: ad segments never appear in playlists we serve, so the player should not
     // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
     // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
-    // demuxers drop null packets and the recovery watch seeks over the resulting hole. See
+    // demuxers drop null packets. See
     // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',
@@ -339,9 +316,16 @@
     return { ok: errors.length === 0, value: errors.length === 0 ? cleaned : null, errors: errors };
   }
 
+  /** An earlier release's default order (stored on install, never chosen by the viewer). */
+  function isPreviousDefault(list) {
+    var key = list.join(',');
+    return (cfg.previousDefaultPlayerTypes || []).some(function (old) { return old.join(',') === key; });
+  }
+
   /**
    * Merge a stored (possibly partial, possibly corrupt) settings object with the defaults.
-   * Invalid fields fall back to their default; never throws.
+   * Invalid fields fall back to their default, and an earlier default playerType order becomes
+   * the current one; never throws.
    */
   function normalize(stored) {
     var d = defaults();
@@ -350,7 +334,7 @@
     Object.keys(d).forEach(function (k) {
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
-        out.playerTypes = v.ok ? v.value : d.playerTypes;
+        out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {

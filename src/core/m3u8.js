@@ -350,8 +350,7 @@
     function newSequenceState() {
       return {
         active: false, win: [], seen: new Map(), next: 0, baseDn: 0,
-        lastEnd: null, lastLive: null, lastSource: null, lastHeader: null, lastTarget: 0, lastLiveSeq: null, lastCount: 0,
-        passthrough: null
+        lastEnd: null, lastLive: null, lastSource: null, passthrough: null
       };
     }
 
@@ -376,7 +375,7 @@
      *  - The output lists the newest max(source segments, minSegments) segments given (so an
      *    all-stripped poll repeats the newest known ones instead of an empty playlist).
      * state.passthrough: the last playlist served untouched before the first rewrite; its
-     * numbering seeds the state. text null = no new source this poll (hold).
+     * numbering seeds the state.
      * Returns { text, appended, repeat } (repeat: an appended segment overlaps what was given).
      */
     function resequence(st, text, sourceKey, opts) {
@@ -385,7 +384,7 @@
       var overlapTol = o.overlapToleranceMs === undefined ? 250 : o.overlapToleranceMs;
       var gapTol = o.gapToleranceMs === undefined ? 1500 : o.gapToleranceMs;
       var repeatTol = o.repeatToleranceMs === undefined ? 500 : o.repeatToleranceMs;
-      var p = text === null || text === undefined ? null : parseMedia(text);
+      var p = parseMedia(text);
 
       function remember(s, seq, dn, src) {
         var e = { seq: seq, url: s.url, tags: s.tags, map: s.map || null, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
@@ -409,15 +408,12 @@
             remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
           }
           st.next = seed.mediaSeq + seed.segs.length;
-          st.lastHeader = seed.header; st.lastTarget = seed.targetDuration; st.lastLiveSeq = seed.liveSeq;
-        } else if (p) {
+        } else {
           st.next = p.mediaSeq;
           st.baseDn = p.discSeq;
         }
       }
-      if (p) { st.lastHeader = p.header; st.lastTarget = p.targetDuration; st.lastLiveSeq = p.liveSeq; }
-
-      var segs = p ? p.segs : [];
+      var segs = p.segs;
       var appended = 0, repeat = false;
       for (var i = 0; i < segs.length; i++) {
         var s = segs[i];
@@ -440,12 +436,10 @@
       while (st.win.length > maxWindow) st.win.shift();
       while (st.seen.size > maxSeen) st.seen.delete(st.seen.keys().next().value);
 
-      // Hold (no source): list what was listed last time.
-      var out = st.win.slice(-Math.max(p ? segs.length : (st.lastCount || 0), minSegments));
-      st.lastCount = out.length;
-      var header = (p ? p.header : st.lastHeader) || [];
+      var out = st.win.slice(-Math.max(segs.length, minSegments));
+      var header = p.header;
       var lines = [];
-      var td = p ? p.targetDuration : st.lastTarget;
+      var td = p.targetDuration;
       for (var d = 0; d < out.length; d++) td = Math.max(td, Math.ceil(out[d].dur));
       var rest = header.filter(function (l) { return l.indexOf('#EXTM3U') !== 0; });
       var vi = -1;
@@ -454,7 +448,7 @@
       var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
       numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
       numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
-      var liveSeq = out.length && out[0].live !== null ? out[0].live : st.lastLiveSeq;
+      var liveSeq = out.length && out[0].live !== null ? out[0].live : p.liveSeq;
       if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
       rest.splice(vi + 1, 0, numbering.join('\n'));
       lines.push(rest.join('\n'));
@@ -467,7 +461,7 @@
         lines.push(out[j].url);
       }
       // Prefetch hints belong to the source's newest segment: only when that is our newest too.
-      if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+      if (segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
         if (p.tailMap && p.tail.length && p.tailMap !== curMap) lines.push(p.tailMap);
         for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
       }
@@ -540,41 +534,31 @@
     }
 
     /**
-     * Pick the backup variant that best matches the current one.
-     * Exact RESOLUTION (preferring equal FRAME-RATE), else closest pixel area; audio-only
-     * targets match audio-only variants. With preferAvc, AVC variants are preferred when any exist.
+     * Pick the backup variant for the variant the player chose (docs/DESIGN-v2.md "Never lower
+     * quality"): the same RESOLUTION (width and height; audio-only matches audio-only) and the
+     * same codec family, else null, so a backup never lowers the quality or switches the decoder
+     * to another codec. Among those: equal FRAME-RATE, then the same CODECS string (profile/level
+     * and audio codec: no decoder reconfiguration), then the higher bandwidth.
+     * A target without CODECS (family unknown) accepts any family.
      */
-    function pickVariant(variants, target, cfg, opts) {
+    function pickVariant(variants, target, cfg) {
       if (!variants || !variants.length || !target) return null;
-      var preferAvc = !!(opts && opts.preferAvc);
-      var cands = variants.filter(function (v) { return !!v.url; });
-      if (preferAvc) {
-        var avc = cands.filter(function (v) { return codecFamily(v.codecs, cfg) === 'avc'; });
-        if (avc.length) cands = avc;
-      }
-      if (!cands.length) return null;
-      if (!target.width) {
-        var audio = cands.filter(function (v) { return !v.width; });
-        return audio.length ? audio[0] : null;
-      }
-      var video = cands.filter(function (v) { return v.width > 0; });
-      if (!video.length) return null;
-      var tFps = target.frameRate || 0;
+      var tw = target.width || 0, th = target.height || 0;
       var tFam = codecFamily(target.codecs, cfg);
-      var tArea = target.width * target.height;
+      var cands = variants.filter(function (v) {
+        return !!v.url && (v.width || 0) === tw && (v.height || 0) === th &&
+          (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
+      });
+      var tFps = target.frameRate || 0;
       function score(v) {
-        var exact = v.width === target.width && v.height === target.height ? 0 : 1;
-        var area = Math.abs(v.width * v.height - tArea);
         var fps = Math.abs((v.frameRate || 0) - tFps);
-        var fam = codecFamily(v.codecs, cfg) === tFam ? 0 : 1;
-        // Same CODECS string (profile/level and audio codec) avoids a decoder reconfiguration.
         var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
-        return [exact, exact ? area : 0, fps, fam, codecs, -(v.bandwidth || 0)];
+        return [fps, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
-      for (var i = 0; i < video.length; i++) {
-        var s = score(video[i]);
-        if (!best || compare(s, bestScore) < 0) { best = video[i]; bestScore = s; }
+      for (var i = 0; i < cands.length; i++) {
+        var s = score(cands[i]);
+        if (!best || compare(s, bestScore) < 0) { best = cands[i]; bestScore = s; }
       }
       return best;
     }

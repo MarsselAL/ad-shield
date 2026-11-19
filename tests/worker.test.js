@@ -8,14 +8,14 @@ var ns = __TAS__;
 var cfg = ns.config;
 var KEY = cfg.messageKey;
 var parts = { m3u8Factory: ns.m3u8Factory, processorFactory: ns.processorFactory, loggerFactory: ns.loggerFactory, workerMain: ns.workerMain };
-var boot = { settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true, debug: false }, degraded: [] };
+var boot = { settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true, debug: false } };
 
 var MASTER_URL = 'https://usher.ttvnw.net/api/channel/hls/somechannel.m3u8?allow_source=true&parent_domains=example.invalid&sig=S&token=T';
 var MASTER = fixture('master.m3u8');
 var PREROLL = fixture('preroll.m3u8');
 var CLEAN = fixture('clean.m3u8');
 var NATIVE_720 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-720p60.m3u8';
-var POPOUT_CLEAN = CLEAN.replace(/SYNTH-live/g, 'SYNTH-popout-live');
+var EMBED_CLEAN = CLEAN.replace(/SYNTH-live/g, 'SYNTH-embed-live');
 function segUrls(text) { return String(text).split('\n').filter(function (l) { return l && l.charAt(0) !== '#'; }); }
 
 // ---- minimal Response stand-in (jsc has no fetch API)
@@ -128,21 +128,21 @@ test('master: parent_domains removed from the request, HEVC variants removed fro
   });
 });
 
-test('media with ads: token via page message, clean popout backup served, event posted', function () {
+test('media with ads: token via page message, clean embed backup served, event posted', function () {
   var routes = {};
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
   routes[NATIVE_720] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-site-720p60.m3u8'] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = POPOUT_CLEAN;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = PREROLL;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-embed-720p60.m3u8'] = EMBED_CLEAN;
   var scope = makeScope(routes);
   runInWorker(scope);
   return scope.fetch(MASTER_URL).then(function () {
     return scope.fetch(NATIVE_720);
   }).then(function (r) { return r.text(); }).then(function (t) {
-    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN));
+    assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN));
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
-    assert.deepEqual(tokenReqs, ['site', 'popout']);
+    assert.deepEqual(tokenReqs, ['popout', 'embed'], 'default order, no autoplay');
     var events = msgs.filter(function (m) { return m.type === 'event'; }).map(function (m) { return m.name; });
     assert.ok(events.indexOf('ad-blocked-backup') !== -1);
   });
@@ -231,8 +231,8 @@ function adRoutes() {
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
   routes[MASTER_URL] = MASTER;
   routes[NATIVE_720] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-site-720p60.m3u8'] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = POPOUT_CLEAN;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = PREROLL;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-embed-720p60.m3u8'] = EMBED_CLEAN;
   return routes;
 }
 
@@ -242,7 +242,7 @@ function ourMessages(scope, type) {
 
 test('disabled from boot: master and media playlists pass through unchanged, no token requests', function () {
   var scope = makeScope(adRoutes());
-  var src = ns.buildWorkerSource(parts, cfg, { settings: { enabled: false, playerTypes: cfg.backupPlayerTypes.slice() }, degraded: [] }, '');
+  var src = ns.buildWorkerSource(parts, cfg, { settings: { enabled: false, playerTypes: cfg.backupPlayerTypes.slice() } }, '');
   globalThis.self = scope;
   (new Function(src))();
   return scope.fetch(MASTER_URL).then(function (r) { return r.text(); }).then(function (t) {
@@ -263,7 +263,7 @@ test('switched off after playlists are tracked: media and ad segments go to the 
   return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); }).then(function (r) {
     return r.text();
   }).then(function (t) {
-    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN), 'enabled: backup served (playlist now tracked)');
+    assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN), 'enabled: backup served (playlist now tracked)');
     scope.dispatch(offMessage());
     var calls = scope.realCalls.length;
     var tokens = ourMessages(scope, 'token-request').length;

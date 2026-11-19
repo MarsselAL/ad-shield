@@ -166,31 +166,38 @@ test('codecFamily', function () {
 });
 test('pickVariant: exact resolution + frame rate', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg, { preferAvc: true });
+  var p = M.pickVariant(v, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg);
   assert.includes(p.url, 'SYNTH-720p60.m3u8');
 });
-test('pickVariant: exact resolution prefers same codec family without preferAvc', function () {
+test('pickVariant: same resolution must also be the same codec family', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg, { preferAvc: false });
-  assert.includes(p.url, 'SYNTH-1080p60-hevc.m3u8');
-  var q = M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg, { preferAvc: true });
-  assert.includes(q.url, 'SYNTH-chunked.m3u8');
+  assert.includes(M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg).url, 'SYNTH-1080p60-hevc.m3u8');
+  assert.includes(M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'avc1.64002A' }, cfg).url, 'SYNTH-chunked.m3u8');
+  // 1440p exists only as HEVC: an AVC 1440p target gets nothing (no codec switch).
+  assert.equal(M.pickVariant(v, { width: 2560, height: 1440, frameRate: 60, codecs: 'avc1.64002A' }, cfg), null);
 });
-test('pickVariant: closest pixel area when no exact match', function () {
+test('pickVariant: no variant of the exact resolution -> null (never a lower or other quality)', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1600, height: 900, frameRate: 60, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(p.url, 'SYNTH-720p60.m3u8'); // 900p: 720p area (921,600) is closer than 1080p (2,073,600)
-  var p2 = M.pickVariant(v, { width: 2560, height: 1440, frameRate: 60, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(p2.url, 'SYNTH-chunked.m3u8'); // 1440p HEVC excluded by preferAvc -> largest AVC
-  var q = M.pickVariant(v, { width: 768, height: 432, frameRate: 30, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(q.url, 'SYNTH-480p30.m3u8');
-  var r = M.pickVariant(v, { width: 160, height: 90, frameRate: 30, codecs: 'avc1' }, cfg, {});
-  assert.includes(r.url, 'SYNTH-160p30.m3u8');
+  assert.equal(M.pickVariant(v, { width: 1600, height: 900, frameRate: 60, codecs: 'avc1' }, cfg), null);
+  assert.equal(M.pickVariant(v, { width: 768, height: 432, frameRate: 30, codecs: 'avc1' }, cfg), null);
+  assert.equal(M.pickVariant(v, { width: 1280, height: 721, frameRate: 60, codecs: 'avc1' }, cfg), null, 'height must match');
+  assert.equal(M.pickVariant(v, { width: 1279, height: 720, frameRate: 60, codecs: 'avc1' }, cfg), null, 'width must match');
+  // A 360p-only backup master (autoplay-like) never stands in for 720p.
+  var only360 = v.filter(function (x) { return x.height === 360; });
+  assert.equal(M.pickVariant(only360, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg), null);
+});
+test('pickVariant: same resolution, other frame rate is still accepted; equal frame rate preferred', function () {
+  var vs = [
+    { url: 'a', width: 1280, height: 720, frameRate: 30, codecs: 'avc1.4D401F', bandwidth: 9 },
+    { url: 'b', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F', bandwidth: 1 }
+  ];
+  assert.equal(M.pickVariant(vs, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg).url, 'b');
+  assert.equal(M.pickVariant(vs.slice(0, 1), { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg).url, 'a');
 });
 test('pickVariant: audio-only target picks audio-only variant; empty input -> null', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  assert.includes(M.pickVariant(v, { width: 0, height: 0 }, cfg, {}).url, 'audio_only');
-  assert.equal(M.pickVariant([], { width: 1, height: 1 }, cfg, {}), null);
+  assert.includes(M.pickVariant(v, { width: 0, height: 0, codecs: 'mp4a.40.2' }, cfg).url, 'audio_only');
+  assert.equal(M.pickVariant([], { width: 1, height: 1 }, cfg), null);
 });
 test('filterMasterCodecs drops HEVC/AV1 variants when AVC exists', function () {
   var r = M.filterMasterCodecs(fixture('master.m3u8'), cfg);
@@ -357,14 +364,14 @@ test('resequence (F-28): repeat detected when a switched-to playlist without liv
   assert.notOk(r2.repeat);
 });
 
-test('resequence: an all-stripped poll lists the newest known segments again (same numbers), hold keeps them too', function () {
+test('resequence: an all-stripped poll lists the newest known segments again (same numbers)', function () {
   var st = M.newSequenceState();
   st.passthrough = pl({ seq: 20, live: 20, segs: ids(20, 23) });
   var empty = M.stripAds(pl({ seq: 24, live: 24, segs: [{ id: 24, ad: true }, { id: 25, ad: true }] }), cfg).text;
   var n1 = numbering(M.resequence(st, empty, 'native', cfg.sequencer).text);
   assert.deepEqual(n1.urls.map(short), ['native-21.ts', 'native-22.ts', 'native-23.ts']);
   assert.equal(n1.seq, 21);
-  var n2 = numbering(M.resequence(st, null, 'native', cfg.sequencer).text);
+  var n2 = numbering(M.resequence(st, empty, 'native', cfg.sequencer).text);
   assert.deepEqual(n2.urls, n1.urls);
   assert.equal(n2.seq, 21);
 });
@@ -375,7 +382,7 @@ test('pickVariant prefers the exact CODECS string among equal resolutions', func
     { url: 'b', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2', bandwidth: 1 }
   ];
   var t = { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2' };
-  assert.equal(M.pickVariant(vs, t, cfg, { preferAvc: true }).url, 'b');
+  assert.equal(M.pickVariant(vs, t, cfg).url, 'b');
 });
 
 // ------------------------------------------------------------------ fMP4 init segments (EXT-X-MAP)

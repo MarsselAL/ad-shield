@@ -292,7 +292,7 @@ almost untouched.
 | `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`, `setTimeout`: poll deadline, single-flight search, ordered answers, renumbering. |
 | `src/worker/worker-main.js` | inlined in worker | Replaces the worker's `fetch`, talks to the page, serves blank ad-segment answers. |
 | `src/core/worker-source.js` | MAIN, tests | Builds the replacement worker source from the factories' `toString()` plus JSON data plus Twitch's original source. |
-| `src/page/recovery.js` | MAIN | Stall and frozen-picture watch (user-intent tracking, play/seek/nudge, muted-play retry), React-fiber player reload, reload rate limit, localStorage preservation. |
+| `src/page/health.js` | MAIN | Playback metrics while the video plays (debug-only `health` events) and the one gated pause/play nudge after a playlist switch (2.0; replaced `recovery.js`). |
 | `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements. |
@@ -311,7 +311,7 @@ a complete program. `worker-source.js` produces:
 ["use strict";]                       (only if Twitch's worker starts with it)
 /* __TAS_WORKER__ */                  (marker: never wrap twice)
 ;(function () {
-  var cfg = {...}; var boot = {settings, degraded};
+  var cfg = {...}; var boot = {settings};
   var M = (factory)(); var createProcessor = (factory)(); var createLogger = (factory)();
   (workerMain)(self, cfg, boot, M, createProcessor, createLogger);   // in try/catch
 })();
@@ -348,10 +348,10 @@ against a fake worker global; the smoke test runs it in a real Chrome worker.
    variant URL with its resolution, frame rate and codecs. With *Prefer AVC* it removes HEVC/AV1
    variants (and their rendition groups) when AVC exists.
 6. **Media playlist** – see the algorithm in the README. Messages worker → page:
-   `token-request`, `event`; page → worker: `token-response`, `settings`, `degrade`. All carry
+   `token-request`, `event`; page → worker: `token-response`, `settings`. All carry
    the key `__tas_v1`; our listeners are registered first and call `stopImmediatePropagation`
    so Twitch's handlers never see them.
-7. **Events** – worker → page (`recovery.onEvent`) → bridge (toast) → background (stats,
+7. **Events** – worker → page (`health.onEvent`) → bridge (toast) → background (stats,
    badge, last event). Each break counts once: `ad-detected`, then `ad-blocked-backup` and/or
    `ad-stripped` or `ad-unremovable`, then `ad-end`.
 
@@ -361,8 +361,6 @@ All in `src/config.js`, see the README table. Code places that encode Twitch str
 config values:
 
 - `m3u8.stripAds` – the segment model (EXTINF title `live`, CUE-OUT/IN, DATERANGE classes).
-- `recovery.findPlayerAndState` – React fiber walk (`setPlayerActive` +
-  `props.mediaPlayerInstance[.playerInstance]`, `setSrc` + `setInitialPlaybackSettings`).
 - `gql.buildTokenBody` – persisted-query body shape.
 
 ## Recovery strategy
@@ -370,42 +368,26 @@ config values:
 - **Never break the player**: every hook is in `try/catch`; on an internal exception the original
   request/response passes through untouched (`failure` event). The Worker hook falls back to the
   original URL; the worker prelude is wrapped so Twitch's code still runs if our install fails.
-- **Stalls after switching** (`recovery.js`, numbers in `config.recovery`; thresholds from
-  research-2026-11-13.md F6/F9): a watch is armed by `playlist-switch` / `ad-end`, and, while a
-  backup or stripped playlist is served and for 30 s after native returns, by the video's
-  `waiting`/`stalled` events and by pauses nobody asked for. A pause is the viewer's only if it
-  follows a click/key on the player within 1.5 s (capturing listeners on the document); the
-  player pausing itself during a switch is a stall. Once a second, only while the tab is
-  visible: paused (not by the viewer) 2 s -> `play()`; playhead stuck 3 s, `readyState < 3` and
-  a hole in `buffered` -> seek to the next range + 0.05 s; stuck with < 0.5 s buffered ahead ->
-  pause/play. Picture frozen while the sound plays (research-2026-11-13.md C5/F7: playhead
-  advancing >= 0.5 s per tick but `getVideoPlaybackQuality().totalVideoFrames` /
-  `webkitDecodedFrameCount` flat, or `videoWidth` 0) for 4 ticks in a row -> pause/play, then
-  the same ladder as a stall (reason `frozen-picture`, which may reload even in a soft watch);
-  skipped when the viewer chose audio-only (`video-quality`) or no frame counter exists. A watch
-  armed by `ad-end` lasts at least 40 s, since the wedge follows breaks.
-  At most 2 soft actions per watch, 8 s apart, 6 per 2 min. Still stuck 15 s after
-  the first one -> one hard reload via `setSrc({isNewMediaPlayerInstance: true,
-  refreshAccessToken: true})` (not within 15 s of the previous one; `video-quality`,
-  `video-muted`, `volume`, `lowLatencyModeEnabled` pinned for 5 s), skipped for a watch armed
-  only by a break that stripped nothing or used a backup of native quality. Then 60 s of no
-  automatic actions: no loops. Re-arming extends a watch but never resets its counters.
-  `play()` rejected with `NotAllowedError`: one muted retry; sound restored at the next
-  gesture unless someone unmuted meanwhile; a video the viewer muted is never touched.
-  `segment-repeat` from the worker: one pause/play, at most every 20 s.
-- **Reload cap**: 3 hard reloads per channel per 5 minutes. The 4th stall sets the channel to
-  strip-only (`degrade` to every worker; future workers get it in `boot`) for the page session,
-  reports `degraded`, and shows it in the popup. No more reloads on that channel.
+- **Playback health** (`health.js`, numbers in `config.health`; docs/DESIGN-v2.md): no seeks,
+  no reloads, no localStorage writes, no strip-only "degraded" mode (all removed in 2.0). While
+  the main `<video>` (blob: source) plays, one sample every 2 s (no timer otherwise): playhead
+  advance, `waiting` events, dropped/total frames, `videoHeight`, paused time; a `health` event
+  at most every 30 s, forwarded to the bridge only with debug on. The one nudge: within 30 s of
+  a `playlist-switch`, tab visible, video playing, playhead frozen 5 s with >= 1 s buffered
+  ahead, no click/key on the player in the last 1.5 s -> `pause()` then `play()`; at most once
+  per ad break (`ad-detected` starts one) and once per 60 s. A rejected `play()` is not retried.
 - **Backup lockouts**: a player type that fails or has its own ad is skipped for 5 s; at most 5
   types per search; backup masters cached 60 s per type (the type being served keeps its master
   while its media fetch works, so a steady-state backup poll is one fetch); the last working
-  non-`autoplay` type is tried first. Among equal resolutions the backup variant with the
-  native `CODECS` string wins.
+  type is tried first. Default order `popout, embed, site, mobile_web` (no 360p `autoplay`; the
+  1.x default stored on install is migrated by `settings.normalize`). A backup is used only at
+  the exact `RESOLUTION` (width and height) and codec family of the variant the player chose
+  (`m3u8.pickVariant`); a type without one is skipped for that poll (no lockout). Among those,
+  equal `FRAME-RATE`, then the native `CODECS` string wins.
 - **Poll deadline** (`backupPollDeadlineMs`, 1.8 s): a media poll waits at most this long for the
   backup search, then gets the stripped playlist; the search goes on in the background, one
-  per channel (later polls join it). While a backup is being served, one missed poll is
-  answered with what the player already has (hold, up to 4 s) instead of flipping sources.
-  Leaving a backup needs 2 clean native polls in a row.
+  per channel (later polls join it). No hold and no replay of an older playlist: a missed poll
+  gets the stripped native playlist. Leaving a backup needs 2 clean native polls in a row.
 - **Order**: per channel, answers leave in request order and their state changes (switch
   events, numbering) happen in that order, so a slow older answer never overtakes a newer one.
 - **Numbering** (`m3u8.resequence`, research-2026-11-13.md C1/F1/F2): once a live playlist has
@@ -428,13 +410,14 @@ config values:
   `stripAds` never writes an ad's MAP; a live segment after an ad gets its live MAP again.
   Playlists never rewritten pass through untouched. Known limit: numbering is per variant URL;
   after an ABR switch mid-break, two variants may number the same time differently.
-- **Empty after stripping**: the newest known segments are listed again with their numbers; the
-  last clean playlist is used only while at most 6 s old.
+- **Empty after stripping**: the newest known segments are listed again with their numbers
+  (`resequence`, so the player gets nothing new and nothing renumbered); 1.x's replay of the
+  last clean playlist is gone.
 - **Ad segment answers**: ad segments never appear in served playlists. A leftover request for
   a remembered ad URL is answered locally with one MPEG-TS null packet (or an MP4 `ftyp`),
   i.e. no media. Chosen over an empty 204 (cannot be tested against Twitch's player here) and
   over a generated silent/black segment (it would have to match the stream's codecs and
-  timestamps; a mismatch is a decode error, worse than a hole the recovery watch seeks over).
+  timestamps; a mismatch is a decode error, worse than a hole).
 - **Off switch while a tab is open**: the worker and fetch hooks see `enabled: false` and become
   passive at once; the scripts disappear on the next reload.
 

@@ -206,7 +206,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host. |
 | Prefer AVC (H.264) streams | on | Removes HEVC/AV1 variants when H.264 exists (avoids player errors when switching during ads; turns off 1440p/4K "enhanced" quality). |
-| Backup stream order | site, popout, mobile_web, embed, autoplay | Validated: known types only, no duplicates, `autoplay` (360p) last. |
+| Backup stream order | popout, embed, site, mobile_web | Validated: known types only, no duplicates, `autoplay` (360p) last if listed. A backup is used only at the resolution and codec family the player chose. |
 | Show a notice when an ad is blocked | on | Small "Ad blocked – using backup stream" note in the player. |
 | Reset statistics | | Clears Twitch tab and lifetime counts. |
 

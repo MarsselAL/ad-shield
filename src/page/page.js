@@ -1,7 +1,7 @@
 /*
  * Page script (MAIN world, document_start). Last file of build/main-world.js (tools/build.py),
  * after config.js, settings.js, logger.js, frame.js, m3u8.js, gql.js, processor.js,
- * worker-main.js, worker-source.js and recovery.js; declared in manifest.json.
+ * worker-main.js, worker-source.js and health.js; declared in manifest.json.
  *
  * It:
  *  1. hooks window.fetch to capture the GQL headers (Client-ID, Device-ID, Authorization,
@@ -10,7 +10,8 @@
  *  2. replaces window.Worker with a subclass that wraps Twitch's blob workers with our
  *     worker code (src/core/worker-source.js);
  *  3. answers token requests from workers using the page's real fetch and captured headers;
- *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to recovery.
+ *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to health.js
+ *     (playback metrics and the one gated nudge after a playlist switch).
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -18,7 +19,7 @@
  *
  * Off switch (settings.enabled === false): no playerType rewrite, no Worker wrapping once the
  * stored settings have arrived (before that a worker may be wrapped, and the worker code then
- * passes every request through itself), worker token requests answered with null, recovery idle.
+ * passes every request through itself), worker token requests answered with null, health idle.
  */
 (function (root) {
   'use strict';
@@ -34,7 +35,7 @@
   var createLogger = ns.createLogger;
   var buildWorkerSource = ns.buildWorkerSource;
   var isWrappedWorkerSource = ns.isWrappedWorkerSource;
-  var Recovery = ns.recovery;
+  var Health = ns.health;
   var parts = {
     m3u8Factory: ns.m3u8Factory,
     processorFactory: ns.processorFactory,
@@ -56,7 +57,6 @@
   var captured = {};
   var fallbackDeviceId = G.randomDeviceId();
   var workers = new Set();
-  var degraded = {};
   var doc = root.document;
 
   // ------------------------------------------------------------------ bridge messaging
@@ -93,21 +93,19 @@
   function isEnabled() { return settings.enabled !== false; }
 
   function hello() {
-    toBridge({ type: 'hello', version: cfg.version, top: frame.isTopFrame(root), degraded: Object.keys(degraded) });
+    toBridge({ type: 'hello', version: cfg.version, top: frame.isTopFrame(root) });
   }
 
-  // ------------------------------------------------------------------ recovery
-  var recovery = Recovery.createRecovery({
+  // ------------------------------------------------------------------ playback health
+  var health = Health.createHealth({
     cfg: cfg,
     log: log,
     doc: doc,
     win: root,
     isEnabled: isEnabled,
-    emit: function (name, data) { toBridge({ type: 'event', name: name, data: data }); },
-    onDegrade: function (channel) {
-      degraded[channel] = true;
-      broadcast({ type: 'degrade', channel: channel });
-      toBridge({ type: 'event', name: 'degraded', data: { channel: channel } });
+    emit: function (name, data) {
+      if (name === 'health' && !settings.debug) return; // metrics are for the debug log only
+      toBridge({ type: 'event', name: name, data: data });
     }
   });
 
@@ -180,7 +178,7 @@
     if (!isTwitchWorkerUrl(s)) return null;
     var src = readSync(s);
     if (!src || isWrappedWorkerSource(src)) return null;
-    var code = buildWorkerSource(parts, cfg, { settings: settings, degraded: Object.keys(degraded) }, src);
+    var code = buildWorkerSource(parts, cfg, { settings: settings }, src);
     var blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
     setTimeout(function () { try { URL.revokeObjectURL(blobUrl); } catch (e) { /* ignore */ } }, 60000);
     return blobUrl;
@@ -200,7 +198,7 @@
     } else if (msg.type === 'event') {
       log.debug('event', msg.name, msg.data);
       toBridge({ type: 'event', name: msg.name, data: msg.data });
-      recovery.onEvent(msg.name, msg.data);
+      health.onEvent(msg.name, msg.data);
     }
   }
 

@@ -8,12 +8,15 @@
  * Algorithm (docs/research-technique.md §4.2/§4.4):
  *  master playlist  -> remember variants (RESOLUTION, FRAME-RATE, CODECS) per media URL;
  *                      with preferAvc drop HEVC/AV1 variants when AVC exists.
- *  media playlist   -> no ads: serve it, remember it as "last clean", end any ad break.
+ *  media playlist   -> no ads: serve it; after nativeSwitchBackPolls clean polls end the break.
  *                   -> ads:    try backup playerTypes in order (pinned type first); for each, get a
- *                              token, fetch the backup master, pick the matching variant, fetch its
- *                              media playlist; first ad-free one is served (and its type pinned).
- *                              If all have ads: strip ad segments + prefetch; if nothing is left,
- *                              serve the last clean playlist while it is fresh.
+ *                              token, fetch the backup master, take the variant of the same
+ *                              resolution and codec family as the player's (none: skip the type
+ *                              for this poll), fetch its media playlist; the first ad-free one is
+ *                              served (and its type pinned). docs/DESIGN-v2.md "Twitch".
+ *                              No clean backup (or the poll deadline passed): the native playlist
+ *                              with ad segments and prefetch removed, renumbered continuously
+ *                              (m3u8.resequence, DISCONTINUITY at the boundaries).
  *  any exception    -> the original playlist text is returned untouched.
  */
 (function (root) {
@@ -30,7 +33,7 @@
      *   getSettings(): settings,        current user settings (playerTypes, preferAvc)
      *   fetchText(url): Promise<{status, text}>,
      *   getToken(channel, playerType): Promise<{value, signature}|null>,
-     *   now(): number, emit(name, data), log?, degraded?: string[]
+     *   now(): number, emit(name, data), log?, setTimeout?, clearTimeout?
      * }
      */
     return function createProcessor(deps) {
@@ -42,8 +45,6 @@
       var media = new Map();      // media playlist URL -> { key, variant }
       var channels = new Map();   // "live:<login>" / "vod:<id>" -> channel state
       var adSegments = new Map(); // ad segment URL -> time seen
-      var degraded = {};
-      (deps.degraded || []).forEach(function (c) { degraded[String(c).toLowerCase()] = true; });
 
       function settings() {
         var s = deps.getSettings ? deps.getSettings() : null;
@@ -60,8 +61,7 @@
           c = {
             key: key, kind: kind, id: id, masterUrl: null,
             pinned: null, inBreak: false, midroll: false, serving: 'native',
-            lockouts: {}, backupMasters: {}, lastClean: null, lastCleanAt: 0,
-            flags: {}
+            lockouts: {}, backupMasters: {}, flags: {}
           };
           channels.set(key, c);
           bound(channels, 50);
@@ -69,13 +69,11 @@
         return c;
       }
 
-      function setServing(c, to, matched) {
+      function setServing(c, to) {
         if (c.serving === to) return;
         var from = c.serving;
         c.serving = to;
-        var d = { channel: c.id, from: from, to: to };
-        if (matched !== undefined) d.matched = matched; // backup of the native quality?
-        emit('playlist-switch', d);
+        emit('playlist-switch', { channel: c.id, from: from, to: to });
       }
 
       function rememberAdSegments(urls) {
@@ -158,7 +156,6 @@
       function tryBackups(c, target) {
         var order = backupOrder(c);
         var tries = 0;
-        var s = settings();
         var idx = 0;
         function next() {
           if (idx >= order.length || tries >= cfg.maxBackupTypesPerPoll) return Promise.resolve(null);
@@ -194,8 +191,10 @@
           }
           return masterP.then(function (entry) {
             if (!entry) { lock(c, type); return null; }
-            var v = M.pickVariant(entry.variants, target, cfg, { preferAvc: s.preferAvc });
-            if (!v) { delete c.backupMasters[type]; lock(c, type); return null; }
+            // Same resolution and codec family as the player's variant, or this type is skipped
+            // for this poll (no lockout: the player may pick a resolution it has next poll).
+            var v = M.pickVariant(entry.variants, target, cfg);
+            if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
             return deps.fetchText(v.url).then(function (res) {
               if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
               if (M.hasAds(res.text, cfg)) {
@@ -205,18 +204,12 @@
                 log.debug('backup', type, 'also has ads');
                 return null;
               }
-              if (cfg.neverPinPlayerTypes.indexOf(type) === -1) c.pinned = type;
-              return { type: type, text: res.text, variant: v, matched: sameQuality(v, target) };
+              c.pinned = type;
+              return { type: type, text: res.text, variant: v };
             });
           });
         }
         return next();
-      }
-
-      function sameQuality(v, t) {
-        return !!v && !!t && v.width === t.width && v.height === t.height &&
-          Math.abs((v.frameRate || 0) - (t.frameRate || 0)) < 1 &&
-          M.codecFamily(v.codecs, cfg) === M.codecFamily(t.codecs, cfg);
       }
 
       /** One backup search per channel at a time; later polls join the one in flight. */
@@ -257,10 +250,7 @@
       function endBreak(c) {
         emit('ad-end', {
           channel: c.id, midroll: c.midroll,
-          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none'),
-          // Every backup served in this break matched native quality and nothing was stripped:
-          // recovery prefers soft actions (research-2026-11-13 §4 item 5).
-          matched: !!c.flags.backup && !c.flags.unmatched && !c.flags.stripped
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none')
         });
         c.inBreak = false;
         c.flags = {};
@@ -269,7 +259,7 @@
       function isBackup(serving) { return String(serving).indexOf('backup:') === 0; }
 
       function canSwap(c) {
-        return c.kind === 'live' && !degraded[c.id] && !!c.masterUrl && settings().playerTypes.length > 0;
+        return c.kind === 'live' && !!c.masterUrl && settings().playerTypes.length > 0;
       }
 
       /** Called with a media playlist; resolves to the text to give the player. Never rejects. */
@@ -333,16 +323,14 @@
         rememberAdSegments(stripped.removedUrls);
         if (!canSwap(c)) return Promise.resolve({ kind: 'stripped', stripped: stripped });
         return withDeadline(search(c, info.variant)).then(function (b) {
-          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped, missed: true };
+          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped };
         });
       }
 
       function sequenced(c, url, original, served, sourceKey) {
         if (c.kind !== 'live' || !M.isLivePlaylist(served)) return served;
         var view = viewFor(url);
-        if (served === null) {
-          if (!view.active) return original;
-        } else if (!view.active && served === original && sourceKey === 'native') {
+        if (!view.active && served === original && sourceKey === 'native') {
           view.passthrough = original; // untouched: the player keeps Twitch's own numbering
           return original;
         }
@@ -362,27 +350,20 @@
         if (pl.kind === 'native') {
           if (c.inBreak) endBreak(c);
           setServing(c, 'native');
-          c.lastClean = original;
-          c.lastCleanAt = now();
           return sequenced(c, url, original, original, 'native');
         }
         if (pl.kind === 'backup') {
           var b = pl.b;
           if (c.inBreak && !c.flags.backup) {
             c.flags.backup = true;
-            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution, matched: b.matched });
+            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution });
           }
-          if (c.inBreak && !b.matched) c.flags.unmatched = true;
-          c.lastBackupAt = now();
-          setServing(c, 'backup:' + b.type, b.matched);
+          setServing(c, 'backup:' + b.type);
           var key = 'backup:' + b.type + ':' + (b.variant.resolution || 'audio') + ':' + (b.variant.frameRate || 0) + ':' + (b.variant.codecs || '');
           return sequenced(c, url, original, b.text, key);
         }
-        // Stripped. A backup was being served and only this poll missed it: hold briefly.
-        if (pl.missed && isBackup(c.serving) && now() - (c.lastBackupAt || 0) < cfg.backupHoldMs) {
-          var view = views.get(url);
-          if (view && view.active) return sequenced(c, url, original, null, view.lastSource);
-        }
+        // Stripped native: ad segments removed; resequence keeps the numbering continuous (an
+        // all-ad poll lists the newest segments the player already has, under their numbers).
         return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
@@ -399,12 +380,9 @@
           }
           if (!c.flags.stripped) {
             c.flags.stripped = true;
-            emit('ad-stripped', { channel: c.id, midroll: c.midroll, removed: stripped.removed, degraded: !!degraded[c.id] });
+            emit('ad-stripped', { channel: c.id, midroll: c.midroll, removed: stripped.removed });
           }
           setServing(c, 'stripped');
-          if (stripped.kept === 0 && c.lastClean && now() - c.lastCleanAt < cfg.lastCleanMaxAgeMs) {
-            return c.lastClean;
-          }
           return stripped.text;
         } catch (e) {
           emit('failure', { channel: c.id, where: 'strip', message: String(e && e.message) });
@@ -412,13 +390,9 @@
         }
       }
 
-      function setDegraded(channel) {
-        degraded[String(channel).toLowerCase()] = true;
-      }
-
       function stateOf(channel) {
         var c = channels.get('live:' + String(channel).toLowerCase());
-        return c ? { pinned: c.pinned, inBreak: c.inBreak, serving: c.serving, lockouts: c.lockouts, degraded: !!degraded[c.id] } : null;
+        return c ? { pinned: c.pinned, inBreak: c.inBreak, serving: c.serving, lockouts: c.lockouts } : null;
       }
 
       return {
@@ -426,7 +400,6 @@
         onMedia: onMedia,
         knowsMedia: knowsMedia,
         isAdSegment: isAdSegment,
-        setDegraded: setDegraded,
         stateOf: stateOf
       };
     };

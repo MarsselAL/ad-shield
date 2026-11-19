@@ -4,7 +4,7 @@
  *   ["use strict";]                     only if Twitch's worker starts with that directive
  *   /* __TAS_WORKER__ * /                marker, so a worker is never wrapped twice
  *   ;(function () {
- *     var cfg  = <config JSON>;  var boot = <settings + degraded channels JSON>;
+ *     var cfg  = <config JSON>;  var boot = <{ settings } JSON>;
  *     var M    = (<m3u8 factory source>)();
  *     ...                                processor + logger factories
  *     (<worker main source>)(self, cfg, boot, M, createProcessor, createLogger);
@@ -36,7 +36,7 @@
   /**
    * @param parts { m3u8Factory, processorFactory, loggerFactory, workerMain } functions
    * @param cfg   config object
-   * @param boot  { settings, degraded }
+   * @param boot  { settings }
    * @param originalSource Twitch's worker script text
    */
   function buildWorkerSource(parts, cfg, boot, originalSource) {

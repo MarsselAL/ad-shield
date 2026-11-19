@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '1.0.0',
+    version: '2.0.0',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -131,16 +131,19 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
-    // Backup playerType order. Source: research-technique.md §4.1 (ryanbr v68.5.7, current):
-    // site, popout, mobile_web, embed, then autoplay (360p, platform android) only as last resort.
-    backupPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay'],
+    // Backup playerType order. docs/DESIGN-v2.md "Twitch": popout, embed, site, mobile_web.
+    // No autoplay or picture-by-picture: both are capped at 360p (vaft #450), and a backup is
+    // only used at the resolution the player chose anyway (m3u8.pickVariant).
+    backupPlayerTypes: ['popout', 'embed', 'site', 'mobile_web'],
+    // Earlier default orders. A stored list equal to one of these was never chosen by the
+    // viewer (the background stores normalised defaults on install), so settings.normalize
+    // replaces it with the current default.
+    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay']],
     // playerTypes the options page accepts. The first five are research-technique.md §4.1,
     // frontpage is research-github.md (Purple B-012), picture-by-picture is video-swap-new (§4.1).
     knownPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay', 'frontpage', 'picture-by-picture'],
-    // These are never "pinned" as the preferred backup. Source: research-technique.md §4.1.
-    neverPinPlayerTypes: ['autoplay'],
-    // Must be last in the list if present. Source: research-technique.md §4.1 (endless loading
-    // when autoplay is the committed backup).
+    // Must be last in a viewer's own list if present (options page validation).
+    // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
     maxPlayerTypes: 8,
 
@@ -157,18 +160,12 @@
     maxBackupTypesPerPoll: 5,        // max playerTypes tried for one playlist poll
     playerTypeLockoutMs: 5000,       // a failed type is skipped for this long (R: 5 s, §4.1)
     backupMasterTtlMs: 60000,        // cached backup master per type
-    lastCleanMaxAgeMs: 6000,         // last clean playlist may be served this long when stripping empties it
-                                     // (was 20 s: the player saw no new segments for that long)
     // One media-playlist poll waits at most this long for the backup search; then the stripped
     // playlist is served and the search goes on in the background (one per channel). The
     // player's buffer must not drain while we wait. Our choice (Twitch polls about every 2 s).
     backupPollDeadlineMs: 1800,
     // Clean native polls in a row needed before leaving a backup (debounces native<->backup flapping).
     nativeSwitchBackPolls: 2,
-    // While a backup is being served and one poll's backup search fails or times out, keep
-    // serving what the player already has (no new segments) this long before falling back to
-    // the stripped native playlist, so one slow poll does not flip the source twice.
-    backupHoldMs: 4000,
     // At most one 'segment-repeat' event per channel per this interval (repeat detector).
     repeatEventMinIntervalMs: 20000,
     // Player-facing numbering of rewritten live media playlists (m3u8.resequence). Segments
@@ -187,41 +184,21 @@
     adSegmentCacheTtlMs: 120000,     // ad segment URLs remembered (P/R: 120 s, §2.3)
     maxTrackedPlaylists: 200,        // memory bound for playlist/variant maps
 
-    // Recovery (page). research-technique.md §5.
-    recovery: {
-      watchWindowMs: 20000,          // after a playlist switch, watch the video this long (extended by re-arms)
-      checkIntervalMs: 1000,         // sample interval while watching (no timer otherwise)
-      stallThresholdMs: 3000,        // playhead not advancing for 3 ticks = stalled (research-2026-11-13 F9)
-      pausedStallMs: 2000,           // paused, not by the user, this long = stalled -> play()
-      userGestureWindowMs: 1500,     // a pause this soon after a click/key on the player is the user's
-      minKickIntervalMs: 8000,       // at least this long between two soft actions (research-2026-11-13 F6)
-      maxSoftKicks: 2,               // soft actions per watch (research-2026-11-13 §4 item 4: max 2 per break)
-      maxKicksPerWindow: 6,          // soft actions overall ...
-      kickWindowMs: 120000,          // ... per 2 minutes
-      drainingBufferSec: 0.5,        // frozen with less than this buffered ahead -> pause/play nudge (F6)
-      gapToleranceSec: 0.25,         // buffered ranges closer than this count as continuous
-      gapSeekOffsetSec: 0.05,        // seek to the start of the next range + this (F9)
-      hardReloadAfterMs: 15000,      // a stall must last this long after the first soft action before a hard reload
-      reloadCooldownMs: 15000,       // no hard reload within this long of the previous one
-      giveUpCooldownMs: 60000,       // after the ladder is used up, nothing automatic for this long
-      healthyResetMs: 8000,          // playing this long resets the ladder of the current watch
-      rearmAfterNativeMs: 30000,     // waiting/stalled/unexpected pause re-arm the watch this long after returning to native
-      // Frozen picture with sound (research-2026-11-13 C5/F7): the audio clock keeps currentTime
-      // moving while no video frames are decoded (or there is no video track: videoWidth 0).
-      frozenPictureMinAdvanceSec: 0.5, // playhead must advance at least this much per sample ...
-      frozenPictureMinFrames: 1,     // ... while fewer than this many frames were decoded
-      frozenPictureTicks: 4,         // this many such samples in a row = stalled ('frozen-picture')
-      frozenPictureWatchMs: 40000,   // a watch armed by ad-end lasts at least this long (the wedge follows breaks)
-      repeatRestartMinIntervalMs: 20000, // at most one pause/play for 'segment-repeat' per this long
-      maxReloadsPerWindow: 3,        // hard reloads per channel ...
-      reloadWindowMs: 300000,        // ... per 5 minutes; above that the channel goes strip-only
-      preserveWindowMs: 5000,        // localStorage values are pinned this long around a reload
-      preservedLocalStorageKeys: ['video-quality', 'video-muted', 'volume', 'lowLatencyModeEnabled'] // §5
+    // Playback health (page, src/page/health.js). docs/DESIGN-v2.md "Metrics" / "The one nudge".
+    health: {
+      sampleMs: 2000,                // sample the main <video> this often, only while it plays
+      reportMs: 30000,               // at most one 'health' event (debug only) per this long
+      nudge: {
+        windowAfterSwitchMs: 30000,  // only this soon after a playlist switch (vaft #476/#492)
+        frozenMs: 5000,              // playhead not advancing this long ...
+        minBufferAheadSec: 1,        // ... with at least this much buffered ahead = wedged
+        minIntervalMs: 60000,        // at most one nudge per this long (and one per ad break)
+        userGestureWindowMs: 1500    // a click/key on the player this recently: leave it alone
+      }
     },
 
-    // Selectors / React keys used for the player reload. Source: research-technique.md §5.
+    // Selectors for the player's main <video> and its container (user-gesture tracking).
     player: {
-      rootSelector: '#root',
       videoSelector: 'video',
       playerContainerSelector: '.video-player'
     },
@@ -231,7 +208,7 @@
     // Only a fallback: ad segments never appear in playlists we serve, so the player should not
     // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
     // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
-    // demuxers drop null packets and the recovery watch seeks over the resulting hole. See
+    // demuxers drop null packets. See
     // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',
@@ -339,9 +316,16 @@
     return { ok: errors.length === 0, value: errors.length === 0 ? cleaned : null, errors: errors };
   }
 
+  /** An earlier release's default order (stored on install, never chosen by the viewer). */
+  function isPreviousDefault(list) {
+    var key = list.join(',');
+    return (cfg.previousDefaultPlayerTypes || []).some(function (old) { return old.join(',') === key; });
+  }
+
   /**
    * Merge a stored (possibly partial, possibly corrupt) settings object with the defaults.
-   * Invalid fields fall back to their default; never throws.
+   * Invalid fields fall back to their default, and an earlier default playerType order becomes
+   * the current one; never throws.
    */
   function normalize(stored) {
     var d = defaults();
@@ -350,7 +334,7 @@
     Object.keys(d).forEach(function (k) {
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
-        out.playerTypes = v.ok ? v.value : d.playerTypes;
+        out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {
@@ -815,8 +799,7 @@
     function newSequenceState() {
       return {
         active: false, win: [], seen: new Map(), next: 0, baseDn: 0,
-        lastEnd: null, lastLive: null, lastSource: null, lastHeader: null, lastTarget: 0, lastLiveSeq: null, lastCount: 0,
-        passthrough: null
+        lastEnd: null, lastLive: null, lastSource: null, passthrough: null
       };
     }
 
@@ -841,7 +824,7 @@
      *  - The output lists the newest max(source segments, minSegments) segments given (so an
      *    all-stripped poll repeats the newest known ones instead of an empty playlist).
      * state.passthrough: the last playlist served untouched before the first rewrite; its
-     * numbering seeds the state. text null = no new source this poll (hold).
+     * numbering seeds the state.
      * Returns { text, appended, repeat } (repeat: an appended segment overlaps what was given).
      */
     function resequence(st, text, sourceKey, opts) {
@@ -850,7 +833,7 @@
       var overlapTol = o.overlapToleranceMs === undefined ? 250 : o.overlapToleranceMs;
       var gapTol = o.gapToleranceMs === undefined ? 1500 : o.gapToleranceMs;
       var repeatTol = o.repeatToleranceMs === undefined ? 500 : o.repeatToleranceMs;
-      var p = text === null || text === undefined ? null : parseMedia(text);
+      var p = parseMedia(text);
 
       function remember(s, seq, dn, src) {
         var e = { seq: seq, url: s.url, tags: s.tags, map: s.map || null, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
@@ -874,15 +857,12 @@
             remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
           }
           st.next = seed.mediaSeq + seed.segs.length;
-          st.lastHeader = seed.header; st.lastTarget = seed.targetDuration; st.lastLiveSeq = seed.liveSeq;
-        } else if (p) {
+        } else {
           st.next = p.mediaSeq;
           st.baseDn = p.discSeq;
         }
       }
-      if (p) { st.lastHeader = p.header; st.lastTarget = p.targetDuration; st.lastLiveSeq = p.liveSeq; }
-
-      var segs = p ? p.segs : [];
+      var segs = p.segs;
       var appended = 0, repeat = false;
       for (var i = 0; i < segs.length; i++) {
         var s = segs[i];
@@ -905,12 +885,10 @@
       while (st.win.length > maxWindow) st.win.shift();
       while (st.seen.size > maxSeen) st.seen.delete(st.seen.keys().next().value);
 
-      // Hold (no source): list what was listed last time.
-      var out = st.win.slice(-Math.max(p ? segs.length : (st.lastCount || 0), minSegments));
-      st.lastCount = out.length;
-      var header = (p ? p.header : st.lastHeader) || [];
+      var out = st.win.slice(-Math.max(segs.length, minSegments));
+      var header = p.header;
       var lines = [];
-      var td = p ? p.targetDuration : st.lastTarget;
+      var td = p.targetDuration;
       for (var d = 0; d < out.length; d++) td = Math.max(td, Math.ceil(out[d].dur));
       var rest = header.filter(function (l) { return l.indexOf('#EXTM3U') !== 0; });
       var vi = -1;
@@ -919,7 +897,7 @@
       var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
       numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
       numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
-      var liveSeq = out.length && out[0].live !== null ? out[0].live : st.lastLiveSeq;
+      var liveSeq = out.length && out[0].live !== null ? out[0].live : p.liveSeq;
       if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
       rest.splice(vi + 1, 0, numbering.join('\n'));
       lines.push(rest.join('\n'));
@@ -932,7 +910,7 @@
         lines.push(out[j].url);
       }
       // Prefetch hints belong to the source's newest segment: only when that is our newest too.
-      if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+      if (segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
         if (p.tailMap && p.tail.length && p.tailMap !== curMap) lines.push(p.tailMap);
         for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
       }
@@ -1005,41 +983,31 @@
     }
 
     /**
-     * Pick the backup variant that best matches the current one.
-     * Exact RESOLUTION (preferring equal FRAME-RATE), else closest pixel area; audio-only
-     * targets match audio-only variants. With preferAvc, AVC variants are preferred when any exist.
+     * Pick the backup variant for the variant the player chose (docs/DESIGN-v2.md "Never lower
+     * quality"): the same RESOLUTION (width and height; audio-only matches audio-only) and the
+     * same codec family, else null, so a backup never lowers the quality or switches the decoder
+     * to another codec. Among those: equal FRAME-RATE, then the same CODECS string (profile/level
+     * and audio codec: no decoder reconfiguration), then the higher bandwidth.
+     * A target without CODECS (family unknown) accepts any family.
      */
-    function pickVariant(variants, target, cfg, opts) {
+    function pickVariant(variants, target, cfg) {
       if (!variants || !variants.length || !target) return null;
-      var preferAvc = !!(opts && opts.preferAvc);
-      var cands = variants.filter(function (v) { return !!v.url; });
-      if (preferAvc) {
-        var avc = cands.filter(function (v) { return codecFamily(v.codecs, cfg) === 'avc'; });
-        if (avc.length) cands = avc;
-      }
-      if (!cands.length) return null;
-      if (!target.width) {
-        var audio = cands.filter(function (v) { return !v.width; });
-        return audio.length ? audio[0] : null;
-      }
-      var video = cands.filter(function (v) { return v.width > 0; });
-      if (!video.length) return null;
-      var tFps = target.frameRate || 0;
+      var tw = target.width || 0, th = target.height || 0;
       var tFam = codecFamily(target.codecs, cfg);
-      var tArea = target.width * target.height;
+      var cands = variants.filter(function (v) {
+        return !!v.url && (v.width || 0) === tw && (v.height || 0) === th &&
+          (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
+      });
+      var tFps = target.frameRate || 0;
       function score(v) {
-        var exact = v.width === target.width && v.height === target.height ? 0 : 1;
-        var area = Math.abs(v.width * v.height - tArea);
         var fps = Math.abs((v.frameRate || 0) - tFps);
-        var fam = codecFamily(v.codecs, cfg) === tFam ? 0 : 1;
-        // Same CODECS string (profile/level and audio codec) avoids a decoder reconfiguration.
         var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
-        return [exact, exact ? area : 0, fps, fam, codecs, -(v.bandwidth || 0)];
+        return [fps, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
-      for (var i = 0; i < video.length; i++) {
-        var s = score(video[i]);
-        if (!best || compare(s, bestScore) < 0) { best = video[i]; bestScore = s; }
+      for (var i = 0; i < cands.length; i++) {
+        var s = score(cands[i]);
+        if (!best || compare(s, bestScore) < 0) { best = cands[i]; bestScore = s; }
       }
       return best;
     }
@@ -1327,12 +1295,15 @@
  * Algorithm (docs/research-technique.md §4.2/§4.4):
  *  master playlist  -> remember variants (RESOLUTION, FRAME-RATE, CODECS) per media URL;
  *                      with preferAvc drop HEVC/AV1 variants when AVC exists.
- *  media playlist   -> no ads: serve it, remember it as "last clean", end any ad break.
+ *  media playlist   -> no ads: serve it; after nativeSwitchBackPolls clean polls end the break.
  *                   -> ads:    try backup playerTypes in order (pinned type first); for each, get a
- *                              token, fetch the backup master, pick the matching variant, fetch its
- *                              media playlist; first ad-free one is served (and its type pinned).
- *                              If all have ads: strip ad segments + prefetch; if nothing is left,
- *                              serve the last clean playlist while it is fresh.
+ *                              token, fetch the backup master, take the variant of the same
+ *                              resolution and codec family as the player's (none: skip the type
+ *                              for this poll), fetch its media playlist; the first ad-free one is
+ *                              served (and its type pinned). docs/DESIGN-v2.md "Twitch".
+ *                              No clean backup (or the poll deadline passed): the native playlist
+ *                              with ad segments and prefetch removed, renumbered continuously
+ *                              (m3u8.resequence, DISCONTINUITY at the boundaries).
  *  any exception    -> the original playlist text is returned untouched.
  */
 (function (root) {
@@ -1349,7 +1320,7 @@
      *   getSettings(): settings,        current user settings (playerTypes, preferAvc)
      *   fetchText(url): Promise<{status, text}>,
      *   getToken(channel, playerType): Promise<{value, signature}|null>,
-     *   now(): number, emit(name, data), log?, degraded?: string[]
+     *   now(): number, emit(name, data), log?, setTimeout?, clearTimeout?
      * }
      */
     return function createProcessor(deps) {
@@ -1361,8 +1332,6 @@
       var media = new Map();      // media playlist URL -> { key, variant }
       var channels = new Map();   // "live:<login>" / "vod:<id>" -> channel state
       var adSegments = new Map(); // ad segment URL -> time seen
-      var degraded = {};
-      (deps.degraded || []).forEach(function (c) { degraded[String(c).toLowerCase()] = true; });
 
       function settings() {
         var s = deps.getSettings ? deps.getSettings() : null;
@@ -1379,8 +1348,7 @@
           c = {
             key: key, kind: kind, id: id, masterUrl: null,
             pinned: null, inBreak: false, midroll: false, serving: 'native',
-            lockouts: {}, backupMasters: {}, lastClean: null, lastCleanAt: 0,
-            flags: {}
+            lockouts: {}, backupMasters: {}, flags: {}
           };
           channels.set(key, c);
           bound(channels, 50);
@@ -1388,13 +1356,11 @@
         return c;
       }
 
-      function setServing(c, to, matched) {
+      function setServing(c, to) {
         if (c.serving === to) return;
         var from = c.serving;
         c.serving = to;
-        var d = { channel: c.id, from: from, to: to };
-        if (matched !== undefined) d.matched = matched; // backup of the native quality?
-        emit('playlist-switch', d);
+        emit('playlist-switch', { channel: c.id, from: from, to: to });
       }
 
       function rememberAdSegments(urls) {
@@ -1477,7 +1443,6 @@
       function tryBackups(c, target) {
         var order = backupOrder(c);
         var tries = 0;
-        var s = settings();
         var idx = 0;
         function next() {
           if (idx >= order.length || tries >= cfg.maxBackupTypesPerPoll) return Promise.resolve(null);
@@ -1513,8 +1478,10 @@
           }
           return masterP.then(function (entry) {
             if (!entry) { lock(c, type); return null; }
-            var v = M.pickVariant(entry.variants, target, cfg, { preferAvc: s.preferAvc });
-            if (!v) { delete c.backupMasters[type]; lock(c, type); return null; }
+            // Same resolution and codec family as the player's variant, or this type is skipped
+            // for this poll (no lockout: the player may pick a resolution it has next poll).
+            var v = M.pickVariant(entry.variants, target, cfg);
+            if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
             return deps.fetchText(v.url).then(function (res) {
               if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
               if (M.hasAds(res.text, cfg)) {
@@ -1524,18 +1491,12 @@
                 log.debug('backup', type, 'also has ads');
                 return null;
               }
-              if (cfg.neverPinPlayerTypes.indexOf(type) === -1) c.pinned = type;
-              return { type: type, text: res.text, variant: v, matched: sameQuality(v, target) };
+              c.pinned = type;
+              return { type: type, text: res.text, variant: v };
             });
           });
         }
         return next();
-      }
-
-      function sameQuality(v, t) {
-        return !!v && !!t && v.width === t.width && v.height === t.height &&
-          Math.abs((v.frameRate || 0) - (t.frameRate || 0)) < 1 &&
-          M.codecFamily(v.codecs, cfg) === M.codecFamily(t.codecs, cfg);
       }
 
       /** One backup search per channel at a time; later polls join the one in flight. */
@@ -1576,10 +1537,7 @@
       function endBreak(c) {
         emit('ad-end', {
           channel: c.id, midroll: c.midroll,
-          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none'),
-          // Every backup served in this break matched native quality and nothing was stripped:
-          // recovery prefers soft actions (research-2026-11-13 §4 item 5).
-          matched: !!c.flags.backup && !c.flags.unmatched && !c.flags.stripped
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none')
         });
         c.inBreak = false;
         c.flags = {};
@@ -1588,7 +1546,7 @@
       function isBackup(serving) { return String(serving).indexOf('backup:') === 0; }
 
       function canSwap(c) {
-        return c.kind === 'live' && !degraded[c.id] && !!c.masterUrl && settings().playerTypes.length > 0;
+        return c.kind === 'live' && !!c.masterUrl && settings().playerTypes.length > 0;
       }
 
       /** Called with a media playlist; resolves to the text to give the player. Never rejects. */
@@ -1652,16 +1610,14 @@
         rememberAdSegments(stripped.removedUrls);
         if (!canSwap(c)) return Promise.resolve({ kind: 'stripped', stripped: stripped });
         return withDeadline(search(c, info.variant)).then(function (b) {
-          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped, missed: true };
+          return b ? { kind: 'backup', b: b } : { kind: 'stripped', stripped: stripped };
         });
       }
 
       function sequenced(c, url, original, served, sourceKey) {
         if (c.kind !== 'live' || !M.isLivePlaylist(served)) return served;
         var view = viewFor(url);
-        if (served === null) {
-          if (!view.active) return original;
-        } else if (!view.active && served === original && sourceKey === 'native') {
+        if (!view.active && served === original && sourceKey === 'native') {
           view.passthrough = original; // untouched: the player keeps Twitch's own numbering
           return original;
         }
@@ -1681,27 +1637,20 @@
         if (pl.kind === 'native') {
           if (c.inBreak) endBreak(c);
           setServing(c, 'native');
-          c.lastClean = original;
-          c.lastCleanAt = now();
           return sequenced(c, url, original, original, 'native');
         }
         if (pl.kind === 'backup') {
           var b = pl.b;
           if (c.inBreak && !c.flags.backup) {
             c.flags.backup = true;
-            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution, matched: b.matched });
+            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution });
           }
-          if (c.inBreak && !b.matched) c.flags.unmatched = true;
-          c.lastBackupAt = now();
-          setServing(c, 'backup:' + b.type, b.matched);
+          setServing(c, 'backup:' + b.type);
           var key = 'backup:' + b.type + ':' + (b.variant.resolution || 'audio') + ':' + (b.variant.frameRate || 0) + ':' + (b.variant.codecs || '');
           return sequenced(c, url, original, b.text, key);
         }
-        // Stripped. A backup was being served and only this poll missed it: hold briefly.
-        if (pl.missed && isBackup(c.serving) && now() - (c.lastBackupAt || 0) < cfg.backupHoldMs) {
-          var view = views.get(url);
-          if (view && view.active) return sequenced(c, url, original, null, view.lastSource);
-        }
+        // Stripped native: ad segments removed; resequence keeps the numbering continuous (an
+        // all-ad poll lists the newest segments the player already has, under their numbers).
         return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
@@ -1718,12 +1667,9 @@
           }
           if (!c.flags.stripped) {
             c.flags.stripped = true;
-            emit('ad-stripped', { channel: c.id, midroll: c.midroll, removed: stripped.removed, degraded: !!degraded[c.id] });
+            emit('ad-stripped', { channel: c.id, midroll: c.midroll, removed: stripped.removed });
           }
           setServing(c, 'stripped');
-          if (stripped.kept === 0 && c.lastClean && now() - c.lastCleanAt < cfg.lastCleanMaxAgeMs) {
-            return c.lastClean;
-          }
           return stripped.text;
         } catch (e) {
           emit('failure', { channel: c.id, where: 'strip', message: String(e && e.message) });
@@ -1731,13 +1677,9 @@
         }
       }
 
-      function setDegraded(channel) {
-        degraded[String(channel).toLowerCase()] = true;
-      }
-
       function stateOf(channel) {
         var c = channels.get('live:' + String(channel).toLowerCase());
-        return c ? { pinned: c.pinned, inBreak: c.inBreak, serving: c.serving, lockouts: c.lockouts, degraded: !!degraded[c.id] } : null;
+        return c ? { pinned: c.pinned, inBreak: c.inBreak, serving: c.serving, lockouts: c.lockouts } : null;
       }
 
       return {
@@ -1745,7 +1687,6 @@
         onMedia: onMedia,
         knowsMedia: knowsMedia,
         isAdSegment: isAdSegment,
-        setDegraded: setDegraded,
         stateOf: stateOf
       };
     };
@@ -1848,8 +1789,7 @@
         log.debug('event', name, data);
         post({ type: 'event', name: name, data: data || {} });
       },
-      log: log,
-      degraded: boot.degraded || []
+      log: log
     });
 
     scope.addEventListener('message', function (e) {
@@ -1864,8 +1804,6 @@
           if (cb) { pending.delete(msg.id); cb(msg.token || null); }
         } else if (msg.type === 'settings') {
           settings = msg.settings || settings;
-        } else if (msg.type === 'degrade') {
-          proc.setDegraded(msg.channel);
         }
       } catch (err) {
         log.warn('message handling failed', err && err.message);
@@ -1945,7 +1883,7 @@
  *   ["use strict";]                     only if Twitch's worker starts with that directive
  *   /* __TAS_WORKER__ * /                marker, so a worker is never wrapped twice
  *   ;(function () {
- *     var cfg  = <config JSON>;  var boot = <settings + degraded channels JSON>;
+ *     var cfg  = <config JSON>;  var boot = <{ settings } JSON>;
  *     var M    = (<m3u8 factory source>)();
  *     ...                                processor + logger factories
  *     (<worker main source>)(self, cfg, boot, M, createProcessor, createLogger);
@@ -1977,7 +1915,7 @@
   /**
    * @param parts { m3u8Factory, processorFactory, loggerFactory, workerMain } functions
    * @param cfg   config object
-   * @param boot  { settings, degraded }
+   * @param boot  { settings }
    * @param originalSource Twitch's worker script text
    */
   function buildWorkerSource(parts, cfg, boot, originalSource) {
@@ -2013,135 +1951,62 @@
 
 ;
 
-// ---- src/page/recovery.js ----
+// ---- src/page/health.js ----
 /*
- * Player recovery / health (MAIN world). docs/research-technique.md §5 and
- * docs/research-2026-11-13.md §1 C5, §2 (F2, F6, F7, F9) / §4 items 2, 4, 5.
+ * Playback health (MAIN world). docs/DESIGN-v2.md "Metrics (health.js)" and "The one nudge".
+ * Replaces 1.x recovery.js: no seeks, no reloads, no localStorage, no muted retries.
  *
- * A watch is armed after every playlist switch (native <-> backup <-> stripped), every ad end
- * (for at least frozenPictureWatchMs), and (while a backup/stripped playlist is served, and for
- * rearmAfterNativeMs after returning to native) on the main <video>'s waiting/stalled events
- * and on pauses nobody asked for.
- * While armed, once per checkIntervalMs, and only while the tab is visible:
- *   - paused, and the pause did not follow a click/key on the player  -> play()
- *   - playhead stuck stallThresholdMs (3 ticks), not enough data (readyState < 3) and a hole
- *     in the buffered ranges ahead                                     -> seek over the hole
- *   - playhead stuck and less than drainingBufferSec buffered ahead   -> pause/play nudge
- *   - picture frozen while the sound plays: playhead advancing but the decoded-frame counter
- *     (getVideoPlaybackQuality / webkitDecodedFrameCount) flat, or videoWidth 0, for
- *     frozenPictureTicks samples in a row (not when the viewer chose audio-only; no counter: not
- *     checked)                                                         -> pause/play nudge
- *   at most maxSoftKicks per watch, minKickIntervalMs apart, maxKicksPerWindow overall;
- *   - still stuck hardReloadAfterMs after the first soft action       -> one hard player reload
- *     (React fiber setSrc, localStorage quality/volume/muted/lowLatency kept), not within
- *     reloadCooldownMs of the previous one, and not for a watch armed only by a break that
- *     stripped nothing / used a backup of the native quality (soft recovery only) unless the
- *     picture is frozen ('frozen-picture' may always reload);
- *   - then the watch ends with giveUpCooldownMs of no automatic actions (no loops).
- * play() rejected with NotAllowedError (no sound allowed): retried once muted, and the sound is
- * restored at the next click/key unless someone unmuted or the viewer had muted already.
- * 'segment-repeat' from the worker (the player was handed a segment it already had): one
- * pause/play, at most once per repeatRestartMinIntervalMs.
- * Hard reloads are rate-limited per channel (maxReloadsPerWindow per reloadWindowMs). Over the
- * limit, the channel is switched to strip-only mode for the page session (onDegrade).
- * There is no timer unless a watch is active. Every step is wrapped in try/catch.
- * opts.isEnabled() false (extension switched off): events are ignored and a running watch is
- * dropped on its next tick, so nothing touches the player.
+ * Metrics: while the main Twitch <video> (MSE, blob: source) plays, one sample every
+ * cfg.health.sampleMs: playhead advance, 'waiting' events, getVideoPlaybackQuality()
+ * dropped/total frames, videoHeight, time paused. Summed into a 'health' event at most once per
+ * cfg.health.reportMs (page.js forwards it only with debug on). No timer while nothing plays.
+ *
+ * The one nudge (vaft #476/#492: after a playlist switch the player sometimes wedges; one
+ * pause/play clears it, repeated or early kicks make it worse): within windowAfterSwitchMs of a
+ * 'playlist-switch' event, tab visible, video not paused or ended, playhead not advanced for
+ * frozenMs with at least minBufferAheadSec buffered ahead, and no click/key on the player in the
+ * last userGestureWindowMs -> pause() then play(). At most once per ad break (a break starts with
+ * 'ad-detected') and once per minIntervalMs.
+ *
+ * opts.isEnabled() false (extension switched off): events are ignored and a running timer stops
+ * on its next sample. Every step is wrapped in try/catch.
  */
 (function (root) {
   'use strict';
   var ns = root.__TAS__;
-  if (!ns || !ns.config) throw new Error('[TAS] recovery.js needs config.js first');
-
-  /** Sliding-window limiter: allow() returns false once max calls happened within windowMs. */
-  function createReloadLimiter(max, windowMs, now) {
-    var history = {};
-    return {
-      allow: function (key) {
-        var t = now();
-        var h = (history[key] || []).filter(function (x) { return t - x < windowMs; });
-        if (h.length >= max) { history[key] = h; return false; }
-        h.push(t);
-        history[key] = h;
-        return true;
-      },
-      count: function (key) {
-        var t = now();
-        return (history[key] || []).filter(function (x) { return t - x < windowMs; }).length;
-      }
-    };
-  }
-
-  /** Walk the React fiber tree under #root for the player instance and the player state. */
-  function findPlayerAndState(doc, cfg) {
-    var rootEl = doc.querySelector(cfg.player.rootSelector);
-    if (!rootEl) return null;
-    var fiber = null;
-    try {
-      if (rootEl._reactRootContainer && rootEl._reactRootContainer._internalRoot) {
-        fiber = rootEl._reactRootContainer._internalRoot.current;
-      } else {
-        var keys = Object.keys(rootEl);
-        for (var i = 0; i < keys.length; i++) {
-          if (keys[i].indexOf('__reactContainer') === 0) { fiber = rootEl[keys[i]]; break; }
-        }
-      }
-    } catch (e) { return null; }
-    if (!fiber) return null;
-    var player = null, state = null;
-    var stack = [fiber];
-    var visited = 0;
-    while (stack.length && visited < 50000 && !(player && state)) {
-      var node = stack.pop();
-      visited++;
-      if (!node) continue;
-      var sn = node.stateNode;
-      if (sn && typeof sn === 'object') {
-        try {
-          if (!player && sn.setPlayerActive && sn.props && sn.props.mediaPlayerInstance) {
-            var mpi = sn.props.mediaPlayerInstance;
-            player = mpi.playerInstance || mpi;
-          }
-          if (!state && sn.setSrc && sn.setInitialPlaybackSettings) state = sn;
-        } catch (e) { /* cross-realm or getter error: skip */ }
-      }
-      if (node.sibling) stack.push(node.sibling);
-      if (node.child) stack.push(node.child);
-    }
-    return player || state ? { player: player, state: state } : null;
-  }
+  if (!ns || !ns.config) throw new Error('[TAS] health.js needs config.js first');
 
   /**
-   * @param opts { cfg, log, doc, win, now, setInterval, clearInterval, emit(name,data),
-   *               onDegrade(channel), findPlayerAndState?, isEnabled? (default: always on) }
+   * @param opts { cfg, log, doc, win, isEnabled, emit(name, data),
+   *               now?, setInterval?, clearInterval? (tests) }
    */
-  function createRecovery(opts) {
+  function createHealth(opts) {
     var cfg = opts.cfg;
-    var rc = cfg.recovery;
+    var hc = cfg.health;
+    var nc = hc.nudge;
     var log = opts.log;
     var doc = opts.doc;
-    var win = opts.win;
     var now = opts.now || function () { return Date.now(); };
     var setIv = opts.setInterval || function (f, ms) { return setInterval(f, ms); };
     var clearIv = opts.clearInterval || function (id) { clearInterval(id); };
     var emit = opts.emit || function () {};
     var isEnabled = opts.isEnabled || function () { return true; };
-    var finder = opts.findPlayerAndState || function () { return findPlayerAndState(doc, cfg); };
-    var limiter = createReloadLimiter(rc.maxReloadsPerWindow, rc.reloadWindowMs, now);
-    var degraded = {};
-    var watch = null;
+
     var timer = null;
+    var channel = '';
     var lastGestureAt = -Infinity;
-    var ownPauseAt = -Infinity;
-    var pauses = typeof WeakMap === 'function' ? new WeakMap() : null; // video -> { user }
-    var serving = 'native';
-    var nativeSince = -Infinity;
-    var lastChannel = '';
-    var kickTimes = [];
-    var cooldownUntil = -Infinity;
-    var lastReloadAt = -Infinity;
-    var lastRepeatKickAt = -Infinity;
-    var mutedByUs = null; // { video, volume }: we muted to get play() allowed
+    var lastSwitchAt = -Infinity;
+    var lastNudgeAt = -Infinity;
+    var breakNudged = false;
+    var pausedAt = null;           // main video paused since (ms), or null
+    var last = null;               // previous sample: { time, at }
+    var lastAdvanceAt = 0;
+    var win = null;                // metrics since the last report
+
+    function newWindow(t) {
+      win = { since: t, advanceSec: 0, waiting: 0, pausedMs: 0, nudges: 0 };
+    }
+    newWindow(now());
 
     function isMainVideo(v) {
       return !!v && v.nodeName === 'VIDEO' && String(v.currentSrc || v.src || '').indexOf('blob:') === 0;
@@ -2149,38 +2014,25 @@
 
     function findVideo() {
       var vids = doc.querySelectorAll(cfg.player.videoSelector);
-      var fallback = null;
-      for (var i = 0; i < vids.length; i++) {
-        var v = vids[i];
-        var src = String(v.currentSrc || v.src || '');
-        if (src.indexOf('blob:') === 0) return v; // the MSE player video
-        if (!fallback && !src) fallback = v;
-      }
-      return fallback;
+      for (var i = 0; i < vids.length; i++) if (isMainVideo(vids[i])) return vids[i];
+      return null;
     }
 
     function visible() {
       return !doc || doc.visibilityState === undefined || doc.visibilityState === 'visible';
     }
 
-    /** A pause counts as the viewer's when it follows a click/key on the player (or is unknown). */
-    function userPaused(v) {
-      if (!v || !v.paused) return false;
-      var info = pauses ? pauses.get(v) : null;
-      return !info || info.user;
+    function playing(v) {
+      return !!v && !v.paused && !v.ended;
     }
 
-    /** Waiting/stalled/unexpected pauses matter while a backup/stripped playlist is served and a bit after. */
-    function sensitive() {
-      return serving !== 'native' || now() - nativeSince < rc.rearmAfterNativeMs;
-    }
-
+    /** A click/key aimed at the player (typing in chat is not). */
     function onPlayer(e) {
       var t = e && e.target;
       if (e.type === 'keydown') {
         if (!t) return true;
         var tag = String(t.nodeName || '').toUpperCase();
-        return !(tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable); // typing in chat is not a player key
+        return !(tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable);
       }
       if (t && typeof t.closest === 'function') {
         try { return !!t.closest(cfg.player.playerContainerSelector + ',video'); } catch (err) { return true; }
@@ -2188,24 +2040,24 @@
       return true;
     }
 
-    function restoreSound() {
-      if (!mutedByUs) return;
-      var m = mutedByUs;
-      mutedByUs = null;
-      try {
-        if (m.video.muted) {
-          m.video.muted = false;
-          if (typeof m.volume === 'number') m.video.volume = m.volume;
-        }
-      } catch (e) { /* ignore */ }
-    }
-
     function onGesture(e) {
       try {
         if (!isEnabled() || (e && e.isTrusted === false)) return;
-        restoreSound(); // any real gesture allows sound again
         if (onPlayer(e)) lastGestureAt = now();
       } catch (err) { /* ignore */ }
+    }
+
+    function start(v) {
+      if (timer !== null) return;
+      var t = now();
+      last = { time: v.currentTime, at: t };
+      lastAdvanceAt = t;
+      timer = setIv(sample, hc.sampleMs);
+    }
+
+    function stop() {
+      if (timer !== null) { clearIv(timer); timer = null; }
+      last = null;
     }
 
     function onMediaEvent(e) {
@@ -2213,17 +2065,13 @@
         var v = e && e.target;
         if (!isEnabled() || !isMainVideo(v)) return;
         var t = now();
-        if (e.type === 'pause') {
-          var own = t - ownPauseAt < 1000;
-          var user = !own && t - lastGestureAt <= rc.userGestureWindowMs;
-          if (pauses) pauses.set(v, { user: user });
-          if (!user && !own && sensitive()) arm(lastChannel, { hard: true });
-        } else if (e.type === 'play' || e.type === 'playing') {
-          if (pauses) pauses.delete(v);
-        } else if (e.type === 'waiting' || e.type === 'stalled') {
-          if (sensitive()) arm(lastChannel, { hard: true });
-        } else if (e.type === 'volumechange') {
-          if (mutedByUs && mutedByUs.video === v && !v.muted) mutedByUs = null; // unmuted by someone: done
+        if (e.type === 'play' || e.type === 'playing') {
+          if (pausedAt !== null) { win.pausedMs += t - pausedAt; pausedAt = null; }
+          if (playing(v)) start(v);
+        } else if (e.type === 'pause') {
+          if (pausedAt === null) pausedAt = t;
+        } else if (e.type === 'waiting') {
+          win.waiting++;
         }
       } catch (err) { /* ignore */ }
     }
@@ -2233,361 +2081,119 @@
         doc.addEventListener(type, onGesture, true);
       });
       // Media events do not bubble, but a capturing listener on the document sees them.
-      ['pause', 'play', 'playing', 'waiting', 'stalled', 'volumechange'].forEach(function (type) {
+      ['play', 'playing', 'pause', 'waiting'].forEach(function (type) {
         doc.addEventListener(type, onMediaEvent, true);
       });
     }
 
-    function disarm() {
-      watch = null;
-      if (timer !== null) { clearIv(timer); timer = null; }
-    }
-
-    /** Start a watch, or extend the running one (its counters are kept: no reset by re-arming). */
-    function arm(channel, o) {
-      try {
-        var t = now();
-        if (t < cooldownUntil) return;
-        var hard = !o || o.hard !== false;
-        var span = Math.max(rc.watchWindowMs, (o && o.minMs) || 0);
-        if (watch) {
-          watch.until = Math.max(watch.until, t + span);
-          if (hard) watch.hard = true;
-          if (channel) watch.channel = channel;
-          return;
-        }
-        var v = findVideo();
-        watch = {
-          channel: channel || lastChannel || '',
-          until: t + span,
-          lastTime: v ? v.currentTime : -1,
-          lastFrames: v ? decodedFrames(v) : null,
-          frozenTicks: 0,
-          lastAdvanceAt: t,
-          healthySince: t,
-          stallSince: null,
-          firstSoftAt: null,
-          kicks: 0,
-          lastKickAt: -Infinity,
-          reloaded: false,
-          hard: hard
-        };
-        if (timer === null) timer = setIv(tick, rc.checkIntervalMs);
-      } catch (e) {
-        log.warn('recovery arm failed', e && e.message);
-      }
-    }
-
-    /** Decoded video frames so far, or null when the browser exposes no counter. */
-    function decodedFrames(v) {
-      try {
-        if (typeof v.getVideoPlaybackQuality === 'function') {
-          var q = v.getVideoPlaybackQuality();
-          if (q && typeof q.totalVideoFrames === 'number') return q.totalVideoFrames;
-        }
-        if (typeof v.webkitDecodedFrameCount === 'number') return v.webkitDecodedFrameCount;
-      } catch (e) { /* ignore */ }
-      return null;
-    }
-
-    /** The viewer picked "Audio Only" (Twitch stores {"default":"audio_only"} in video-quality). */
-    function audioOnly() {
-      try {
-        var raw = win.localStorage.getItem('video-quality');
-        var q = raw ? JSON.parse(raw) : null;
-        return q === 'audio_only' || !!(q && q['default'] === 'audio_only');
-      } catch (e) { return false; }
-    }
-
-    /**
-     * One sample on a tick where the playhead advanced: true when it advanced at least
-     * frozenPictureMinAdvanceSec while (almost) no frames were decoded, or there is no picture
-     * at all (videoWidth 0). No frame counter: never true (research-2026-11-13 C5/F7).
-     */
-    function frozenPictureSample(v) {
-      var frames = decodedFrames(v);
-      var prev = watch.lastFrames;
-      watch.lastFrames = frames;
-      if (frames === null || prev === null || prev === undefined) return false;
-      if (v.currentTime - watch.lastTime < rc.frozenPictureMinAdvanceSec) return false;
-      if (frames < prev) return false; // counter restarted (new media source)
-      if (frames - prev >= rc.frozenPictureMinFrames && v.videoWidth !== 0) return false;
-      return !audioOnly();
-    }
-
-    function kicksAllowed(t) {
-      kickTimes = kickTimes.filter(function (x) { return t - x < rc.kickWindowMs; });
-      return kickTimes.length < rc.maxKicksPerWindow;
-    }
-
-    /** play() that copes with a rejection: NotAllowedError -> one muted retry (sound restored later). */
-    function safePlay(v) {
-      var p;
-      try { p = v.play(); } catch (e) { return; }
-      if (!p || typeof p.then !== 'function') return;
-      p.then(null, function (err) {
-        try {
-          if (!isEnabled() || !err || err.name !== 'NotAllowedError') return;
-          if (v.muted || mutedByUs) return; // muted already (maybe by the viewer): nothing more to try
-          mutedByUs = { video: v, volume: v.volume };
-          v.muted = true;
-          emit('stall-kick', { channel: lastChannel, action: 'muted-play' });
-          var p2 = v.play();
-          if (p2 && typeof p2.then === 'function') p2.then(null, function () { restoreSound(); });
-        } catch (e) { /* ignore */ }
-      });
-    }
-
-    function ahead(v) {
+    function bufferedAhead(v) {
       var b = v.buffered;
       var ct = v.currentTime;
       if (!b || !b.length) return 0;
       for (var i = 0; i < b.length; i++) {
-        if (ct >= b.start(i) - rc.gapToleranceSec && ct < b.end(i)) return b.end(i) - ct;
+        if (ct >= b.start(i) - 0.1 && ct < b.end(i)) return b.end(i) - ct;
       }
       return 0;
     }
 
-    /** Where to seek to get over a hole in the buffered ranges, or null if there is none. */
-    function gapTarget(v) {
-      var b = v.buffered;
-      if (!b || !b.length) return null;
-      var ct = v.currentTime;
-      var tol = rc.gapToleranceSec;
-      for (var i = 0; i < b.length; i++) {
-        var s = b.start(i), e = b.end(i);
-        if (ct >= s - tol && ct < e - tol) return null; // data right here: no hole to skip
-        if (s > ct) return s + rc.gapSeekOffsetSec;     // first range ahead of the playhead
-      }
-      var lastEnd = b.end(b.length - 1);
-      // Playhead beyond everything buffered (timestamps went back after a switch): go back to the data.
-      if (ct > lastEnd + 1) return Math.max(b.start(b.length - 1), lastEnd - 1.5);
-      return null;
-    }
-
-    /** One soft action; returns its name. */
-    function softKick(v, reason) {
-      var action;
-      if (v.paused) {
-        action = 'play';
-        safePlay(v);
-      } else {
-        var target = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) ? gapTarget(v) : null;
-        if (target !== null) {
-          action = 'seek';
-          try { v.currentTime = target; } catch (e) { /* ignore */ }
-        } else {
-          action = 'nudge';
-          ownPauseAt = now();
-          try { v.pause(); } catch (e) { /* ignore */ }
-          safePlay(v);
-        }
-      }
-      return action;
-    }
-
-    function preserveLocalStorage() {
-      var storage, proto, origGet;
+    function quality(v) {
       try {
-        storage = win.localStorage;
-        proto = Object.getPrototypeOf(storage);
-        origGet = proto.getItem;
-      } catch (e) { return; }
-      var keys = rc.preservedLocalStorageKeys;
-      var snap = {};
-      keys.forEach(function (k) {
-        try { snap[k] = origGet.call(storage, k); } catch (e) { /* ignore */ }
-      });
-      // During the reload window, the player reads our snapshot for these keys.
-      var wrapped = function (k) {
-        if (this === storage && Object.prototype.hasOwnProperty.call(snap, k) && snap[k] !== null) return snap[k];
-        return origGet.apply(this, arguments);
+        if (typeof v.getVideoPlaybackQuality === 'function') {
+          var q = v.getVideoPlaybackQuality();
+          if (q) return { dropped: q.droppedVideoFrames || 0, frames: q.totalVideoFrames || 0 };
+        }
+      } catch (e) { /* ignore */ }
+      return { dropped: null, frames: null };
+    }
+
+    function report(v, t) {
+      if (t - win.since < hc.reportMs) return;
+      var q = quality(v);
+      var d = {
+        channel: channel,
+        periodMs: t - win.since,
+        advanceSec: Math.round(win.advanceSec * 100) / 100,
+        waiting: win.waiting,
+        pausedMs: win.pausedMs + (pausedAt !== null ? t - pausedAt : 0),
+        dropped: q.dropped,
+        frames: q.frames,
+        height: v.videoHeight || 0,
+        nudges: win.nudges
       };
-      try { proto.getItem = wrapped; } catch (e) { return; }
-      win.setTimeout(function () {
-        try { if (proto.getItem === wrapped) proto.getItem = origGet; } catch (e) { /* ignore */ }
-        // Write back values the reload may have reset.
-        keys.forEach(function (k) {
-          try {
-            if (snap[k] !== null && snap[k] !== undefined && origGet.call(storage, k) !== snap[k]) storage.setItem(k, snap[k]);
-          } catch (e) { /* ignore */ }
-        });
-      }, rc.preserveWindowMs);
+      log.debug('health', d);
+      emit('health', d);
+      newWindow(t);
+      if (pausedAt !== null) pausedAt = t;
     }
 
-    function hardReload(channel, v) {
-      var ps = null;
-      try { ps = finder(); } catch (e) { ps = null; }
-      if (!ps || !ps.state) {
-        emit('reload-failed', { channel: channel, reason: 'player state not found' });
-        return false;
-      }
-      // Only the viewer's own pause stops a reload (the player pausing itself is what we fix).
-      if (userPaused(v)) return false;
-      preserveLocalStorage();
-      try {
-        ps.state.setSrc({ isNewMediaPlayerInstance: true, refreshAccessToken: true });
-        if (ps.player && typeof ps.player.play === 'function') ps.player.play();
-        lastReloadAt = now();
-        emit('player-reload', { channel: channel, count: limiter.count(channel) });
-        return true;
-      } catch (e) {
-        emit('reload-failed', { channel: channel, reason: String(e && e.message) });
-        return false;
-      }
-    }
-
-    function degrade(channel) {
-      if (degraded[channel]) return;
-      degraded[channel] = true;
-      log.warn('too many player reloads on', channel, '- strip-only mode for this page session');
-      try { opts.onDegrade(channel); } catch (e) { /* ignore */ }
-    }
-
-    function giveUp(t) {
-      cooldownUntil = t + rc.giveUpCooldownMs;
-      disarm();
-    }
-
-    function tick() {
-      try {
-        if (!watch || !isEnabled()) { disarm(); return; }
-        var t = now();
-        if (t > watch.until) { disarm(); return; }
-        var v = findVideo();
-        if (!v) return;
-        // Hidden tab: browsers stop drawing video; never act then (research-2026-11-13 C5).
-        if (!visible() || v.ended || userPaused(v)) {
-          watch.lastAdvanceAt = t; watch.lastTime = v.currentTime; watch.stallSince = null;
-          watch.lastFrames = decodedFrames(v); watch.frozenTicks = 0;
-          return;
-        }
-        var reason;
-        if (!v.paused && Math.abs(v.currentTime - watch.lastTime) > 0.1) {
-          var frozen = frozenPictureSample(v);
-          watch.lastTime = v.currentTime;
-          watch.lastAdvanceAt = t;
-          if (!frozen) {
-            watch.frozenTicks = 0;
-            watch.stallSince = null;
-            if (t - watch.healthySince >= rc.healthyResetMs) { watch.kicks = 0; watch.firstSoftAt = null; }
-            return;
-          }
-          // Sound plays, the picture does not: no healthy reset while this lasts.
-          watch.healthySince = t;
-          if (++watch.frozenTicks < rc.frozenPictureTicks) return;
-          watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
-          reason = 'frozen-picture';
-          if (watch.stallSince === null) watch.stallSince = t;
-        } else {
-          watch.lastFrames = decodedFrames(v);
-          watch.frozenTicks = 0;
-          watch.healthySince = t;
-          // Keep watching while frozen; the ladder below always ends in giveUp, so this is bounded.
-          watch.until = Math.max(watch.until, t + 2 * rc.checkIntervalMs);
-          reason = v.paused ? 'paused' : 'stall';
-          if (t - watch.lastAdvanceAt < (v.paused ? rc.pausedStallMs : rc.stallThresholdMs)) return;
-          if (watch.stallSince === null) watch.stallSince = t;
-        }
-        // A frozen picture is broken whatever armed the watch: it may always end in a reload.
-        var mayReload = watch.hard || reason === 'frozen-picture';
-        // Stalled: soft actions first.
-        if (watch.kicks < rc.maxSoftKicks && kicksAllowed(t)) {
-          if (t - watch.lastKickAt < rc.minKickIntervalMs) return;
-          var draining = ahead(v) < rc.drainingBufferSec;
-          var gap = reason === 'stall' && (v.readyState === undefined || v.readyState < 3) && gapTarget(v) !== null;
-          if (reason === 'paused' || reason === 'frozen-picture' || draining || gap) {
-            watch.kicks++;
-            watch.lastKickAt = t;
-            if (watch.firstSoftAt === null) watch.firstSoftAt = t;
-            kickTimes.push(t);
-            var action = softKick(v, reason); // 'frozen-picture': never paused here, so a pause/play nudge
-            if (reason === 'frozen-picture') action = reason;
-            log.debug('stall after playlist switch:', action);
-            emit('stall-kick', { channel: watch.channel, action: action });
-            return;
-          }
-        }
-        // Soft actions used up (or none fits): the hard reload, if this watch may do one.
-        var since = watch.firstSoftAt !== null ? watch.firstSoftAt : watch.stallSince;
-        if (!watch.reloaded && mayReload && t - since >= rc.hardReloadAfterMs) {
-          if (t - lastReloadAt < rc.reloadCooldownMs) return;
-          var ch = watch.channel;
-          watch.reloaded = true;
-          watch.lastAdvanceAt = t;
-          watch.stallSince = null;
-          watch.frozenTicks = 0;
-          if (degraded[ch]) { giveUp(t); return; }
-          if (limiter.allow(ch)) {
-            log.debug('still stalled: player reload');
-            hardReload(ch, v);
-          } else {
-            degrade(ch);
-            giveUp(t);
-          }
-          return;
-        }
-        if (watch.reloaded || !mayReload) {
-          // Nothing left to try for this watch.
-          if (t - since >= rc.hardReloadAfterMs) giveUp(t);
-        }
-      } catch (e) {
-        log.warn('recovery tick failed', e && e.message);
-        disarm();
-      }
-    }
-
-    /** 'segment-repeat': the player was handed a segment it already had; restart it once. */
-    function repeatKick() {
-      var t = now();
-      if (t - lastRepeatKickAt < rc.repeatRestartMinIntervalMs || !visible()) return;
-      var v = findVideo();
-      if (!v || v.paused || v.ended) return;
-      lastRepeatKickAt = t;
-      ownPauseAt = t;
+    /** The one nudge: pause() then play(), only when every condition of the rule holds. */
+    function maybeNudge(v, t) {
+      if (breakNudged || t - lastNudgeAt < nc.minIntervalMs) return;
+      if (t - lastSwitchAt > nc.windowAfterSwitchMs) return;
+      if (!visible() || !playing(v)) return;
+      if (t - lastAdvanceAt < nc.frozenMs) return;
+      if (bufferedAhead(v) < nc.minBufferAheadSec) return;
+      if (t - lastGestureAt <= nc.userGestureWindowMs) return;
+      breakNudged = true;
+      lastNudgeAt = t;
+      lastAdvanceAt = t;
+      win.nudges++;
+      log.debug('playhead frozen after a playlist switch: one pause/play');
       try { v.pause(); } catch (e) { /* ignore */ }
-      safePlay(v);
-      emit('stall-kick', { channel: lastChannel, action: 'repeat-restart' });
+      try {
+        var p = v.play();
+        if (p && typeof p.then === 'function') p.then(null, function () { /* not retried */ });
+      } catch (e) { /* ignore */ }
+      emit('nudge', { channel: channel });
+    }
+
+    function sample() {
+      try {
+        if (!isEnabled()) { stop(); return; }
+        var v = findVideo();
+        if (!playing(v)) { stop(); return; }
+        var t = now();
+        var adv = last ? v.currentTime - last.time : 0;
+        if (adv > 0.05) {
+          win.advanceSec += adv;
+          lastAdvanceAt = t;
+        } else if (adv < 0 || !last) {
+          lastAdvanceAt = t; // new media or a seek by the player: not frozen
+        }
+        last = { time: v.currentTime, at: t };
+        maybeNudge(v, t);
+        report(v, t);
+      } catch (e) {
+        log.warn('health sample failed', e && e.message);
+        stop();
+      }
     }
 
     function onEvent(name, data) {
       try {
         if (!isEnabled()) return;
         var d = data || {};
-        if (d.channel) lastChannel = d.channel;
-        if (name === 'playlist-switch') {
-          serving = d.to || 'native';
-          if (serving === 'native') nativeSince = now();
-          // Switching to the stripped playlist or to a backup of another quality may need a reload;
-          // the switch back to native is judged by the ad-end that comes with it.
-          arm(d.channel, { hard: serving === 'stripped' || (serving !== 'native' && d.matched === false) });
-        } else if (name === 'ad-end') {
-          // Prefer soft recovery when nothing was stripped or the backup matched native quality.
-          // Watch longer than usual: the frozen-picture wedge shows up right after breaks.
-          var soft = d.outcome === 'none' || (d.outcome === 'backup' && d.matched);
-          arm(d.channel, { hard: !soft, minMs: rc.frozenPictureWatchMs });
-        } else if (name === 'segment-repeat') {
-          repeatKick();
+        if (d.channel) channel = d.channel;
+        if (name === 'ad-detected') {
+          breakNudged = false;
+        } else if (name === 'playlist-switch') {
+          lastSwitchAt = now();
+          var v = findVideo();
+          if (playing(v)) start(v);
         }
       } catch (e) {
-        log.warn('recovery event failed', e && e.message);
+        log.warn('health event failed', e && e.message);
       }
     }
 
     return {
       onEvent: onEvent,
-      arm: arm,
-      tick: tick,
-      isWatching: function () { return !!watch; },
-      isDegraded: function (ch) { return !!degraded[ch]; }
+      sample: sample,
+      isSampling: function () { return timer !== null; }
     };
   }
 
-  ns.recovery = {
-    createRecovery: createRecovery,
-    createReloadLimiter: createReloadLimiter,
-    findPlayerAndState: findPlayerAndState
-  };
+  ns.health = { createHealth: createHealth };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 ;
@@ -2596,7 +2202,7 @@
 /*
  * Page script (MAIN world, document_start). Last file of build/main-world.js (tools/build.py),
  * after config.js, settings.js, logger.js, frame.js, m3u8.js, gql.js, processor.js,
- * worker-main.js, worker-source.js and recovery.js; declared in manifest.json.
+ * worker-main.js, worker-source.js and health.js; declared in manifest.json.
  *
  * It:
  *  1. hooks window.fetch to capture the GQL headers (Client-ID, Device-ID, Authorization,
@@ -2605,7 +2211,8 @@
  *  2. replaces window.Worker with a subclass that wraps Twitch's blob workers with our
  *     worker code (src/core/worker-source.js);
  *  3. answers token requests from workers using the page's real fetch and captured headers;
- *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to recovery.
+ *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to health.js
+ *     (playback metrics and the one gated nudge after a playlist switch).
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -2613,7 +2220,7 @@
  *
  * Off switch (settings.enabled === false): no playerType rewrite, no Worker wrapping once the
  * stored settings have arrived (before that a worker may be wrapped, and the worker code then
- * passes every request through itself), worker token requests answered with null, recovery idle.
+ * passes every request through itself), worker token requests answered with null, health idle.
  */
 (function (root) {
   'use strict';
@@ -2629,7 +2236,7 @@
   var createLogger = ns.createLogger;
   var buildWorkerSource = ns.buildWorkerSource;
   var isWrappedWorkerSource = ns.isWrappedWorkerSource;
-  var Recovery = ns.recovery;
+  var Health = ns.health;
   var parts = {
     m3u8Factory: ns.m3u8Factory,
     processorFactory: ns.processorFactory,
@@ -2651,7 +2258,6 @@
   var captured = {};
   var fallbackDeviceId = G.randomDeviceId();
   var workers = new Set();
-  var degraded = {};
   var doc = root.document;
 
   // ------------------------------------------------------------------ bridge messaging
@@ -2688,21 +2294,19 @@
   function isEnabled() { return settings.enabled !== false; }
 
   function hello() {
-    toBridge({ type: 'hello', version: cfg.version, top: frame.isTopFrame(root), degraded: Object.keys(degraded) });
+    toBridge({ type: 'hello', version: cfg.version, top: frame.isTopFrame(root) });
   }
 
-  // ------------------------------------------------------------------ recovery
-  var recovery = Recovery.createRecovery({
+  // ------------------------------------------------------------------ playback health
+  var health = Health.createHealth({
     cfg: cfg,
     log: log,
     doc: doc,
     win: root,
     isEnabled: isEnabled,
-    emit: function (name, data) { toBridge({ type: 'event', name: name, data: data }); },
-    onDegrade: function (channel) {
-      degraded[channel] = true;
-      broadcast({ type: 'degrade', channel: channel });
-      toBridge({ type: 'event', name: 'degraded', data: { channel: channel } });
+    emit: function (name, data) {
+      if (name === 'health' && !settings.debug) return; // metrics are for the debug log only
+      toBridge({ type: 'event', name: name, data: data });
     }
   });
 
@@ -2775,7 +2379,7 @@
     if (!isTwitchWorkerUrl(s)) return null;
     var src = readSync(s);
     if (!src || isWrappedWorkerSource(src)) return null;
-    var code = buildWorkerSource(parts, cfg, { settings: settings, degraded: Object.keys(degraded) }, src);
+    var code = buildWorkerSource(parts, cfg, { settings: settings }, src);
     var blobUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
     setTimeout(function () { try { URL.revokeObjectURL(blobUrl); } catch (e) { /* ignore */ } }, 60000);
     return blobUrl;
@@ -2795,7 +2399,7 @@
     } else if (msg.type === 'event') {
       log.debug('event', msg.name, msg.data);
       toBridge({ type: 'event', name: msg.name, data: msg.data });
-      recovery.onEvent(msg.name, msg.data);
+      health.onEvent(msg.name, msg.data);
     }
   }
 
