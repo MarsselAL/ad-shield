@@ -21,6 +21,7 @@ import build_rules  # noqa: E402
 import curated as C  # noqa: E402
 import make_golden  # noqa: E402
 import removeparam as R  # noqa: E402
+import build  # noqa: E402
 
 
 def rules_of(lines):
@@ -638,6 +639,54 @@ class Golden(unittest.TestCase):
         self.assertTrue(g["site"]["generichide"] and g["site"]["elemhide"] and g["site"]["genericExceptionHosts"])
         for key, lst in g["lists"].items():
             self.assertEqual(dnr_schema.ruleset_errors(lst["rules"], key), [], key)
+
+
+class StripJs(unittest.TestCase):
+    """tools/build.py strip_js: the userscript's comment / blank line remover."""
+
+    def test_comment_lines_blank_lines_and_trailing_space_go(self):
+        src = "// head\n/* one\n * two\n */\nvar a = 1;   \n\n   // indented\n  /** doc */\nf(a); // kept\n"
+        self.assertEqual(build.strip_js(src), "var a = 1;\nf(a); // kept")
+
+    def test_template_literal_lines_kept_verbatim(self):
+        src = "var t = `x\n// not a comment  \n/* nor this */\n\n${ {a: 1}.a }`;\n// gone\nvar u = `${`\n//in`}`;\n"
+        self.assertEqual(build.strip_js(src), "var t = `x\n// not a comment  \n/* nor this */\n\n${ {a: 1}.a }`;\nvar u = `${`\n//in`}`;")
+
+    def test_string_continuation_kept(self):
+        src = "var s = 'a\\\n// still the string';\n// gone\n"
+        self.assertEqual(build.strip_js(src), "var s = 'a\\\n// still the string';")
+
+    def test_regex_and_strings_with_comment_marks(self):
+        src = "var r = /'\\/*\"[/*]/g, q = \"//\" + '/*';\n// gone\nx = a / b / c;\n/* gone */\n"
+        self.assertEqual(build.strip_js(src), "var r = /'\\/*\"[/*]/g, q = \"//\" + '/*';\nx = a / b / c;")
+
+    def test_block_followed_by_code_kept_and_mid_line_block_left_alone(self):
+        src = "/* a\n*/ run();\nx(); /* open\n// closes here */ y();\n"
+        self.assertEqual(build.strip_js(src), "/* a\n*/ run();\nx(); /* open\n// closes here */ y();")
+
+    def test_misread_fails_loudly(self):
+        for bad in ("var s = 'open\n", "var t = `open\n", "/* open\n"):
+            with self.assertRaises(ValueError):
+                build.strip_js(bad, "bad.js")
+
+    def test_real_sources_lose_only_comment_and_blank_lines(self):
+        import difflib
+        files = build.BUNDLES[build.MAIN_WORLD] + build.SCRIPTLET_SOURCES
+        for f in files + [None]:
+            src = build.USERSCRIPT_RUNTIME if f is None else build.read(f)
+            a = [l.rstrip() for l in src.split("\n")]
+            b = build.strip_js(src, f or "runtime").split("\n")
+            for tag, i1, i2, _j1, _j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+                if tag == "equal":
+                    continue
+                self.assertEqual(tag, "delete", f)
+                for line in a[i1:i2]:
+                    t = line.strip()
+                    self.assertTrue(t == "" or t.startswith(("//", "/*", "*")), (f, line))
+
+    def test_extension_bundles_keep_their_comments(self):
+        self.assertIn("// ---- src/scriptlets/lib.js ----\n/*", build.render_scriptlets())
+        self.assertIn("\n * ", build.render(build.BUNDLES[build.MAIN_WORLD]))
 
 
 class Result(unittest.TextTestResult):

@@ -91,6 +91,44 @@ test('no executed chrome.* API use', function () {
   assert.equal(typeof globalThis.chrome, 'undefined', 'test runs without chrome.*');
 });
 
+test('smaller file: source comments and blank lines stripped, only the build notes and file markers remain', function () {
+  var lines = SRC.split('\n');
+  var body = lines.slice(header().end + 1);
+  var notes = body.filter(function (l) { return /^\s*(\/\/|\/\*|\*)/.test(l); });
+  notes.forEach(function (l) {
+    assert.ok(/^\/\/ (GENERATED |Runs in |Install and |Like Ad Shield|---- [\w\/.-]+ ----$|YouTube: |Twitch: )/.test(l), 'comment line left: ' + l);
+  });
+  assert.equal(body.filter(function (l) { return /^\s*$/.test(l); }).length, 1, 'no blank lines (only the final newline)');
+  assert.equal(body.filter(function (l) { return /\s$/.test(l); }).length, 0, 'no trailing whitespace');
+  assert.ok(SRC.length < 140000, 'size ' + SRC.length);
+  assert.includes(readFile('build/main-world.js'), '\n * ', 'the extension bundle keeps its comments');
+});
+
+/** Rules of a stylesheet as [selector list, declarations] (comments dropped). */
+function cssRules(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '').split('}').map(function (r) {
+    var i = r.indexOf('{');
+    return i === -1 ? null : [r.slice(0, i).split(',').map(function (x) { return x.trim(); }), r.slice(i + 1)];
+  }).filter(Boolean);
+}
+
+test("youtube.css covers EasyList's three m.youtube.com selectors (by their subject element, any parent)", function () {
+  var yt = fakeWin('m.youtube.com');
+  var before = styles().length;
+  new Function('window', SRC)(yt);
+  var css = styles()[before].textContent;
+  var hidden = [];
+  cssRules(css).forEach(function (r) { if (/display\s*:\s*none\s*!important/.test(r[1])) hidden = hidden.concat(r[0]); });
+  [
+    'lazy-list > ad-slot-renderer',
+    'ytm-companion-slot[data-content-type] > ytm-companion-ad-renderer',
+    'ytm-rich-item-renderer > ad-slot-renderer'
+  ].forEach(function (sel) {
+    var subject = sel.split(/\s*>\s*|\s+/).pop();
+    assert.ok(hidden.indexOf(subject) !== -1, sel + ': bare ' + subject + ' hidden');
+  });
+});
+
 test('YouTube host: scriptlets prune JSON.parse, style added, Twitch hooks not installed', function () {
   var yt = fakeWin('www.youtube.com');
   var parse = yt.JSON.parse;
@@ -146,7 +184,10 @@ test('other hosts (example.com, notyoutube.com, clips.twitch.tv): nothing happen
 test('Twitch host: fetch and Worker hooked, namespace removed, no YouTube CSS, works without a bridge', function () {
   assert.equal(location.hostname, 'www.twitch.tv');
   var before = styles().length;
+  var parse = JSON.parse, RespJson = globalThis.Response && Response.prototype.json;
   new Function('window', SRC)(globalThis);
+  assert.ok(JSON.parse === parse, 'JSON.parse not hooked: the YouTube scriptlets never run on Twitch');
+  if (RespJson) assert.ok(Response.prototype.json === RespJson, 'Response.json not hooked');
   assert.ok(globalThis.fetch !== stubFetch, 'fetch hooked');
   assert.ok(globalThis.Worker !== env.OriginalWorker, 'Worker hooked');
   assert.equal(typeof globalThis.__TAS__, 'undefined', 'namespace removed from the page');

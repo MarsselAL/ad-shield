@@ -734,6 +734,92 @@ test('YouTube rules: fetch / XHR pruning applies to /youtubei/v1/player, not to 
   });
 });
 
+function ruleArgs(host, name) {
+  return R.pick(RULES, host).filter(function (s) { return s[0] === name; });
+}
+
+test('YouTube rules: a Shorts batch read with JSON.parse loses its isAd entries; JSON.parse stays a needle check plus key lookups', function () {
+  var win = fakeWin('m.youtube.com');
+  R.run(win, L, RULES, log);
+  var reels = win.JSON.parse(JSON.stringify(reelSequence()));
+  assert.deepEqual(reels.entries.map(function (e) { return e.command.reelWatchEndpoint.videoId; }), ['s1', 's2'], 'isAd:true removed, isAd:false stays');
+  var nested = win.JSON.parse(JSON.stringify({ deep: reelSequence() }));
+  assert.equal(nested.deep.entries.length, 3, 'only a top-level entries list (no deep walk on JSON.parse)');
+  var jp = ruleArgs('m.youtube.com', 'json-prune');
+  assert.equal(jp.length, 1);
+  jp[0][1].split(' ').forEach(function (p) { assert.ok(p.indexOf('..') !== 0, 'plain path: ' + p); });
+  var p = L.makePruner(jp[0][1]);
+  assert.notOk(p.mayMatch('{"videoDetails":{},"entries":[{"command":{}}]}'), 'no needle word: not walked');
+  assert.ok(p.mayMatch('{"entries":[{"isAd":true}]}'), 'isAd is a needle');
+});
+
+function resolveUrlBody() {
+  return JSON.stringify({ endpoint: { watchEndpoint: { videoId: 'jNQXAC9IVRw', unserializedPrefetchData: { playerResponse: player() } } } });
+}
+
+test('YouTube rules: resolve_url prefetch player (endpoint.watchEndpoint.unserializedPrefetchData.playerResponse) pruned, fetch and XHR', function () {
+  var url = '/youtubei/v1/navigation/resolve_url?prettyPrint=false';
+  var bodies = {};
+  bodies[url] = resolveUrlBody();
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, L, RULES, log);
+  function check(o, msg) {
+    assert.equal(o.endpoint.watchEndpoint.videoId, 'jNQXAC9IVRw', msg + ' endpoint kept');
+    assertPlayerClean(o.endpoint.watchEndpoint.unserializedPrefetchData.playerResponse, msg);
+  }
+  var x = new win.XMLHttpRequest();
+  x.open('POST', url);
+  x.send();
+  check(JSON.parse(x.responseText), 'XHR');
+  return win.fetch(url).then(function (r) { return r.json(); }).then(function (o) { check(o, 'fetch'); });
+});
+
+function getWatchBody() {
+  var items = [
+    { videoWithContextRenderer: { videoId: 'v1' } },
+    { adSlotRenderer: { adSlotMetadata: {} } },
+    { videoWithContextRenderer: { videoId: 'v2' } }
+  ];
+  return JSON.stringify([
+    { playerResponse: player() },
+    { response: { contents: { singleColumnWatchNextResults: { results: { results: { contents: [
+      { itemSectionRenderer: { contents: items } },
+      { slimVideoMetadataSectionRenderer: { contents: [{ adSlotRenderer: { keep: 'not an itemSectionRenderer list' } }] } }
+    ] } } } } } }
+  ]);
+}
+function watchNext(o) {
+  var c = o[1].response.contents.singleColumnWatchNextResults.results.results.contents;
+  return {
+    ids: c[0].itemSectionRenderer.contents.map(function (x) { return x.adSlotRenderer ? 'AD' : x.videoWithContextRenderer.videoId; }),
+    other: c[1].slimVideoMetadataSectionRenderer.contents.length
+  };
+}
+
+test('m.youtube.com get_watch: adSlotRenderer items leave itemSectionRenderer.contents (fetch); www and other endpoints untouched', function () {
+  var bodies = {
+    '/youtubei/v1/get_watch?prettyPrint=false': getWatchBody(),
+    '/youtubei/v1/next?prettyPrint=false': getWatchBody()
+  };
+  assert.equal(ruleArgs('www.youtube.com', 'json-prune-fetch-response').length, 1, 'www: only the shared fetch rule');
+  assert.equal(ruleArgs('m.youtube.com', 'json-prune-fetch-response').length, 2, 'm: plus the get_watch item rule');
+  var m = fakeWin('m.youtube.com', { bodies: bodies });
+  var www = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(m, L, RULES, log);
+  R.run(www, L, RULES, log);
+  return m.fetch('/youtubei/v1/get_watch?prettyPrint=false').then(function (r) { return r.json(); }).then(function (o) {
+    assertPlayerClean(o[0].playerResponse, 'm get_watch');
+    assert.deepEqual(watchNext(o), { ids: ['v1', 'v2'], other: 1 }, 'm get_watch: ad item gone, other lists kept');
+    return m.fetch('/youtubei/v1/next?prettyPrint=false');
+  }).then(function (r) { return r.json(); }).then(function (o) {
+    assert.deepEqual(watchNext(o).ids, ['v1', 'AD', 'v2'], 'm /next: not matched by the URL pattern');
+    return www.fetch('/youtubei/v1/get_watch?prettyPrint=false');
+  }).then(function (r) { return r.json(); }).then(function (o) {
+    assertPlayerClean(o[0].playerResponse, 'www get_watch');
+    assert.deepEqual(watchNext(o).ids, ['v1', 'AD', 'v2'], 'www get_watch: items left to youtube.css');
+  });
+});
+
 // ------------------------------------------------------------------ DOM scriptlets
 function fakeEl(tag, attrs, classes) {
   var el = { tagName: tag, attrs: Object.assign({}, attrs || {}), cls: (classes || []).slice() };

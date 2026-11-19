@@ -103,7 +103,7 @@ test('startup: enables the generated rulesets, registers CSS and page script, ba
     assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var sl = registered.filter(function (s) { return s.id === 'as-scriptlets'; })[0];
     assert.equal(sl.world, 'MAIN');
-    assert.deepEqual(sl.matches, ['*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*'], 'hosts from rules/scriptlets.json');
+    assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*'], 'hosts from rules/scriptlets.json (m. is redundant with *.youtube.com)');
     var css = registered.filter(function (s) { return s.id === 'as-css-ads'; })[0];
     assert.ok(css.excludeMatches.length >= SITE.genericExceptionHosts.length, 'exception hosts excluded from the generic CSS');
     assert.deepEqual(calls.actionOptions[0], { displayActionCountAsBadgeText: true });

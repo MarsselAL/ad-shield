@@ -4,7 +4,7 @@
   "rules": [
     {
       "id": "youtube",
-      "about": "Ad data removed before the player sees it, with as few hooks as possible (docs/DESIGN-v2.md, YouTube): the page-embedded player response and initial data (one-time setter traps; feed, search and Shorts ad items are pruned only here, later feed pages are left to rules/cosmetic/youtube.css), the player ad keys in every JSON.parse / Response.json (plain key lookups after an indexOf needle check), and the youtubei player, get_watch, playlist, resolve_url and Shorts sequence fetch / XHR responses (player keys and the Shorts isAd entries). Plus the 17 s \"fake buffering\" wait of flagged accounts (a native-code callback scheduled with setTimeout 17000) cut to 17 ms (research B section 1). No Promise.prototype.then or Function.prototype.toString hook and no ytcfg flag changes (uBO dropped onAbnormalityDetected and web_streaming_watch).",
+      "about": "Ad data removed before the player sees it, with as few hooks as possible (docs/DESIGN-v2.md, YouTube): the page-embedded player response and initial data (one-time setter traps; feed, search and Shorts ad items are pruned only here, later feed pages are left to rules/cosmetic/youtube.css), the player ad keys and a top-level Shorts entries list's isAd items in every JSON.parse / Response.json (plain key lookups after an indexOf needle check), and the youtubei player, get_watch, playlist, resolve_url and Shorts sequence fetch / XHR responses (player keys, also under resolve_url's endpoint.watchEndpoint.unserializedPrefetchData.playerResponse, and the Shorts isAd entries). Plus the 17 s \"fake buffering\" wait of flagged accounts (a native-code callback scheduled with setTimeout 17000) cut to 17 ms (research B section 1). No Promise.prototype.then or Function.prototype.toString hook and no ytcfg flag changes (uBO dropped onAbnormalityDetected and web_streaming_watch).",
       "hosts": [
         "youtube.com",
         "youtube-nocookie.com",
@@ -23,16 +23,16 @@
         ],
         [
           "json-prune",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"
         ],
         [
           "json-prune-fetch-response",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
           "/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
         ],
         [
           "json-prune-xhr-response",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
           "/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
         ],
         [
@@ -40,6 +40,20 @@
           "[native code]",
           "17000",
           "0.001"
+        ]
+      ]
+    },
+    {
+      "id": "youtube-mobile",
+      "about": "m.youtube.com only (as uBO and AdGuard): ad items (adSlotRenderer) removed from the itemSectionRenderer.contents lists of the youtubei get_watch fetch response, the watch page's list below the player. The body is parsed only when it contains the word adSlotRenderer.",
+      "hosts": [
+        "m.youtube.com"
+      ],
+      "scriptlets": [
+        [
+          "json-prune-fetch-response",
+          "..itemSectionRenderer.contents.[-].adSlotRenderer",
+          "/\\/youtubei\\/v1\\/get_watch(\\?|$)/"
         ]
       ]
     },
