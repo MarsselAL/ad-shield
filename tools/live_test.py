@@ -478,7 +478,7 @@ SET_ENABLED_JS = """
 MAIN_FILES = [
     "src/config.js", "src/shared/settings.js", "src/shared/logger.js", "src/shared/frame.js",
     "src/core/m3u8.js", "src/core/gql.js", "src/core/processor.js", "src/worker/worker-main.js",
-    "src/core/worker-source.js", "src/page/recovery.js", "src/page/page.js",
+    "src/core/worker-source.js", "src/page/health.js", "src/page/page.js",
 ]
 MAIN_BUNDLE = "build/main-world.js"
 
