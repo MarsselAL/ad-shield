@@ -73,3 +73,25 @@ EasyList DNR, cosmetic CSS, cookie banners, element picker, popup, options, list
   backup. That is the chosen trade-off.
 - Removing the onAbnormalityDetected and web_streaming_watch rules may bring back enforcement on
   some accounts; uBO dropped them without that happening, per research-v3.
+
+## Improvement pass (2026-11-19, evening)
+
+Sources: forum and issue-tracker scan of Sep 20 - Nov 19 2026 (Purple 2.7.x, TTV-AB changelog
+up to 27.0.1, uBO quick-fixes commits). Notes outside the repo, `research-2026-11-19-*.md`.
+
+Done:
+- Twitch: `twitch-maf-ad` DATERANGE alone is a client-side ad shown beside the stream (TTV-AB #98),
+  not a stitched ad: no backup search for it (`clientAdDaterangeClasses`).
+- Twitch: the first backup type's token and master are fetched when the live master arrives, and an ad
+  poll asks all backup types at once, serving the most preferred clean answer (Purple ec29b68 / d9cafb2).
+- YouTube: prune `endpoint.watchEndpoint.unserializedPrefetchData.playerResponse` ad keys in
+  resolve_url responses (uBO fed4e61, 2026-10-31).
+
+Rejected:
+- 360p "bridge" during prerolls (TTV-AB Low Quality Fallback): brings back the blur; its users report it
+  sticking at low quality (#102).
+- Buffer-gap seeks and blank ad segments: seeks and holes are what froze 1.1.x.
+- uBO's fake-buffering request tagging (JSON.stringify edit on /player) and SSAP seekTo: needs global
+  Promise.then / JSON.stringify hooks, the class of hook removed for the FPS dips. Revisit only if
+  fake buffering is reported.
+- YouTube embed (`serializedThirdPartyEmbedConfig`) edits and uBO's snackbar CSS (uBO itself disabled it).
