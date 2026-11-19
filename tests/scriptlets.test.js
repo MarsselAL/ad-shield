@@ -734,6 +734,56 @@ test('YouTube rules: fetch / XHR pruning applies to /youtubei/v1/player, not to 
   });
 });
 
+function resolveUrlResponse() {
+  return {
+    responseContext: { visitorData: 'v' },
+    endpoint: {
+      commandMetadata: { webCommandMetadata: { url: '/watch?v=jNQXAC9IVRw' } },
+      watchEndpoint: { videoId: 'jNQXAC9IVRw', unserializedPrefetchData: { playerResponse: player() } }
+    }
+  };
+}
+function assertResolveUrlClean(o, msg) {
+  assert.equal(o.responseContext.visitorData, 'v', msg + ' responseContext kept');
+  assert.equal(o.endpoint.commandMetadata.webCommandMetadata.url, '/watch?v=jNQXAC9IVRw', msg + ' commandMetadata kept');
+  assert.equal(o.endpoint.watchEndpoint.videoId, 'jNQXAC9IVRw', msg + ' watchEndpoint kept');
+  assertPlayerClean(o.endpoint.watchEndpoint.unserializedPrefetchData.playerResponse, msg + ' prefetch playerResponse');
+}
+
+test('YouTube rules: navigation/resolve_url prefetch playerResponse loses playerAds / adPlacements / adSlots (fetch and XHR)', function () {
+  var body = JSON.stringify(resolveUrlResponse());
+  var url = '/youtubei/v1/navigation/resolve_url?prettyPrint=false';
+  var bodies = {};
+  bodies[url] = body;
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, L, RULES, log);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', url);
+  x.send();
+  assertResolveUrlClean(JSON.parse(x.responseText), 'XHR');
+  return win.fetch(url).then(function (r) { return r.json(); }).then(function (o) {
+    assertResolveUrlClean(o, 'fetch');
+  });
+});
+
+test('YouTube rules: /youtubei/v1/player_xyz and /youtubei/v1/playerX are not matched by the player URL pattern', function () {
+  var c = countingLib();
+  var bodies = { '/youtubei/v1/player_xyz?prettyPrint=false': PLAYER, '/youtubei/v1/playerX': PLAYER };
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, c.lib, RULES, log);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/player_xyz?prettyPrint=false');
+  x.send();
+  assert.equal(x.responseText, PLAYER, 'XHR /player_xyz untouched');
+  assert.equal(c.parses, 0, 'XHR /player_xyz body not parsed');
+  return ['player_xyz?prettyPrint=false', 'playerX'].reduce(function (p, ep) {
+    return p.then(function () { return win.fetch('/youtubei/v1/' + ep); }).then(function (r) {
+      assert.equal(r.headers.get('content-length'), '999', ep + ': the original response');
+      assert.equal(c.parses, 0, ep + ': body not read or parsed');
+    });
+  }, Promise.resolve());
+});
+
 // ------------------------------------------------------------------ DOM scriptlets
 function fakeEl(tag, attrs, classes) {
   var el = { tagName: tag, attrs: Object.assign({}, attrs || {}), cls: (classes || []).slice() };
