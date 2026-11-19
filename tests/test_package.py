@@ -60,10 +60,40 @@ class Package(unittest.TestCase):
 
     def test_install_text_is_the_repo_copy_and_covers_the_steps(self):
         with open(os.path.join(ROOT, "docs", "INSTALL.txt"), encoding="utf-8") as fh:
-            self.assertEqual(self.install, fh.read())
+            repo = fh.read()
+        tip = package._build_module().donate_url()
+        self.assertEqual(self.install, repo.rstrip("\n") + "\n\nLike Ad Shield? An optional tip: " + tip + "\n" if tip else repo)
         for words in ("chrome://extensions", "edge://extensions", "brave://extensions", "Developer mode", "Load unpacked",
                       "macOS", "Windows", "permanent", "reload", "pin", "Settings", "week", "Remove", "Disable"):
             self.assertIn(words, self.install, words)
+
+
+class Donate(unittest.TestCase):
+    """docs/donate.txt: optional; only one plain https link is ever accepted."""
+
+    def check(self, text):
+        d = tempfile.mkdtemp(prefix="adshield-test-donate-")
+        try:
+            os.makedirs(os.path.join(d, "docs"))
+            if text is not None:
+                with open(os.path.join(d, "docs", "donate.txt"), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            return package._build_module().donate_url(d)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_missing_or_empty_means_no_tip(self):
+        self.assertEqual(self.check(None), "")
+        self.assertEqual(self.check("# put your link here\n\n"), "")
+
+    def test_https_link_accepted(self):
+        self.assertEqual(self.check("# tip\nhttps://revolut.me/someone\n"), "https://revolut.me/someone")
+
+    def test_anything_else_rejected(self):
+        for bad in ("http://revolut.me/x", "GB29 NWBK 6016 1331 9268 19", "https://a.b/x y",
+                    "https://a.b/<script>", "https://a.b/1\nhttps://c.d/2", "javascript:alert(1)"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.check(bad)
 
 
 if __name__ == "__main__":
