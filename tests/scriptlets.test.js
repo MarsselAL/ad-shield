@@ -346,6 +346,18 @@ test('makePruner.mayMatch: true only when the text has the last word of some pat
   assert.ok(L.makePruner('[-].[]').mayMatch('{"x":1}'), 'a path with no key in it: every text is a candidate');
 });
 
+test('makePruner(obj, text): a deep path walks only when its own needle is in the text', function () {
+  var p = L.makePruner('adPlacements ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd');
+  var touches = [];
+  var inner = watched({ entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] }, touches);
+  var o = { adPlacements: [1], deep: inner };
+  assert.equal(p(o, '{"adPlacements":[1]}'), 1, 'plain key removed');
+  assert.deepEqual(touches, [], 'no isAd in the text: the deep path never walked');
+  var o2 = { adPlacements: [1], deep: { entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] } };
+  assert.equal(p(o2, '{"adPlacements":[1],"isAd":true}'), 2, 'needle present: walked');
+  assert.equal(p({ deep: { entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] } }), 1, 'no text: every path, as before');
+});
+
 test('json-prune: JSON.parse of a needle-free string is not walked; with a needle it is pruned as before', function () {
   var win = fakeWin();
   var touches = [];
@@ -449,7 +461,8 @@ test('prevent-setTimeout: needle and delay', function () {
 });
 
 test('adjust-setTimeout: matching source and delay shortened; others untouched; looks native', function () {
-  var FP = { toString: Function.prototype.toString };
+  var nativeTs = Function.prototype.toString;
+  var FP = { toString: nativeTs };
   var win = fakeWin('www.youtube.com');
   win.Function = { prototype: FP };
   var base = win.setTimeout;
@@ -465,7 +478,9 @@ test('adjust-setTimeout: matching source and delay shortened; others untouched; 
   assert.equal(win.timers[2].ms, 17000, 'non-matching source untouched');
   win.setTimeout('x()', 17000);
   assert.equal(win.timers[3].ms, 17000, 'string callback that does not match');
-  assert.equal(FP.toString.call(win.setTimeout), FP.toString.call(base), 'toString shows the original');
+  assert.equal(win.setTimeout.toString(), nativeTs.call(base), 'own toString shows the original');
+  assert.equal(String(win.setTimeout), nativeTs.call(base), 'String() too');
+  assert.ok(FP.toString === nativeTs, "the realm's Function.prototype.toString is not patched");
   assert.equal(win.setTimeout.name, base.name);
   // any delay, default factor 0.05, string callback, clamping
   var w2 = fakeWin('x.com');
@@ -484,6 +499,38 @@ test('adjust-setTimeout: matching source and delay shortened; others untouched; 
   run(w4, 'adjust-setTimeout', ['x', 'abc']);
   assert.ok(w4.setTimeout === b4, 'bad delay: not wrapped');
   assert.notOk(L.scriptlets['adjust-setTimeout'].frames, 'not re-applied to child frames');
+});
+
+/** A second copy of lib.js whose captured Function.prototype.toString counts its calls. */
+function toStringCountingLib() {
+  var FPT = Function.prototype, orig = FPT.toString, c = { calls: 0 };
+  FPT.toString = function toString() { c.calls++; return orig.call(this); };
+  try { load('src/scriptlets/lib.js'); c.lib = asScriptlets; } finally { FPT.toString = orig; asScriptlets = L; }
+  return c;
+}
+
+test('adjust-setTimeout: other delays never read the callback source (no toString of any kind)', function () {
+  var c = toStringCountingLib();
+  var win = fakeWin('www.youtube.com');
+  c.lib.scriptlets['adjust-setTimeout'](win, ['[native code]', '17000', '0.001'], log);
+  var own = 0;
+  var cb = function () {};
+  cb.toString = function () { own++; return 'function () { [native code] }'; };
+  var objCb = { toString: function () { own++; return '[native code]'; } };
+  var bound = function () {}.bind(null);
+  [0, 16999, 17001, 5000, undefined].forEach(function (ms) {
+    win.setTimeout(cb, ms);
+    win.setTimeout(objCb, ms);
+    win.setTimeout(bound, ms);
+  });
+  assert.equal(c.calls, 0, 'Function.prototype.toString not called for other delays');
+  assert.equal(own, 0, "the callback's own toString not called");
+  assert.ok(win.timers.every(function (t) { return t.ms !== 17; }), 'nothing shortened');
+  win.setTimeout(bound, 17000);
+  assert.equal(win.timers[win.timers.length - 1].ms, 17, '17000 native: shortened');
+  assert.equal(c.calls, 1, 'source read once, only for the matching delay');
+  win.setTimeout(function () { return 'page'; }, 17000);
+  assert.equal(win.timers[win.timers.length - 1].ms, 17000, '17000 page code: untouched');
 });
 
 test('rules: adjust-setTimeout for the 17 s fake-buffering delay on youtube.com', function () {
@@ -509,18 +556,29 @@ test('prevent-promise-then-callback: the onAbnormalityDetected callback becomes 
 });
 
 // ------------------------------------------------------------------ native look and frames
-test('wrapped functions keep name / length and look native through the patched toString', function () {
-  var FP = { toString: Function.prototype.toString };
+test('wrapped functions keep name / length and get a non-enumerable own toString; Function.prototype.toString untouched', function () {
+  var nativeTs = Function.prototype.toString;
+  var FP = { toString: nativeTs };
   var win = fakeWin();
   win.Function = { prototype: FP };
   var orig = win.JSON.parse;
+  var src = nativeTs.call(orig);
   run(win, 'json-prune', ['adPlacements']);
+  run(win, 'json-prune', ['adSlots']); // wrapped twice: still the first original's source
   assert.ok(win.JSON.parse !== orig);
   assert.equal(win.JSON.parse.name, 'parse');
   assert.equal(win.JSON.parse.length, 2);
-  assert.equal(FP.toString.call(win.JSON.parse), Function.prototype.toString.call(orig));
-  assert.includes(FP.toString.call(FP.toString), '[native code]', 'the toString patch hides itself');
-  assert.throws(function () { FP.toString.call(5); }, 'non-functions still throw');
+  assert.equal(win.JSON.parse.toString(), src);
+  assert.equal(win.JSON.parse + '', src);
+  var d = Object.getOwnPropertyDescriptor(win.JSON.parse, 'toString');
+  assert.ok(d && d.enumerable === false, 'own, non-enumerable');
+  assert.deepEqual(Object.keys(win.JSON.parse), [], 'nothing enumerable added');
+  assert.includes(win.JSON.parse.toString.toString(), '[native code]', 'the own toString looks native itself');
+  assert.ok(FP.toString === nativeTs, 'no realm-wide toString patch');
+  assert.ok(Function.prototype.toString === nativeTs, 'global Function.prototype.toString untouched');
+  var parsed = win.JSON.parse(PLAYER);
+  assert.equal(parsed.adPlacements, undefined, 'still prunes');
+  assert.equal(parsed.adSlots, undefined, 'second wrapper too');
 });
 
 test('runner: frame scriptlets reach a same-origin about:blank child through contentWindow', function () {
@@ -577,7 +635,7 @@ test('rules/scriptlets.json: every scriptlet exists, hosts are plain domains', f
   });
 });
 
-test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts, ytcfg flag, abnormality reporter', function () {
+test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts; no ytcfg flag, no abnormality hook', function () {
   var bodies = {
     '/youtubei/v1/player?prettyPrint=false': PLAYER,
     '/youtubei/v1/browse?prettyPrint=false': JSON.stringify(feed()),
@@ -592,27 +650,87 @@ test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts,
   win.ytInitialData = feed();
   assert.deepEqual(feedIds(win.ytInitialData), ['a', 'b', 'more', 'c'], 'ytInitialData');
   assertPlayerClean(win.JSON.parse(PLAYER), 'JSON.parse');
+  assert.deepEqual(feedIds(win.JSON.parse(JSON.stringify(feed()))), ['a', 'AD', 'b', 'more', 'AD', 'c'], 'JSON.parse: feed items no longer pruned (youtube.css hides them)');
   win.ytcfg = { data_: {} };
   win.ytcfg.data_.EXPERIMENT_FLAGS = { web_streaming_watch: true };
-  assert.equal(win.ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch, false);
+  assert.equal(win.ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch, true, 'web_streaming_watch left alone');
   var x = new win.XMLHttpRequest();
   x.open('POST', '/youtubei/v1/player?prettyPrint=false');
   x.send();
   assertPlayerClean(JSON.parse(x.responseText), 'XHR');
   var hits = [];
-  win.Promise.resolve().then(function () { hits.push('a'); this.onAbnormalityDetected(); });
+  win.Promise.resolve().then(function onAbnormalityDetected() { hits.push('a'); });
   return win.fetch('/youtubei/v1/player?prettyPrint=false').then(function (r) { return r.text(); }).then(function (t) {
     assertPlayerClean(JSON.parse(t), 'fetch /player');
     return win.fetch('/youtubei/v1/browse?prettyPrint=false');
   }).then(function (r) { return r.text(); }).then(function (t) {
-    assert.deepEqual(feedIds(JSON.parse(t)), ['a', 'b', 'more', 'c'], 'fetch /browse');
+    assert.deepEqual(feedIds(JSON.parse(t)), ['a', 'AD', 'b', 'more', 'AD', 'c'], 'fetch /browse not pruned');
     return win.fetch('/youtubei/v1/reel/reel_watch_sequence?x=1');
   }).then(function (r) { return r.json(); }).then(function (o) {
     assert.equal(o.entries.length, 2, 'Shorts ad entry removed');
     return win.fetch('/youtubei/v1/player/heartbeat');
   }).then(function (r) {
     assert.equal(r.headers.get('content-length'), '999', 'heartbeat not matched by the URL pattern');
-    assert.deepEqual(hits, []);
+    assert.deepEqual(hits, ['a'], 'then() callbacks run as written');
+  });
+});
+
+test('YouTube rules: no Promise.prototype.then and no Function.prototype.toString patch', function () {
+  var nativeTs = Function.prototype.toString, nativeThen = Promise.prototype.then;
+  var FP = { toString: nativeTs };
+  var win = fakeWin('www.youtube.com');
+  win.Function = { prototype: FP };
+  var thenBefore = win.Promise.prototype.then;
+  var ran = R.run(win, L, RULES, log);
+  assert.equal(ran.indexOf('prevent-promise-then-callback'), -1, ran.join());
+  assert.equal(ran.indexOf('set-constant'), -1, ran.join());
+  assert.notOk(Object.prototype.hasOwnProperty.call(win.Promise.prototype, 'then'), 'no then on the page Promise');
+  assert.ok(win.Promise.prototype.then === thenBefore && thenBefore === nativeThen, 'then untouched');
+  assert.ok(FP.toString === nativeTs, "the page realm's Function.prototype.toString untouched");
+  assert.ok(Function.prototype.toString === nativeTs && Promise.prototype.then === nativeThen, 'globals untouched');
+  var names = R.pick(RULES, 'www.youtube.com').map(function (s) { return s.join(' '); });
+  names.forEach(function (n) {
+    assert.notIncludes(n, 'onAbnormalityDetected');
+    assert.notIncludes(n, 'web_streaming_watch');
+    assert.notIncludes(n, 'responseContext');
+  });
+  assert.equal(R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'json-prune'; }).length, 1, 'only the player-keys json-prune');
+});
+
+test('YouTube rules: fetch / XHR pruning applies to /youtubei/v1/player, not to /youtubei/v1/browse', function () {
+  var c = countingLib();
+  var bodies = {
+    '/youtubei/v1/player?prettyPrint=false': PLAYER,
+    '/youtubei/v1/browse?prettyPrint=false': PLAYER,
+    '/youtubei/v1/next?prettyPrint=false': PLAYER,
+    '/youtubei/v1/search?prettyPrint=false': PLAYER,
+    '/youtubei/v1/get_watch?prettyPrint=false': PLAYER,
+    '/youtubei/v1/navigation/resolve_url?prettyPrint=false': PLAYER
+  };
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, c.lib, RULES, log);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/browse?prettyPrint=false');
+  x.send();
+  assert.equal(x.responseText, PLAYER, 'XHR /browse untouched');
+  assert.equal(c.parses, 0, 'XHR /browse body not parsed');
+  x.open('POST', '/youtubei/v1/player?prettyPrint=false');
+  x.send();
+  assertPlayerClean(JSON.parse(x.responseText), 'XHR /player');
+  var parses = c.parses;
+  var unpruned = ['browse', 'next', 'search'];
+  return unpruned.reduce(function (p, ep) {
+    return p.then(function () { return win.fetch('/youtubei/v1/' + ep + '?prettyPrint=false'); }).then(function (r) {
+      assert.equal(r.headers.get('content-length'), '999', ep + ': the original response');
+      assert.equal(c.parses, parses, ep + ': body not read or parsed');
+    });
+  }, Promise.resolve()).then(function () {
+    return ['player', 'get_watch', 'navigation/resolve_url'].reduce(function (p, ep) {
+      return p.then(function () { return win.fetch('/youtubei/v1/' + ep + '?prettyPrint=false'); }).then(function (r) {
+        assert.equal(r.headers.get('content-length'), null, ep + ': pruned copy');
+        return r.text();
+      }).then(function (t) { assertPlayerClean(JSON.parse(t), ep); });
+    }, Promise.resolve());
   });
 });
 

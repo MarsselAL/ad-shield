@@ -82,8 +82,10 @@ AdGuard code (GPL).
   `youtube-enforcement-dismiss`. Each is `fn(win, args, log)` and only touches `win.X`, so tests
   use fake windows and child frames can be patched too. Argument syntax (paths with `[]`, `[-]`,
   leading `..`; URL / needle as substring or `/regex/`) is documented at the top of the file.
-  Patched functions are Proxies of the originals (name and length kept) and the
-  realm's `Function.prototype.toString` returns the original source for them. Every hook catches
+  Patched functions are Proxies of the originals (name and length kept) with a non-enumerable
+  own `toString` (a bound `Function.prototype.toString` of the original), so `fn.toString()` and
+  `String(fn)` show the original source; `Function.prototype.toString` itself is not hooked
+  (2.0: a realm-wide proxy cost every `toString` call). Every hook catches
   its own errors and falls back to the original behaviour; the fetch / XHR pruning returns the
   original response when nothing was removed or the body is not JSON, and otherwise a new
   `Response` with the original status, status text, headers (minus `content-length`), `url`,
@@ -105,16 +107,19 @@ AdGuard code (GPL).
   sites pay nothing. On while the master switch, Ads and "Fix YouTube ads and anti-adblock walls
   (page scripts)" (`blocking.scriptlets`, default on) are on; allowlisted sites are excluded.
   Shipped in the package only, never downloaded, no telemetry.
-- **Cost on YouTube**: one ~35 KB script per frame at document_start. Every pruner first looks
-  for its needle words (the last key of each path: `adPlacements`, `adSlots`, `playerAds`,
-  `adSlotRenderer`, `searchPyvRenderer`, `isAd`) in the JSON text with a plain `indexOf`; a text
-  without any is not pruned at all (`JSON.parse` returns the native result; a matching youtubei
-  fetch / XHR body is not parsed, and the fetch `Response` comes back as the same object).
-  Otherwise `JSON.parse` / `Response.json` check a few top-level keys per call; the deep feed
-  paths walk an object only when it has `responseContext` (YouTube API responses, ~1 ms per
-  response). Matching youtubei responses with a needle are additionally parsed and re-serialised
-  once, and `Response.json` of such an already pruned copy is not pruned again. `Promise.prototype.then` checks each
-  callback's source once (cached per function). `youtube-ad-skip`: two capture listeners
+- **Cost on YouTube** (2.0, docs/DESIGN-v2.md: fewer, cheaper hooks against short FPS dips):
+  one ~35 KB script per frame at document_start. No hook on `Promise.prototype.then` or
+  `Function.prototype.toString`. Every pruner first looks for its needle words (the last key of
+  each path: `adPlacements`, `adSlots`, `playerAds`, `isAd`) in the JSON text with a plain
+  `indexOf`; a text without any is not pruned at all (`JSON.parse` returns the native result,
+  primitives are returned before any check; a matching youtubei fetch / XHR body is not parsed,
+  and the fetch `Response` comes back as the same object). Otherwise `JSON.parse` /
+  `Response.json` check a few top-level keys per call (no deep walk: the feed `json-prune` is
+  gone). A deep (`..`) path walks a parsed body only when its own needle is in the text (the
+  Shorts `isAd` path in the fetch / XHR pruners). Only the youtubei player, get_watch, playlist,
+  resolve_url and Shorts sequence responses are read at all (not next / browse / search, the
+  large feed bodies); matching ones with a needle are parsed and re-serialised once, and
+  `Response.json` of such an already pruned copy is not pruned again. `youtube-ad-skip`: two capture listeners
   (`loadedmetadata`, `playing`) and one MutationObserver per player on its `class` attribute; no
   timers, no polling. `youtube-enforcement-dismiss`: two capture listeners (`animationstart`,
   `pause`) and a wrapper around `navigator.mediaSession.setActionHandler`; a `pause` costs one
@@ -127,15 +132,17 @@ The YouTube rules (research-v2 B recipe 1-7 and 11):
 | Scriptlet | What |
 |---|---|
 | `prune-on-assign ytInitialPlayerResponse` | setter trap: the page-embedded player response loses `adPlacements`, `adSlots`, `playerAds` |
-| `prune-on-assign ytInitialData` | feed / search / watch-next / Shorts ad items removed from the initial data |
-| `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys |
-| `json-prune` (feed keys, requires `responseContext`) | `..contents.[-]...adSlotRenderer`, `..continuationItems.[-]...`, `..results.[-].adSlotRenderer`, `..contents.[-].searchPyvRenderer`, `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` |
-| `json-prune-fetch-response`, `json-prune-xhr-response` | both key sets, for `/youtubei/v1/(player\|get_watch\|next\|browse\|search\|reel/reel_watch_sequence\|reel/reel_item_watch)` |
-| `prevent-promise-then-callback onAbnormalityDetected` | the player's anti-adblock reporter callback becomes a no-op |
-| `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false` | avoids the muted-playback side effect AdGuard reports |
+| `prune-on-assign ytInitialData` | feed / search / watch-next / Shorts ad items removed from the initial data (one-time; the only feed pruning: later feed pages are left to `youtube.css`) |
+| `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys, after the needle check |
+| `json-prune-fetch-response`, `json-prune-xhr-response` | player keys plus `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` (Shorts), for `/youtubei/v1/(player\|get_watch\|playlist\|(navigation/)?resolve_url\|reel/reel_watch_sequence\|reel/reel_item_watch)` (uBO's URL set) |
 | `adjust-setTimeout [native code] 17000 0.001` | the 17 s "fake buffering" wait of flagged accounts (research-v2 B section 1): a `setTimeout` with delay exactly 17000 and a native-code callback (e.g. a bound function) runs after 17 ms. Generic arguments: needle (source substring or `/regex/`), delay (`''` = any), factor (clamped to 0.001-50, default 0.05). Not re-applied to child frames |
 | `youtube-ad-skip` (youtube.com) | `.html5-video-player.ad-showing`: mute, seek the ad to its end, click Skip; unmute after. At most one seek per ad (per video `src` + duration, forgotten when `ad-showing` clears): the class observer also fires on `ytp-autohide` etc., and repeated seeks into the MSE stream stalled playback (1.1.5). No seek when the ad is longer than 90 s (a stitched stream whose end is the end of the video; Skip is still clicked) or in the content stream (same `src` as the content, or `getStatsForNerds().debug_info` starts with `SSAP`, asked only right before a seek): seeking there would skip the video |
 | `youtube-enforcement-dismiss` (youtube.com) | The anti-adblock dialog (`ytd-enforcement-message-view-model` in a modal `tp-yt-paper-dialog`, research-v2 B.3) is closed, not hidden: hiding it with CSS (up to 1.1.0) left its scroll lock, backdrop and forced pauses in place. Detected by `animationstart` of a 1 ms animation `as-yt-enf` that `youtube.css` gives the element, or on a player `pause`. Calls the dialog's `close()` (else removes it), closes an opened `tp-yt-iron-overlay-backdrop`, clears `overflow:hidden` on html / body and `no-scroll` on html / body / `ytd-app`. While the dialog is open, or within 3 s after it was last found open (and closed), a player video that pauses without user activation (`navigator.userActivation.isActive` false; no resume if the API is missing), not ended, not `seeking`, with `readyState` >= 3 and no ad showing, is resumed with `play()`, at most 3 times per 10 s. Other pauses are the player's own (source / quality switches, ad -> content, seeks): up to 1.1.4 they were resumed for the rest of the page once a dialog had been seen, which put audio and video out of sync. Not resumed within 1.5 s of a `navigator.mediaSession` action handler call (`pause`, `play`, `stop`, `seekto`, `previoustrack`, `nexttrack`: media keys, headphones, picture-in-picture), so those pauses stay the viewer's; `setActionHandler` is wrapped on the `MediaSession` prototype and keeps its native look |
+
+Removed in 2.0 (docs/DESIGN-v2.md; uBO commented both out): `prevent-promise-then-callback
+onAbnormalityDetected` (a Proxy on every `Promise.prototype.then`; the scriptlet stays in the
+library, unused), `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false`, and the
+`JSON.parse` feed `json-prune` (`responseContext`) that walked every large API response.
 
 Not done (research-v2 B): client-variant rotation against "fake buffering" (phase 3), text
 renaming of ad keys in unparsable bodies, `muteOnStart` / `youThereRenderer` removal, generic

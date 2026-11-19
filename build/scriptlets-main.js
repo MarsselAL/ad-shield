@@ -47,27 +47,19 @@ var asScriptlets = (function () {
   function fnSource(fn) { try { return fnToString.call(fn); } catch (e) { return ''; } }
 
   // ------------------------------------------------------------------ native look
-  // Our wrappers are Proxies of the original function (so name, length and prototype stay), and
-  // Function.prototype.toString of each patched realm returns the original's source for them.
-  var originals = new WeakMap();
-  var toStringDone = new WeakSet();
+  // Our wrappers are Proxies of the original function (so name, length and prototype stay). Each
+  // gets a non-enumerable own toString, a bound Function.prototype.toString of the original:
+  // fn.toString() / String(fn) show the original source and the toString itself looks native.
+  // Nothing realm-wide (no Function.prototype.toString hook: that cost every toString call).
+  var originals = new WeakMap(); // our wrapper -> the function it replaced (first original)
 
-  function nativeToString(win) {
+  function lookNative(proxy, target) {
     try {
-      var FP = win && win.Function && win.Function.prototype;
-      if (!FP || toStringDone.has(FP)) return;
-      toStringDone.add(FP);
-      var ts = FP.toString;
-      if (typeof ts !== 'function') return;
-      var p = new Proxy(ts, {
-        apply: function (t, self, a) {
-          var o = isTrappable(self) ? originals.get(self) : undefined;
-          return reflectApply(t, o !== undefined ? o : self, a);
-        }
-      });
-      originals.set(p, ts);
-      defineProperty(FP, 'toString', { value: p, writable: true, enumerable: false, configurable: true });
-    } catch (e) { /* leave toString alone */ }
+      var orig = originals.get(target) || target;
+      originals.set(proxy, orig);
+      // No defineProperty trap: this lands on the target, which only our proxy still exposes.
+      defineProperty(proxy, 'toString', { value: fnToString.bind(orig), writable: true, enumerable: false, configurable: true });
+    } catch (e) { /* frozen target: keep the default toString */ }
   }
 
   /** Replace the function owner[key] by a Proxy with the given apply trap. True on success. */
@@ -79,8 +71,7 @@ var asScriptlets = (function () {
       if (typeof target !== 'function') return false;
       if (desc && !desc.writable && !desc.configurable) return false;
       var proxy = new Proxy(target, { apply: trap });
-      originals.set(proxy, target);
-      nativeToString(win);
+      lookNative(proxy, target);
       if (desc) {
         defineProperty(owner, key, { value: proxy, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
       } else {
@@ -292,15 +283,19 @@ var asScriptlets = (function () {
   function isBracket(seg) { return seg === '[]' || seg === '[-]'; }
 
   /**
-   * The words a JSON text must contain for the paths to remove anything: the last non-bracket
-   * segment of each path (every key of a path must be present for a removal). null when some path
-   * is brackets only (no word to look for: every text is a candidate).
+   * The word a JSON text must contain for a path to remove anything: its last non-bracket segment
+   * (every key of a path must be present for a removal). '' when the path is brackets only.
    */
+  function needleOf(segs) {
+    for (var j = segs.length - 1; j >= 0; j--) if (!isBracket(segs[j])) return segs[j];
+    return '';
+  }
+
+  /** All needle words of the paths; null when some path has none (every text is a candidate). */
   function needlesOf(paths) {
     var all = paths.plain.concat(paths.deep), out = [];
     for (var i = 0; i < all.length; i++) {
-      var segs = all[i], word = '';
-      for (var j = segs.length - 1; j >= 0 && !word; j--) if (!isBracket(segs[j])) word = segs[j];
+      var word = needleOf(all[i]);
       if (!word) return null;
       if (out.indexOf(word) === -1) out.push(word);
     }
@@ -308,8 +303,10 @@ var asScriptlets = (function () {
   }
 
   /**
-   * pruner(obj) -> number of things removed. required: paths that must all be present in obj,
-   * otherwise nothing is pruned (e.g. "responseContext" for YouTube API responses only).
+   * pruner(obj, text) -> number of things removed. required: paths that must all be present in
+   * obj, otherwise nothing is pruned. text (optional): the JSON text obj was parsed from; a deep
+   * (..) path then walks obj only when its own needle word is in the text (plain paths are a few
+   * key lookups and always run).
    * pruner.mayMatch(text): cheap pre-check on a JSON text (plain indexOf of the needle words);
    * false means pruning its parsed value would remove nothing, so callers skip the parse / walk.
    * (Keys written with \u escapes in the text would be missed; YouTube does not write them.)
@@ -317,13 +314,25 @@ var asScriptlets = (function () {
   function makePruner(props, required) {
     var paths = compilePaths(props), req = compilePaths(required);
     var needles = needlesOf(paths);
-    var fn = function (obj) {
+    var deepNeedles = paths.deep.map(needleOf);
+    function deepFor(text) {
+      if (typeof text !== 'string') return paths.deep;
+      var out = [];
+      for (var d = 0; d < paths.deep.length; d++) {
+        if (!deepNeedles[d] || text.indexOf(deepNeedles[d]) !== -1) out.push(paths.deep[d]);
+      }
+      return out;
+    }
+    var fn = function (obj, text) {
       if (!isObj(obj)) return 0;
       try {
         for (var r = 0; r < req.plain.length; r++) if (!has(obj, req.plain[r], 0)) return 0;
         var n = 0;
         for (var i = 0; i < paths.plain.length; i++) n += remove(obj, paths.plain[i], 0);
-        if (paths.deep.length) n += walk(obj, paths.deep);
+        if (paths.deep.length) {
+          var deep = deepFor(text);
+          if (deep.length) n += walk(obj, deep);
+        }
         return n;
       } catch (e) {
         return 0;
@@ -351,9 +360,11 @@ var asScriptlets = (function () {
     if (prune.empty) return;
     wrap(win, win.JSON, 'parse', function (t, self, a) {
       var r = reflectApply(t, self, a);
+      if (!isObj(r)) return r;
       // No needle in the text (and no reviver that could add keys): nothing to remove, no walk.
-      if (typeof a[0] === 'string' && typeof a[1] !== 'function' && !prune.mayMatch(a[0])) return r;
-      if (isObj(r) && prune(r)) log('json-prune', 'JSON.parse');
+      var text = typeof a[0] === 'string' && typeof a[1] !== 'function' ? a[0] : undefined;
+      if (text !== undefined && !prune.mayMatch(text)) return r;
+      if (prune(r, text)) log('json-prune', 'JSON.parse');
       return r;
     });
     var RP = typeof win.Response === 'function' ? win.Response.prototype : null;
@@ -383,7 +394,7 @@ var asScriptlets = (function () {
         if (!prune.mayMatch(text)) return resp;
         var obj;
         try { obj = nativeParse(text); } catch (e) { return resp; }
-        if (!isObj(obj) || !prune(obj)) return resp;
+        if (!isObj(obj) || !prune(obj, text)) return resp;
         var out = new win.Response(nativeStringify(obj), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
         try { out.headers.delete('content-length'); } catch (e) { /* immutable */ }
         ['url', 'redirected', 'type'].forEach(function (k) {
@@ -444,7 +455,7 @@ var asScriptlets = (function () {
         if (typeof raw === 'string') {
           if (raw && prune.mayMatch(raw)) {
             var o = nativeParse(raw);
-            if (isObj(o) && prune(o)) { out = nativeStringify(o); log('json-prune-xhr-response', 'responseText'); }
+            if (isObj(o) && prune(o, raw)) { out = nativeStringify(o); log('json-prune-xhr-response', 'responseText'); }
           }
         } else if (isObj(raw) && xhr.responseType === 'json') {
           if (prune(raw)) log('json-prune-xhr-response', 'response');
@@ -545,6 +556,7 @@ var asScriptlets = (function () {
     factor = Math.min(50, Math.max(0.001, factor));
     wrap(win, win, 'setTimeout', function (t, self, a) {
       try {
+        // The delay first: the callback's source is read only for a matching delay.
         var d = Number(a[1] || 0);
         if (delay === null || d === delay) {
           var fn = a[0];
@@ -560,7 +572,11 @@ var asScriptlets = (function () {
     });
   }
 
-  /** prevent-promise-then-callback(needle): then() callbacks whose source matches become no-ops. */
+  /**
+   * prevent-promise-then-callback(needle): then() callbacks whose source matches become no-ops.
+   * Kept in the library but used by no rule since 2.0: a hook on every Promise.prototype.then
+   * call costs frames on YouTube.
+   */
   function preventPromiseThen(win, args, log) {
     if (!args[0]) return;
     var match = makeMatcher(args[0]);
@@ -925,8 +941,7 @@ var asScriptlets = (function () {
             return r;
           }
         });
-        originals.set(getter, desc.get);
-        nativeToString(win);
+        lookNative(getter, desc.get);
         defineProperty(IFP, prop, { get: getter, set: desc.set, enumerable: desc.enumerable, configurable: true });
       });
     } catch (e) { /* frames stay unpatched */ }
@@ -1042,6 +1057,6 @@ var asScriptletRunner = (function () {
 
 
 try {
-  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"],["json-prune","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","responseContext"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["prevent-promise-then-callback","onAbnormalityDetected"],["set-constant","ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch","false"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
+  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
 } catch (e) { /* never break the page */ }
 })();
