@@ -14,6 +14,9 @@ It runs in Safari on iPhone and iPad through **Userscripts**, a free, open-sourc
    - **Files**: save `ad-shield.user.js` (from AirDrop, Messages, iCloud Drive and so on) into the
      **Userscripts** folder in the Files app. Open the Userscripts app once to see or change
      which folder it uses.
+     Use **Save to Files**, never **Print** or **PDF**: the file must stay named exactly
+     `ad-shield.user.js`. A PDF copy, or a name that ends in `.txt`, is ignored, and the
+     Userscripts popup then says "No matched userscripts".
    - **Safari**: open a link to the `.user.js` file, tap the puzzle-piece (extensions) button,
      choose Userscripts, then choose to install the script.
 4. Reload YouTube or Twitch in Safari. In Safari's extensions menu, Userscripts should show
@@ -27,7 +30,7 @@ Userscripts popup.
 | Site | Status |
 |---|---|
 | YouTube (m.youtube.com, www.youtube.com in Safari) | Ad data is removed from the player response before the player reads it (the same rules as the Chrome extension, `rules/scriptlets.json`). The 17-second "fake buffering" wait is cut short, and ad slots are hidden with `rules/cosmetic/youtube.css`. |
-| Twitch (m.twitch.tv, www.twitch.tv) | The same worker and playlist code as the extension: during an ad it switches to an ad-free backup stream. **This only works if Safari on iPhone plays Twitch through Twitch's JavaScript worker (Media Source).** If Twitch hands the stream to Safari's built-in HLS player instead, no script can see the playlist, and Twitch ads still play. This has not yet been tested on a real iPhone (see "Status of testing"). |
+| Twitch (m.twitch.tv, www.twitch.tv) | The same worker and playlist code as the extension: during an ad it switches to an ad-free backup stream. **This only works if Safari on iPhone plays Twitch through Twitch's JavaScript worker (Media Source).** If Twitch hands the stream to Safari's built-in HLS player instead, no script can see the playlist, and Twitch ads still play. Not yet tested on a real iPhone (see "Status of testing"). |
 
 ## What it doesn't do on iOS
 
@@ -64,19 +67,17 @@ in a simulated page.
 
 ## Status of testing
 
-- Done: the jsc tests (`bash tests/run.sh`) check the header and that the script parses. They also
-  check, on stubbed YouTube and Twitch pages, that the right hooks install.
-- Not done yet: a run in Safari on iOS. The iOS Simulator needs the full Xcode, which this Mac does
-  not have. Two open questions decide what works on a real iPhone:
-  1. Does Userscripts' `document-start` + `page` injection run before YouTube's and Twitch's own
-     scripts, without being blocked by their CSP?
-  2. Does Twitch in iOS Safari play through its worker (Media Source, interceptable) or through
-     native HLS (not interceptable)?
-
-  A quick check: install the script, open a Twitch stream, and connect the iPhone to a Mac with
-  Safari's **Develop** menu (Web Inspector). In the console, `window.__tas_page_installed__`
-  should be `true`. Look in the Network tab for `usher.ttvnw.net` playlist requests made from a
-  **worker** (Twitch's MSE path) rather than by the `<video>` element (native HLS).
+- **YouTube on iPhone: works.** Tested 19 Nov 2026 on Marsel's iPhone (Safari, Userscripts 1.8.6,
+  page injection), with the build of commit 65d8389: no ads on m.youtube.com. (An earlier failed
+  try came from a bad save: the file had become a PDF in the wrong folder.)
+- **Twitch on iPhone: not tested yet.** The open question is whether Twitch in iOS Safari plays
+  through its worker (Media Source, which the script can intercept) or through native HLS (which it
+  can't). To check, connect the iPhone to a Mac and open Safari's **Develop** menu (Web Inspector).
+  In the console, `window.__tas_page_installed__` should be `true`. Then look in the Network tab
+  for `usher.ttvnw.net` playlist requests made by a **worker** rather than by the `<video>`
+  element.
+- The jsc tests (`bash tests/run.sh`) check the header and that the script parses. They also check,
+  on stubbed YouTube and Twitch pages, that the right hooks install.
 
 ## Optional tip link
 
