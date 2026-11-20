@@ -40,6 +40,18 @@ errors = []
 checks = 0
 
 
+
+# rules/youtube.json besides its two block rules (exact; see the youtube check below).
+YOUTUBE_PP = "oAEBogYBLg"
+YOUTUBE_PP_RULES = [
+    {"id": 3, "priority": 1,
+     "action": {"type": "redirect", "redirect": {"transform": {"queryTransform": {"addOrReplaceParams": [{"key": "pp", "value": YOUTUBE_PP}]}}}},
+     "condition": {"urlFilter": "|https://www.youtube.com/watch?", "resourceTypes": ["main_frame"]}},
+    {"id": 500001, "priority": 2,  # allow rules use the allow id range (tools/filterlist.py ALLOW_ID_BASE)
+     "action": {"type": "allow"},
+     "condition": {"urlFilter": "|https://www.youtube.com/watch?*pp=" + YOUTUBE_PP, "resourceTypes": ["main_frame"]}},
+]
+
 def check(cond, msg):
     global checks
     checks += 1
@@ -88,7 +100,7 @@ def main():
         return report()
 
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
-    check(m.get("version") == "1.1.5", "version must be 1.1.5")
+    check(m.get("version") == "2.0.0", "version must be 2.0.0")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
     check(m.get("name") == "Ad Shield", "name must be Ad Shield")
     check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")
@@ -194,9 +206,10 @@ def main():
         for f in files:
             exists(f, "%s entry" % name)
     main_files = bundles.get("build/main-world.js", [])
-    check("src/page/page.js" in main_files and "src/page/recovery.js" in main_files
-          and main_files.index("src/page/recovery.js") < main_files.index("src/page/page.js"),
-          "page.js must come after recovery.js in the main-world bundle")
+    check("src/page/page.js" in main_files and "src/page/health.js" in main_files
+          and main_files.index("src/page/health.js") < main_files.index("src/page/page.js"),
+          "page.js must come after health.js in the main-world bundle")
+    check("src/page/recovery.js" not in main_files, "recovery.js was removed in 2.0")
     check(main_files[-1:] == ["src/page/page.js"], "page.js must be the last file of the main-world bundle")
     worlds = {c.get("world", "ISOLATED"): c.get("js", []) for c in cs}
     check(worlds.get("MAIN") == ["build/main-world.js"], "MAIN-world content script must be build/main-world.js")
@@ -261,18 +274,25 @@ def main():
             # Hand-written: only the two safe YouTube ad paths (docs/research-v2.md B.5); never
             # /api/stats/ or get_drm_license (both break playback / "free with ads" films).
             check(r.get("enabled") is True, "youtube ruleset must be enabled by default")
-            flt = sorted(x.get("condition", {}).get("urlFilter", "") for x in rules if isinstance(x, dict))
+            blocks = [x for x in rules if isinstance(x, dict) and x.get("action", {}).get("type") == "block"]
+            flt = sorted(x.get("condition", {}).get("urlFilter", "") for x in blocks)
             check(flt == ["||youtube.com/pagead/", "||youtube.com/youtubei/v1/player/ad_break"],
                   "rules/youtube.json must block exactly /pagead/ and /youtubei/v1/player/ad_break, got %s" % flt)
-            check(all(x.get("action") == {"type": "block"} and set(x.get("condition", {})) == {"urlFilter"} for x in rules if isinstance(x, dict)),
+            check(all(x.get("action") == {"type": "block"} and set(x.get("condition", {})) == {"urlFilter"} for x in blocks),
                   "rules/youtube.json: plain block rules only (no resourceTypes: main_frame is never blocked)")
+            # Plus the watch-page player params (uBO "oaeb", docs/DESIGN-v2.md YouTube): a direct
+            # www.youtube.com/watch load gets pp=oAEBogYBLg, and an allow rule one step above it
+            # for the URL that already has it, so the redirect cannot loop.
+            rest = sorted((json.dumps(x, sort_keys=True) for x in rules if isinstance(x, dict) and x not in blocks))
+            want = sorted(json.dumps(x, sort_keys=True) for x in YOUTUBE_PP_RULES)
+            check(rest == want, "rules/youtube.json: besides the two blocks exactly the pp redirect + allow rules %s, got %s" % (want, rest))
         if r.get("id") == dnr_schema.REMOVEPARAM_RULESET:
             check(r.get("enabled") is True, "removeparam ruleset must be enabled by default")
             for msg in dnr_schema.removeparam_ruleset_errors(rules, r.get("path")):
                 errors.append(msg)
         else:
-            check(not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
-                  "%s: redirect rules are only allowed in rules/removeparam.json" % r.get("path"))
+            check(r.get("id") == "youtube" or not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
+                  "%s: redirect rules are only allowed in rules/removeparam.json (and the youtube pp rule)" % r.get("path"))
         if r.get("id") in dnr_schema.CURATED_RULESETS:
             check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
             for msg in dnr_schema.curated_ruleset_errors(rules, r.get("path")):

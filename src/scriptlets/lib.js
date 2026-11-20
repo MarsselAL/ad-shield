@@ -43,27 +43,19 @@ var asScriptlets = (function () {
   function fnSource(fn) { try { return fnToString.call(fn); } catch (e) { return ''; } }
 
   // ------------------------------------------------------------------ native look
-  // Our wrappers are Proxies of the original function (so name, length and prototype stay), and
-  // Function.prototype.toString of each patched realm returns the original's source for them.
-  var originals = new WeakMap();
-  var toStringDone = new WeakSet();
+  // Our wrappers are Proxies of the original function (so name, length and prototype stay). Each
+  // gets a non-enumerable own toString, a bound Function.prototype.toString of the original:
+  // fn.toString() / String(fn) show the original source and the toString itself looks native.
+  // Nothing realm-wide (no Function.prototype.toString hook: that cost every toString call).
+  var originals = new WeakMap(); // our wrapper -> the function it replaced (first original)
 
-  function nativeToString(win) {
+  function lookNative(proxy, target) {
     try {
-      var FP = win && win.Function && win.Function.prototype;
-      if (!FP || toStringDone.has(FP)) return;
-      toStringDone.add(FP);
-      var ts = FP.toString;
-      if (typeof ts !== 'function') return;
-      var p = new Proxy(ts, {
-        apply: function (t, self, a) {
-          var o = isTrappable(self) ? originals.get(self) : undefined;
-          return reflectApply(t, o !== undefined ? o : self, a);
-        }
-      });
-      originals.set(p, ts);
-      defineProperty(FP, 'toString', { value: p, writable: true, enumerable: false, configurable: true });
-    } catch (e) { /* leave toString alone */ }
+      var orig = originals.get(target) || target;
+      originals.set(proxy, orig);
+      // No defineProperty trap: this lands on the target, which only our proxy still exposes.
+      defineProperty(proxy, 'toString', { value: fnToString.bind(orig), writable: true, enumerable: false, configurable: true });
+    } catch (e) { /* frozen target: keep the default toString */ }
   }
 
   /** Replace the function owner[key] by a Proxy with the given apply trap. True on success. */
@@ -75,8 +67,7 @@ var asScriptlets = (function () {
       if (typeof target !== 'function') return false;
       if (desc && !desc.writable && !desc.configurable) return false;
       var proxy = new Proxy(target, { apply: trap });
-      originals.set(proxy, target);
-      nativeToString(win);
+      lookNative(proxy, target);
       if (desc) {
         defineProperty(owner, key, { value: proxy, writable: desc.writable, enumerable: desc.enumerable, configurable: desc.configurable });
       } else {
@@ -288,15 +279,19 @@ var asScriptlets = (function () {
   function isBracket(seg) { return seg === '[]' || seg === '[-]'; }
 
   /**
-   * The words a JSON text must contain for the paths to remove anything: the last non-bracket
-   * segment of each path (every key of a path must be present for a removal). null when some path
-   * is brackets only (no word to look for: every text is a candidate).
+   * The word a JSON text must contain for a path to remove anything: its last non-bracket segment
+   * (every key of a path must be present for a removal). '' when the path is brackets only.
    */
+  function needleOf(segs) {
+    for (var j = segs.length - 1; j >= 0; j--) if (!isBracket(segs[j])) return segs[j];
+    return '';
+  }
+
+  /** All needle words of the paths; null when some path has none (every text is a candidate). */
   function needlesOf(paths) {
     var all = paths.plain.concat(paths.deep), out = [];
     for (var i = 0; i < all.length; i++) {
-      var segs = all[i], word = '';
-      for (var j = segs.length - 1; j >= 0 && !word; j--) if (!isBracket(segs[j])) word = segs[j];
+      var word = needleOf(all[i]);
       if (!word) return null;
       if (out.indexOf(word) === -1) out.push(word);
     }
@@ -304,8 +299,10 @@ var asScriptlets = (function () {
   }
 
   /**
-   * pruner(obj) -> number of things removed. required: paths that must all be present in obj,
-   * otherwise nothing is pruned (e.g. "responseContext" for YouTube API responses only).
+   * pruner(obj, text) -> number of things removed. required: paths that must all be present in
+   * obj, otherwise nothing is pruned. text (optional): the JSON text obj was parsed from; a deep
+   * (..) path then walks obj only when its own needle word is in the text (plain paths are a few
+   * key lookups and always run).
    * pruner.mayMatch(text): cheap pre-check on a JSON text (plain indexOf of the needle words);
    * false means pruning its parsed value would remove nothing, so callers skip the parse / walk.
    * (Keys written with \u escapes in the text would be missed; YouTube does not write them.)
@@ -313,13 +310,25 @@ var asScriptlets = (function () {
   function makePruner(props, required) {
     var paths = compilePaths(props), req = compilePaths(required);
     var needles = needlesOf(paths);
-    var fn = function (obj) {
+    var deepNeedles = paths.deep.map(needleOf);
+    function deepFor(text) {
+      if (typeof text !== 'string') return paths.deep;
+      var out = [];
+      for (var d = 0; d < paths.deep.length; d++) {
+        if (!deepNeedles[d] || text.indexOf(deepNeedles[d]) !== -1) out.push(paths.deep[d]);
+      }
+      return out;
+    }
+    var fn = function (obj, text) {
       if (!isObj(obj)) return 0;
       try {
         for (var r = 0; r < req.plain.length; r++) if (!has(obj, req.plain[r], 0)) return 0;
         var n = 0;
         for (var i = 0; i < paths.plain.length; i++) n += remove(obj, paths.plain[i], 0);
-        if (paths.deep.length) n += walk(obj, paths.deep);
+        if (paths.deep.length) {
+          var deep = deepFor(text);
+          if (deep.length) n += walk(obj, deep);
+        }
         return n;
       } catch (e) {
         return 0;
@@ -347,9 +356,11 @@ var asScriptlets = (function () {
     if (prune.empty) return;
     wrap(win, win.JSON, 'parse', function (t, self, a) {
       var r = reflectApply(t, self, a);
+      if (!isObj(r)) return r;
       // No needle in the text (and no reviver that could add keys): nothing to remove, no walk.
-      if (typeof a[0] === 'string' && typeof a[1] !== 'function' && !prune.mayMatch(a[0])) return r;
-      if (isObj(r) && prune(r)) log('json-prune', 'JSON.parse');
+      var text = typeof a[0] === 'string' && typeof a[1] !== 'function' ? a[0] : undefined;
+      if (text !== undefined && !prune.mayMatch(text)) return r;
+      if (prune(r, text)) log('json-prune', 'JSON.parse');
       return r;
     });
     var RP = typeof win.Response === 'function' ? win.Response.prototype : null;
@@ -379,7 +390,7 @@ var asScriptlets = (function () {
         if (!prune.mayMatch(text)) return resp;
         var obj;
         try { obj = nativeParse(text); } catch (e) { return resp; }
-        if (!isObj(obj) || !prune(obj)) return resp;
+        if (!isObj(obj) || !prune(obj, text)) return resp;
         var out = new win.Response(nativeStringify(obj), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
         try { out.headers.delete('content-length'); } catch (e) { /* immutable */ }
         ['url', 'redirected', 'type'].forEach(function (k) {
@@ -440,7 +451,7 @@ var asScriptlets = (function () {
         if (typeof raw === 'string') {
           if (raw && prune.mayMatch(raw)) {
             var o = nativeParse(raw);
-            if (isObj(o) && prune(o)) { out = nativeStringify(o); log('json-prune-xhr-response', 'responseText'); }
+            if (isObj(o) && prune(o, raw)) { out = nativeStringify(o); log('json-prune-xhr-response', 'responseText'); }
           }
         } else if (isObj(raw) && xhr.responseType === 'json') {
           if (prune(raw)) log('json-prune-xhr-response', 'response');
@@ -505,6 +516,173 @@ var asScriptlets = (function () {
   }
   preventFetch.frames = true;
 
+  /**
+   * edit-request-body(url, needle, edit...): JSON request bodies of matching fetch / XHR requests
+   * are edited before they are sent. needle: a top-level key the body must have (also a plain
+   * indexOf pre-check on the text). Each edit is one of
+   *   path==<json>   condition: nothing is edited unless every condition holds;
+   *   path=<json>    set the value (the parent object must exist; nothing is created);
+   *   path+=<text>   append text to the string at path unless it already ends with it.
+   * Paths are dotted (a.b.c). A body is re-serialised only when an edit changed something.
+   * Bodies handled: a string fetch init.body or XMLHttpRequest.send(string), and a POST Request
+   * passed to fetch (read from a clone; gzip bodies (Content-Encoding: gzip, what YouTube sends)
+   * are gunzipped and gzipped again with the page's DecompressionStream / CompressionStream, and
+   * sent untouched where those are missing). Everything else, and every non-matching URL, goes out
+   * as it came after one URL test. No JSON.stringify or Promise hook.
+   */
+  function compileEdits(list) {
+    var out = { conds: [], sets: [], appends: [] };
+    for (var i = 0; i < list.length; i++) {
+      var s = String(list[i]), m, parts;
+      try {
+        if ((m = /^([^=+]+)==([\s\S]*)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.conds.push({ parts: parts, value: nativeParse(m[2]) });
+        } else if ((m = /^([^=+]+)\+=([\s\S]+)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.appends.push({ parts: parts, text: m[2] });
+        } else if ((m = /^([^=+]+)=([\s\S]*)$/.exec(s))) {
+          parts = splitPath(m[1]); if (!parts) return null;
+          out.sets.push({ parts: parts, value: nativeParse(m[2]) });
+        } else {
+          return null;
+        }
+      } catch (e) {
+        return null; // value is not JSON
+      }
+    }
+    return out.sets.length || out.appends.length ? out : null;
+  }
+
+  function getAt(obj, parts, n) {
+    var o = obj;
+    for (var i = 0; i < n; i++) {
+      if (!isObj(o) || !hasOwn.call(o, parts[i])) return undefined;
+      o = o[parts[i]];
+    }
+    return o;
+  }
+
+  function sameJson(a, b) {
+    if (a === b) return true;
+    if (!isObj(a) || !isObj(b)) return false;
+    try { return nativeStringify(a) === nativeStringify(b); } catch (e) { return false; }
+  }
+
+  /** Edit obj in place; the number of values changed (0 when a condition fails). */
+  function applyEdits(obj, needle, edits) {
+    if (!isObj(obj) || !hasOwn.call(obj, needle)) return 0;
+    var i, e, parent, key, n = 0;
+    for (i = 0; i < edits.conds.length; i++) {
+      e = edits.conds[i];
+      if (!sameJson(getAt(obj, e.parts, e.parts.length), e.value)) return 0;
+    }
+    for (i = 0; i < edits.sets.length; i++) {
+      e = edits.sets[i];
+      parent = getAt(obj, e.parts, e.parts.length - 1);
+      key = e.parts[e.parts.length - 1];
+      if (isObj(parent) && !sameJson(parent[key], e.value)) { parent[key] = e.value; n++; }
+    }
+    for (i = 0; i < edits.appends.length; i++) {
+      e = edits.appends[i];
+      parent = getAt(obj, e.parts, e.parts.length - 1);
+      key = e.parts[e.parts.length - 1];
+      if (isObj(parent) && hasOwn.call(parent, key) && typeof parent[key] === 'string') {
+        var v = parent[key];
+        if (v.length < e.text.length || v.slice(v.length - e.text.length) !== e.text) { parent[key] = v + e.text; n++; }
+      }
+    }
+    return n;
+  }
+
+  function editRequestBody(win, args, log) {
+    var match = makeMatcher(args[0]);
+    var needle = args[1] ? String(args[1]) : '';
+    var edits = compileEdits(arraySlice.call(args, 2));
+    if (!args[0] || !needle || !edits) return;
+
+    /** The edited text, or null when the body stays as it is. */
+    function editText(text, url) {
+      if (typeof text !== 'string' || text.indexOf(needle) === -1) return null;
+      var obj;
+      try { obj = nativeParse(text); } catch (e) { return null; }
+      if (!applyEdits(obj, needle, edits)) return null;
+      log('edit-request-body', url);
+      return nativeStringify(obj);
+    }
+
+    function viaCodec(Ctor, body) { // body (string / bytes) through a gzip (de)compression stream
+      return new win.Response(new win.Response(body).body.pipeThrough(new Ctor('gzip')));
+    }
+
+    /** Promise of the Request to send: an edited copy of req, or req itself. */
+    function editRequest(req, url) {
+      var enc = '';
+      try { enc = String(req.headers.get('content-encoding') || '').toLowerCase(); } catch (e) { /* none */ }
+      var gzip = enc === 'gzip';
+      if ((enc && !gzip) || (gzip && (typeof win.DecompressionStream !== 'function' || typeof win.CompressionStream !== 'function'))) {
+        return win.Promise.resolve(req);
+      }
+      var copy = req.clone();
+      var textP = gzip ? viaCodec(win.DecompressionStream, copy.body).text() : copy.text();
+      return textP.then(function (text) {
+        var out = editText(text, url);
+        if (out === null) return req;
+        var bodyP = gzip ? viaCodec(win.CompressionStream, out).arrayBuffer() : win.Promise.resolve(out);
+        return bodyP.then(function (body) { return new win.Request(req, { body: body }); });
+      }).then(null, function () { return req; });
+    }
+
+    wrap(win, win, 'fetch', function (t, self, a) {
+      try {
+        var url = urlOf(a[0]);
+        if (!match(url)) return reflectApply(t, self, a);
+        var init = a[1];
+        if (isObj(init) && init.body !== undefined && init.body !== null) {
+          var out = editText(init.body, url);
+          if (out !== null) {
+            var copy = {};
+            for (var k in init) copy[k] = init[k];
+            copy.body = out;
+            a = [a[0], copy];
+          }
+          return reflectApply(t, self, a);
+        }
+        var req = a[0];
+        if (isObj(req) && typeof req.clone === 'function' && typeof win.Request === 'function' &&
+            String(req.method).toUpperCase() === 'POST' && req.body !== null && !req.bodyUsed) {
+          var rest = arraySlice.call(a, 1);
+          return editRequest(req, url).then(function (r) {
+            return reflectApply(t, self, [r].concat(rest));
+          });
+        }
+      } catch (e) { /* send it as it came */ }
+      return reflectApply(t, self, a);
+    });
+
+    var XP = win.XMLHttpRequest && win.XMLHttpRequest.prototype;
+    if (!XP) return;
+    var pending = new WeakMap(); // xhr -> url of the matching request opened on it
+    wrap(win, XP, 'open', function (t, xhr, a) {
+      try {
+        var url = String(a[1]);
+        if (match(url)) pending.set(xhr, url); else pending.delete(xhr);
+      } catch (e) { /* plain request */ }
+      return reflectApply(t, xhr, a);
+    });
+    wrap(win, XP, 'send', function (t, xhr, a) {
+      try {
+        var url = pending.get(xhr);
+        if (url !== undefined && typeof a[0] === 'string') {
+          var out = editText(a[0], url);
+          if (out !== null) a = [out];
+        }
+      } catch (e) { /* send it as it came */ }
+      return reflectApply(t, xhr, a);
+    });
+  }
+  editRequestBody.frames = true;
+
   /** prevent-setTimeout(needle, delay): callbacks whose source matches (and delay equals) never run. */
   function preventSetTimeout(win, args, log) {
     var needle = args[0] ? String(args[0]) : '';
@@ -541,6 +719,7 @@ var asScriptlets = (function () {
     factor = Math.min(50, Math.max(0.001, factor));
     wrap(win, win, 'setTimeout', function (t, self, a) {
       try {
+        // The delay first: the callback's source is read only for a matching delay.
         var d = Number(a[1] || 0);
         if (delay === null || d === delay) {
           var fn = a[0];
@@ -556,7 +735,11 @@ var asScriptlets = (function () {
     });
   }
 
-  /** prevent-promise-then-callback(needle): then() callbacks whose source matches become no-ops. */
+  /**
+   * prevent-promise-then-callback(needle): then() callbacks whose source matches become no-ops.
+   * Kept in the library but used by no rule since 2.0: a hook on every Promise.prototype.then
+   * call costs frames on YouTube.
+   */
   function preventPromiseThen(win, args, log) {
     if (!args[0]) return;
     var match = makeMatcher(args[0]);
@@ -921,8 +1104,7 @@ var asScriptlets = (function () {
             return r;
           }
         });
-        originals.set(getter, desc.get);
-        nativeToString(win);
+        lookNative(getter, desc.get);
         defineProperty(IFP, prop, { get: getter, set: desc.set, enumerable: desc.enumerable, configurable: true });
       });
     } catch (e) { /* frames stay unpatched */ }
@@ -938,6 +1120,7 @@ var asScriptlets = (function () {
       'json-prune-xhr-response': jsonPruneXhrResponse,
       'prune-on-assign': pruneOnAssign,
       'prevent-fetch': preventFetch,
+      'edit-request-body': editRequestBody,
       'prevent-setTimeout': preventSetTimeout,
       'adjust-setTimeout': adjustSetTimeout,
       'prevent-promise-then-callback': preventPromiseThen,

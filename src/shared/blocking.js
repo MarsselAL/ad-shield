@@ -136,7 +136,8 @@
    * Category of a static ruleset id; null for rulesets this module does not own.
    * ads_N / privacy_N come from EasyList / EasyPrivacy, ads_curated / privacy_curated from our
    * own rules/curated_hosts.txt; both follow the same switch and count in the same bucket.
-   * youtube is our hand-written rules/youtube.json (two YouTube ad paths), part of Ads.
+   * youtube is our hand-written rules/youtube.json (two YouTube ad paths, plus the watch-page
+   * pp=oAEBogYBLg redirect and its loop-guard allow rule), part of Ads.
    * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
    * frames to the same URL without tracking parameters; never counted in the popup.
    */
@@ -204,8 +205,12 @@
     }];
   }
 
+  /** rules/youtube.json rules that block nothing: the watch-page pp redirect (rule 3) is not
+   * counted as an ad (its loop-guard allow rule, 500001, is in the allow id range). */
+  var YOUTUBE_UNCOUNTED_RULE_IDS = [3];
+
   /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
-   * Tracking-parameter redirects (removeparam) are not counted. */
+   * Tracking-parameter redirects (removeparam) and the YouTube pp rules are not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {
@@ -222,6 +227,7 @@
       }
       if (r.ruleId >= ALLOW_ID_BASE) return;
       var id = r.rulesetId;
+      if (id === 'youtube' && YOUTUBE_UNCOUNTED_RULE_IDS.indexOf(r.ruleId) !== -1) return;
       if (id === 'client_ads') { c.ads++; return; }
       if (id === 'trackers') { c.trackers++; return; }
       var f = rulesetFeature(id);
@@ -415,6 +421,7 @@
     rulesetPlan: rulesetPlan,
     allowlistRules: allowlistRules,
     countMatches: countMatches,
+    YOUTUBE_UNCOUNTED_RULE_IDS: YOUTUBE_UNCOUNTED_RULE_IDS,
     hostPatterns: hostPatterns,
     contentScriptPlan: contentScriptPlan,
     scriptletHosts: scriptletHosts,

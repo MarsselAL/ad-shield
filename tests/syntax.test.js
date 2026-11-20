@@ -6,7 +6,7 @@
 var FILES = [
   'src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/frame.js', 'src/shared/stats.js',
   'src/core/m3u8.js', 'src/core/gql.js', 'src/core/processor.js', 'src/core/worker-source.js',
-  'src/worker/worker-main.js', 'src/page/recovery.js', 'src/page/page.js',
+  'src/worker/worker-main.js', 'src/page/health.js', 'src/page/page.js',
   'src/content/cosmetic.js', 'src/content/bridge.js',
   'src/background/service-worker.js', 'src/popup/popup.js', 'src/options/options.js',
   'src/shared/blocking.js', 'src/background/general.js', 'src/background/autoconsent-shim.js', 'src/content/general.js',

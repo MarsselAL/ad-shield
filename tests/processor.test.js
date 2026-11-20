@@ -8,14 +8,23 @@ var MASTER = fixture('master.m3u8');
 var PREROLL = fixture('preroll.m3u8');
 var CLEAN = fixture('clean.m3u8');
 var NATIVE_720 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-720p60.m3u8';
+// PREROLL keeps 2 live segments, fewer than sequencer.minSegments: on a first poll that is too
+// thin to serve stripped. PREROLL3 keeps 3 (the strip path).
+var SEG106 = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-106.ts';
+var PREROLL3 = PREROLL.replace('#EXT-X-TWITCH-PREFETCH:' + SEG106 + '\n',
+  '#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:12.008Z\n#EXTINF:2.000,live\n' + SEG106 + '\n');
 
 function backupMaster(type) { return MASTER.replace(/SYNTH-/g, 'SYNTH-' + type + '-'); }
+/** A backup master without the 720p60 variant the player chose (other resolutions only). */
+function masterWithout720(type) {
+  return backupMaster(type).split('\n').filter(function (l) { return l.indexOf('720p60') === -1 && l.indexOf('1280x720') === -1; }).join('\n');
+}
 function backupMedia720(type) { return 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-' + type + '-720p60.m3u8'; }
 function cleanFor(type) { return CLEAN.replace(/SYNTH-live/g, 'SYNTH-' + type + '-live'); }
 
 /**
  * Fake world. mediaByType: playerType -> media playlist text served for its 720p60 variant.
- * Options: tokenThrows {type: true}, now (function).
+ * Options: tokenThrows {type: true}, noToken {type: true}, masters {type: master text}.
  */
 function makeWorld(mediaByType, opts) {
   opts = opts || {};
@@ -27,7 +36,6 @@ function makeWorld(mediaByType, opts) {
     getSettings: function () { return w.settings; },
     now: w.now,
     emit: function (name, data) { w.events.push({ name: name, data: data }); },
-    degraded: opts.degraded || [],
     getToken: function (channel, type) {
       w.tokens.push(type);
       if (opts.tokenThrows && opts.tokenThrows[type]) return Promise.reject(new Error('token boom'));
@@ -38,7 +46,8 @@ function makeWorld(mediaByType, opts) {
       w.fetched.push(url);
       var m = /[?&]token=tok-([a-z_-]+)/.exec(url);
       if (url.indexOf('https://usher.ttvnw.net/') === 0 && m) {
-        return Promise.resolve({ status: 200, text: backupMaster(m[1]) });
+        var mt = opts.masters && opts.masters[m[1]];
+        return Promise.resolve({ status: 200, text: mt || backupMaster(m[1]) });
       }
       for (var type in mediaByType) {
         if (url === backupMedia720(type)) return Promise.resolve({ status: 200, text: mediaByType[type] });
@@ -87,33 +96,90 @@ test('clean media playlist passes through untouched', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, CLEAN).then(function (out) {
     assert.equal(out, CLEAN);
-    assert.equal(w.tokens.length, 0);
+    assert.deepEqual(w.tokens, ['embed'], 'only the master prewarm');
+    assert.equal(w.fetched.length, 1, 'only the prewarmed backup master');
     assert.deepEqual(w.names(), []);
   });
 });
 
-test('ads in site, clean in popout: popout chosen (matching 720p60 variant) and pinned', function () {
-  var w = makeWorld({ site: PREROLL, popout: cleanFor('popout'), mobile_web: cleanFor('mobile_web') });
+test('default backup order is embed, site, mobile_web, popout: no autoplay (360p), popout skipped (page token type)', function () {
+  assert.deepEqual(cfg.backupPlayerTypes, ['embed', 'site', 'mobile_web', 'popout']);
+  assert.equal(cfg.forcedPlayerType, 'popout');
+  var w = makeWorld(allTypes(PREROLL));
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
+    assert.equal(w.tokens.indexOf('autoplay'), -1, 'autoplay never requested');
+  });
+});
+
+test('ads in embed, clean in site: site chosen (matching 720p60 variant) and pinned', function () {
+  var w = makeWorld({ embed: PREROLL, site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
-    assertSameSegments(out, cleanFor('popout'));
-    assert.deepEqual(w.tokens, ['site', 'popout']);
-    assert.ok(w.fetched.indexOf(backupMedia720('popout')) !== -1, 'fetched the 720p60 backup variant');
-    assert.equal(w.proc.stateOf('somechannel').pinned, 'popout');
+    assertSameSegments(out, cleanFor('site'));
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web'], 'all asked at once (embed prewarmed with the master)');
+    assert.ok(w.fetched.indexOf(backupMedia720('site')) !== -1, 'fetched the 720p60 backup variant');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
     var names = w.names();
     assert.deepEqual(names, ['ad-detected', 'ad-blocked-backup', 'playlist-switch']);
-    assert.equal(w.events[1].data.playerType, 'popout');
+    assert.equal(w.events[1].data.playerType, 'site');
+    assert.equal(w.events[1].data.resolution, '1280x720');
     assert.equal(w.events[0].data.midroll, false);
     // backup usher URL carries the new token and keeps the original params
-    var usher = w.fetched.filter(function (u) { return u.indexOf('tok-popout') !== -1; })[0];
+    var usher = w.fetched.filter(function (u) { return u.indexOf('tok-site') !== -1; })[0];
     assert.includes(usher, 'allow_source=true');
-    assert.includes(usher, 'sig=sig-popout');
+    assert.includes(usher, 'sig=sig-site');
     assert.notIncludes(usher, 'sig=S&');
   });
 });
 
+test('backup without the chosen resolution is skipped for this poll (no lockout), next type used', function () {
+  var w = makeWorld({ embed: cleanFor('embed'), site: cleanFor('site') }, { masters: { embed: masterWithout720('embed') } });
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
+    assertSameSegments(out, cleanFor('site'));
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
+    assert.equal(w.fetched.filter(function (u) { return u.indexOf('SYNTH-embed-') !== -1 && u.indexOf('usher') === -1; }).length, 0,
+      'no other embed variant fetched');
+    assert.notOk((w.proc.stateOf('somechannel').lockouts.embed || 0) > w.t, 'embed not locked out');
+  });
+});
+
+test('no backup at the chosen resolution: stripped native served, never a lower-quality backup', function () {
+  var masters = {};
+  cfg.backupPlayerTypes.forEach(function (t) { masters[t] = masterWithout720(t); });
+  var w = makeWorld({}, { masters: masters });
+  // Every type would be clean at other resolutions.
+  w.deps.fetchText = (function (inner) {
+    return function (url) {
+      if (url.indexOf('usher') === -1 && /SYNTH-[a-z_]+-(480p30|360p30|chunked)/.test(url)) {
+        w.fetched.push(url);
+        return Promise.resolve({ status: 200, text: CLEAN });
+      }
+      return inner(url);
+    };
+  })(w.deps.fetchText);
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
+    assert.notOk(M.hasAds(out, cfg));
+    assert.includes(out, 'SYNTH-live-104.ts');
+    assert.notIncludes(out, 'SYNTH-embed-');
+    assert.deepEqual(w.names(), ['ad-detected', 'ad-stripped', 'playlist-switch']);
+    assert.equal(w.events[2].data.to, 'stripped');
+    w.tokens = []; w.fetched = [];
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function (out) {
+    assert.deepEqual(w.tokens, [], 'cached masters: no new token requests');
+    assert.deepEqual(w.fetched, [], 'still nothing at 720p60: no backup media fetched');
+    assert.notOk(M.hasAds(out, cfg));
+  });
+});
+
 test('next poll tries the pinned type first and reuses the cached backup master', function () {
-  var w = makeWorld({ site: PREROLL, popout: cleanFor('popout') });
+  var w = makeWorld({ popout: PREROLL, embed: cleanFor('embed') });
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
     w.t += 2000;
@@ -121,20 +187,20 @@ test('next poll tries the pinned type first and reuses the cached backup master'
     w.tokens = [];
     return w.proc.onMedia(NATIVE_720, PREROLL);
   }).then(function (out) {
-    assertSameSegments(out, cleanFor('popout'));
+    assertSameSegments(out, cleanFor('embed'));
     assert.deepEqual(w.tokens, [], 'no new token');
-    assert.deepEqual(w.fetched, [backupMedia720('popout')], 'only the backup media playlist fetched');
+    assert.deepEqual(w.fetched, [backupMedia720('embed')], 'only the backup media playlist fetched');
     assert.equal(w.names().filter(function (n) { return n === 'ad-blocked-backup'; }).length, 1, 'counted once per break');
   });
 });
 
 test('break end: two clean native polls needed (debounce), then native again, ad-end and switch back', function () {
-  var w = makeWorld({ site: PREROLL, popout: cleanFor('popout') });
+  var w = makeWorld({ embed: cleanFor('embed') });
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
     return w.proc.onMedia(NATIVE_720, CLEAN);
   }).then(function (out) {
-    assertSameSegments(out, cleanFor('popout'), 'first clean native poll: still the backup');
+    assertSameSegments(out, cleanFor('embed'), 'first clean native poll: still the backup');
     assert.equal(w.names().indexOf('ad-end'), -1);
     return w.proc.onMedia(NATIVE_720, CLEAN);
   }).then(function (out) {
@@ -142,7 +208,6 @@ test('break end: two clean native polls needed (debounce), then native again, ad
     assert.deepEqual(names.slice(-2), ['ad-end', 'playlist-switch']);
     assert.equal(w.events[w.events.length - 1].data.to, 'native');
     assert.equal(w.events[w.events.length - 2].data.outcome, 'backup');
-    assert.equal(w.events[w.events.length - 2].data.matched, true, 'backup matched native quality');
     // Native has the same live segments (same live numbers): nothing is listed twice and the
     // numbering continues where the backup left off.
     assert.equal(tag(out, '#EXT-X-MEDIA-SEQUENCE'), 5000);
@@ -153,7 +218,7 @@ test('break end: two clean native polls needed (debounce), then native again, ad
 test('every backup has ads: ad segments stripped, ad segment URLs answered as ads', function () {
   var w = makeWorld(allTypes(PREROLL));
   w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
     assert.notOk(M.hasAds(out, cfg));
     assert.notIncludes(out, ',Amazon|');
     assert.notIncludes(out, '#EXT-X-TWITCH-PREFETCH');
@@ -174,7 +239,9 @@ test('types with ads are locked out briefly: next poll makes no token requests',
     return w.proc.onMedia(NATIVE_720, PREROLL);
   }).then(function (out) {
     assert.deepEqual(w.tokens, []);
-    assert.notOk(M.hasAds(out, cfg));
+    // (The window may re-list a segment the player already got in the passed-through first poll.)
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.notIncludes(out, ',Amazon|');
     w.t += cfg.playerTypeLockoutMs + 1;
     w.tokens = [];
     return w.proc.onMedia(NATIVE_720, PREROLL);
@@ -192,7 +259,7 @@ test('ad segment cache expires', function () {
   });
 });
 
-test('stripping empties the playlist: newest known segments kept, numbering unchanged, stale last-clean not used', function () {
+test('stripping empties the playlist, no clean backup: original playlist (the ad plays), no last-clean replay', function () {
   var w = makeWorld(allTypes(PREROLL));
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, CLEAN).then(function (out) {
@@ -200,62 +267,40 @@ test('stripping empties the playlist: newest known segments kept, numbering unch
     w.t += 2000;
     return w.proc.onMedia(NATIVE_720, fixture('all-ads.m3u8'));
   }).then(function (out) {
-    assertSameSegments(out, CLEAN);
-    w.t += cfg.lastCleanMaxAgeMs + 1;
-    return w.proc.onMedia(NATIVE_720, fixture('all-ads.m3u8'));
-  }).then(function (out) {
-    assert.ok(cfg.lastCleanMaxAgeMs <= 6000);
-    assert.equal(tag(out, '#EXT-X-MEDIA-SEQUENCE'), 5001, 'the newest three known segments, same numbers');
-    assert.equal(M.countSegments(out), cfg.sequencer.minSegments);
-    assert.notIncludes(out, 'SYNTH-ad-');
+    assert.ok(out !== CLEAN, 'the last clean playlist is not replayed');
+    assert.equal(out, fixture('all-ads.m3u8'), 'never an empty playlist');
+    assert.ok(w.names().indexOf('ad-passthrough') !== -1);
+    assert.equal(cfg.lastCleanMaxAgeMs, undefined);
+    assert.equal(cfg.backupHoldMs, undefined);
   });
 });
 
 test('token error for one type: locked out, next type used', function () {
-  var w = makeWorld({ popout: cleanFor('popout') }, { tokenThrows: { site: true } });
+  var w = makeWorld({ site: cleanFor('site') }, { tokenThrows: { embed: true } });
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
-    assertSameSegments(out, cleanFor('popout'));
-    assert.ok(w.proc.stateOf('somechannel').lockouts.site > w.t);
+    assertSameSegments(out, cleanFor('site'));
+    assert.ok(w.proc.stateOf('somechannel').lockouts.embed > w.t);
   });
 });
 
-test('autoplay is used as last resort but never pinned', function () {
-  var types = allTypes(PREROLL);
-  types.autoplay = cleanFor('autoplay');
-  var w = makeWorld(types);
+// TTV-AB #98: a client-side ad (twitch-maf-ad) is a separate video beside the stream; the
+// playlist's segments are all live. Nothing to replace: no backup search, no stripping.
+test('client-side ad marker only (twitch-maf-ad), all segments live: untouched, no backup search, no events', function () {
+  var maf = fixture('maf-ad.m3u8');
+  var w = makeWorld(allTypes(cleanFor('x')));
   w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
-    assertSameSegments(out, cleanFor('autoplay'));
-    assert.equal(w.proc.stateOf('somechannel').pinned, null);
-  });
-});
-
-test('degraded channel: no backup requests, strip only', function () {
-  var w = makeWorld({ popout: cleanFor('popout') }, { degraded: ['SomeChannel'] });
-  w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
-    assert.deepEqual(w.tokens, []);
-    assert.notOk(M.hasAds(out, cfg));
-    assert.equal(w.events[1].data.degraded, true);
-  });
-});
-
-test('setDegraded at runtime switches the channel to strip-only', function () {
-  var w = makeWorld({ popout: cleanFor('popout') });
-  w.proc.onMaster(MASTER_URL, MASTER);
-  w.proc.setDegraded('somechannel');
-  return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
-    assert.deepEqual(w.tokens, []);
-  });
-});
-
-test('client-side ad marker only (twitch-maf-ad) everywhere: reported as unremovable, live kept', function () {
-  var w = makeWorld(allTypes(fixture('maf-ad.m3u8')));
-  w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, fixture('maf-ad.m3u8')).then(function (out) {
-    assert.equal(M.countSegments(out), 2);
-    assert.ok(w.names().indexOf('ad-unremovable') !== -1);
+  var tokens = w.tokens.slice();
+  return w.proc.onMedia(NATIVE_720, maf).then(function (out) {
+    assert.equal(out, maf, 'byte for byte');
+    return w.proc.onMedia(NATIVE_720, maf);
+  }).then(function (out) {
+    assert.equal(out, maf);
+    assert.deepEqual(w.tokens, tokens, 'no token beyond the master prewarm');
+    assert.equal(w.fetched.filter(function (u) { return u.indexOf('https://usher.ttvnw.net/') !== 0; }).length, 0, 'no backup media fetch');
+    assert.ok(w.fetched.length <= 1, 'at most the prewarmed master');
+    assert.deepEqual(w.names(), []);
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
   });
 });
 
@@ -281,7 +326,7 @@ test('fetch rejecting for every backup: strip path, no exception escapes', funct
   w.deps.fetchText = function () { return Promise.reject(new Error('network down')); };
   w.proc = __TAS__.createProcessor(w.deps);
   w.proc.onMaster(MASTER_URL, MASTER);
-  return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
     assert.notOk(M.hasAds(out, cfg));
   });
 });
@@ -312,7 +357,8 @@ test('custom playerType order from settings is respected', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('embed'));
-    assert.deepEqual(w.tokens, ['embed']);
+    assert.deepEqual(w.tokens, ['embed', 'site']);
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
   });
 });
 
@@ -322,16 +368,16 @@ function flush() {
   for (var i = 0; i < 12; i++) p = p.then(function () {});
   return p;
 }
-/** World whose popout media fetch waits for release(); timers are manual. */
+/** World whose embed media fetch waits for release(); timers are manual. */
 function slowWorld(media) {
-  var w = makeWorld(media || { popout: cleanFor('popout') });
+  var w = makeWorld(media || { embed: cleanFor('embed') });
   w.timers = [];
   w.deps.setTimeout = function (f, ms) { w.timers.push({ f: f, ms: ms }); return w.timers.length; };
   w.deps.clearTimeout = function (id) { w.timers[id - 1].cleared = true; };
   var gate = new Promise(function (r) { w.release = r; });
   var fast = w.deps.fetchText;
   w.deps.fetchText = function (url) {
-    return url === backupMedia720('popout') ? gate.then(function () { return fast(url); }) : fast(url);
+    return url === backupMedia720('embed') ? gate.then(function () { return fast(url); }) : fast(url);
   };
   w.fireDeadline = function () {
     var t = w.timers.filter(function (x) { return !x.cleared && !x.fired; })[0];
@@ -344,7 +390,7 @@ function slowWorld(media) {
 
 test('per-poll deadline: slow backup -> stripped playlist on time; search continues once (single flight); next poll is one fetch', function () {
   var w = slowWorld();
-  var p1 = w.proc.onMedia(NATIVE_720, PREROLL);
+  var p1 = w.proc.onMedia(NATIVE_720, PREROLL3);
   var tokens;
   return flush().then(function () {
     assert.equal(w.timers[0].ms, cfg.backupPollDeadlineMs);
@@ -356,7 +402,7 @@ test('per-poll deadline: slow backup -> stripped playlist on time; search contin
     assert.includes(out, 'SYNTH-live-104.ts');
     assert.ok(w.names().indexOf('ad-stripped') !== -1);
     tokens = w.tokens.length;
-    var p2 = w.proc.onMedia(NATIVE_720, PREROLL);
+    var p2 = w.proc.onMedia(NATIVE_720, PREROLL3);
     return flush().then(function () {
       assert.equal(w.tokens.length, tokens, 'joined the search in flight, no new token requests');
       w.fireDeadline();
@@ -366,12 +412,12 @@ test('per-poll deadline: slow backup -> stripped playlist on time; search contin
     w.release();
     return flush();
   }).then(function () {
-    assert.equal(w.proc.stateOf('somechannel').pinned, 'popout', 'background search finished and pinned');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed', 'background search finished and pinned');
     w.fetched = []; w.tokens = [];
-    return w.proc.onMedia(NATIVE_720, PREROLL);
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
   }).then(function (out) {
     assert.deepEqual(w.tokens, []);
-    assert.deepEqual(w.fetched, [backupMedia720('popout')], 'steady state: one fetch');
+    assert.deepEqual(w.fetched, [backupMedia720('embed')], 'steady state: one fetch');
     assert.ok(segUrls(out).length > 0);
     assert.ok(w.names().indexOf('ad-blocked-backup') !== -1);
   });
@@ -413,9 +459,9 @@ function pl(o) {
 }
 
 test('switch native -> backup -> native: backup numbered by live sequence, DISCONTINUITY at each switch, no segment twice', function () {
-  var backup = pl({ seq: 9000, live: 302, from: 302, to: 305, prefix: 'popout-' });
-  var w = makeWorld({ popout: backup });
-  w.settings.playerTypes = ['popout'];
+  var backup = pl({ seq: 9000, live: 302, from: 302, to: 305, prefix: 'embed-' });
+  var w = makeWorld({ embed: backup });
+  w.settings.playerTypes = ['embed'];
   w.proc.onMaster(MASTER_URL, MASTER);
   var native1 = pl({ seq: 400, live: 300, from: 300, to: 303, prefix: 'native-' });
   var withAd = pl({ seq: 402, live: 302, from: 302, to: 305, prefix: 'native-', ads: [304, 305] });
@@ -425,13 +471,13 @@ test('switch native -> backup -> native: backup numbered by live sequence, DISCO
     return w.proc.onMedia(NATIVE_720, withAd);
   }).then(function (out) {
     var p = M.parseMedia(out);
-    assert.deepEqual(p.segs.map(function (s) { return s.url.replace(SEGB, ''); }), ['native-302.ts', 'native-303.ts', 'popout-304.ts', 'popout-305.ts']);
+    assert.deepEqual(p.segs.map(function (s) { return s.url.replace(SEGB, ''); }), ['native-302.ts', 'native-303.ts', 'embed-304.ts', 'embed-305.ts']);
     assert.equal(p.mediaSeq, 402, 'page numbering kept, not the backup\'s 9000');
     assert.deepEqual(p.segs.map(function (s) { return s.disc; }), [false, false, true, false]);
     return w.proc.onMedia(NATIVE_720, back).then(function () { return w.proc.onMedia(NATIVE_720, back); });
   }).then(function (out) {
     var p = M.parseMedia(out);
-    assert.deepEqual(p.segs.map(function (s) { return s.url.replace(SEGB, ''); }), ['popout-304.ts', 'popout-305.ts', 'native-306.ts', 'native-307.ts']);
+    assert.deepEqual(p.segs.map(function (s) { return s.url.replace(SEGB, ''); }), ['embed-304.ts', 'embed-305.ts', 'native-306.ts', 'native-307.ts']);
     assert.equal(p.mediaSeq, 404, 'continuous although native came back 6 numbers ahead');
     assert.deepEqual(p.segs.map(function (s) { return s.disc; }), [false, false, true, false]);
     assert.equal(w.names().indexOf('segment-repeat'), -1);
@@ -439,9 +485,9 @@ test('switch native -> backup -> native: backup numbered by live sequence, DISCO
 });
 
 test('repeat detector: overlapping backup without live numbers -> one segment-repeat event', function () {
-  var backup = pl({ seq: 70, from: 1, to: 5, prefix: 'popout-', skewMs: -1600 });
-  var w = makeWorld({ popout: backup });
-  w.settings.playerTypes = ['popout'];
+  var backup = pl({ seq: 70, from: 1, to: 5, prefix: 'embed-', skewMs: -1600 });
+  var w = makeWorld({ embed: backup });
+  w.settings.playerTypes = ['embed'];
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, pl({ seq: 0, from: 0, to: 3, prefix: 'native-' })).then(function () {
     return w.proc.onMedia(NATIVE_720, pl({ seq: 2, from: 2, to: 5, prefix: 'native-', ads: [4, 5] }));
@@ -454,28 +500,25 @@ test('repeat detector: overlapping backup without live numbers -> one segment-re
   });
 });
 
-test('backup served, one poll misses the deadline: hold (no new segments, no switch), then stripped after backupHoldMs', function () {
+test('backup served, one poll misses the deadline: stripped native served at once (no hold, no replay)', function () {
   var w = slowWorld();
   w.release();
   var first;
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     first = out;
-    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:popout');
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:embed');
     // From now on the backup hangs.
     w.deps.fetchText = function () { return new Promise(function () {}); };
     w.t += 1000;
     var p = w.proc.onMedia(NATIVE_720, PREROLL);
     return flush().then(function () { w.fireDeadline(); return p; });
   }).then(function (out) {
-    assert.deepEqual(segUrls(out), segUrls(first), 'same segments as before');
-    assert.equal(tag(out, '#EXT-X-MEDIA-SEQUENCE'), tag(first, '#EXT-X-MEDIA-SEQUENCE'));
-    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:popout', 'no switch');
-    w.t += cfg.backupHoldMs;
-    var p = w.proc.onMedia(NATIVE_720, PREROLL);
-    return flush().then(function () { w.fireDeadline(); return p; });
-  }).then(function (out) {
     assert.equal(w.proc.stateOf('somechannel').serving, 'stripped');
     assert.notIncludes(out, 'SYNTH-ad-');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= tag(first, '#EXT-X-MEDIA-SEQUENCE'), 'numbering never goes back');
+    assert.ok(M.countSegments(out) >= cfg.sequencer.minSegments);
+    assert.equal(w.events[w.events.length - 1].name, 'playlist-switch');
+    assert.equal(w.events[w.events.length - 1].data.to, 'stripped');
   });
 });
 
@@ -511,5 +554,306 @@ test('fMP4 first load: 100% pre-roll -> backup under its own MAP -> native under
     var p = M.parseMedia(out);
     assert.deepEqual(p.segs.map(function (s) { return s.disc; }), [false, false, true, false]);
     assert.equal(w.proc.stateOf('somechannel').serving, 'native');
+  });
+});
+
+// twitch.tv/kaicenat 2026-11-19, fresh load into a pre-roll: the page token is rewritten to
+// popout, so native = popout = ad-only (3 ad segments, 0 live); embed is clean at the same
+// resolution. Stripping native leaves nothing: the poll must wait for the backup search (no poll
+// deadline), never serve an empty playlist, and never ask for popout (same as native).
+function adOnly(prefix) { return pl({ seq: 100, live: 500, from: 500, to: 502, prefix: prefix, ads: [500, 501, 502] }); }
+
+test('kaicenat: native and popout ad-only, embed clean but slow: waits past the deadline, serves embed, popout never requested', function () {
+  var embed = pl({ seq: 9000, live: 490, from: 490, to: 504, prefix: 'embed-' });
+  var w = makeWorld({ popout: adOnly('popout-'), embed: embed, site: adOnly('site-'), mobile_web: adOnly('mobile_web-') });
+  w.settings.playerTypes = ['popout', 'embed', 'site', 'mobile_web']; // even when listed first
+  w.timers = [];
+  w.deps.setTimeout = function (f, ms) { w.timers.push({ f: f, ms: ms }); return w.timers.length; };
+  w.deps.clearTimeout = function () {};
+  var gate = new Promise(function (r) { w.release = r; });
+  var fast = w.deps.fetchText;
+  w.deps.fetchText = function (url) {
+    return url === backupMedia720('embed') ? gate.then(function () { return fast(url); }) : fast(url);
+  };
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var settled = false;
+  var p = w.proc.onMedia(NATIVE_720, adOnly('native-')).then(function (o) { settled = true; return o; });
+  return flush().then(function () {
+    w.timers.forEach(function (t) { t.f(); }); // any poll deadline passes
+    return flush();
+  }).then(function () {
+    assert.notOk(settled, 'no answer before the search ends (an empty stripped playlist is never served)');
+    w.release();
+    return p;
+  }).then(function (out) {
+    assert.equal(M.countSegments(out), 15, 'embed\'s playlist, not an empty one');
+    assert.equal(segUrls(out)[0], SEGB + 'embed-490.ts');
+    assert.notIncludes(out, SEGB + 'ad-');
+    assert.equal(w.tokens.indexOf('popout'), -1, 'popout never requested');
+    assert.equal(w.fetched.filter(function (u) { return u.indexOf('popout') !== -1; }).length, 0);
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:embed');
+    assert.ok(w.names().indexOf('ad-blocked-backup') !== -1);
+  });
+});
+
+test('kaicenat: every backup ad-only too: original playlist unmodified (the ad plays), never an empty one', function () {
+  var native = adOnly('native-');
+  var w = makeWorld({ popout: adOnly('popout-'), embed: adOnly('embed-'), site: adOnly('site-'), mobile_web: adOnly('mobile_web-') });
+  w.deps.setTimeout = function (f) { f(); return 1; }; // the poll deadline is already over
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, native).then(function (out) {
+    assert.equal(out, native, 'original, byte for byte');
+    assert.equal(w.tokens.indexOf('popout'), -1, 'popout never requested');
+    assert.ok(w.tokens.length > 0, 'the backups were tried');
+    assert.ok(w.names().indexOf('ad-passthrough') !== -1, 'reported');
+    assert.equal(w.names().indexOf('ad-stripped'), -1);
+    assert.notOk(w.proc.isAdSegment(SEGB + 'ad-500.ts'), 'the ad segments are not blanked: the ad plays');
+  });
+});
+
+test('first poll keeps fewer live segments than minSegments: no poll deadline either', function () {
+  var w = slowWorld({ embed: cleanFor('embed') });
+  var settled = false;
+  var p = w.proc.onMedia(NATIVE_720, PREROLL).then(function (o) { settled = true; return o; }); // 2 live
+  return flush().then(function () {
+    w.timers.forEach(function (t) { t.f(); });
+    return flush();
+  }).then(function () {
+    assert.notOk(settled);
+    w.release();
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+  });
+});
+
+// ------------------------------------------------------------------ stitched preroll live numbers
+/**
+ * Twitch stitched preroll as captured live (kaicenat, 2026-11-19): `ads` ad segments, then
+ * DISCONTINUITY and the live segments `from`..`to`. #EXT-X-TWITCH-LIVE-SEQUENCE (o.live, only
+ * once live segments are listed) is the number of the FIRST LIVE segment, not of the first one.
+ */
+function preroll(o) {
+  var lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:5', '#EXT-X-MEDIA-SEQUENCE:' + o.seq];
+  if (o.live !== undefined) lines.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + o.live);
+  lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=16.000,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"');
+  for (var a = o.firstAd || 0; a < o.ads; a++) {
+    if (a === 0) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + a * 2000).toISOString());
+    lines.push('#EXTINF:2.000,Amazon|248888310');
+    lines.push(SEGB + 'preroll-ad-' + a + '.ts');
+  }
+  for (var i = o.from; o.to !== undefined && i <= o.to; i++) {
+    if (i === o.from) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + o.ads * 2000 + (i - o.from) * 2000).toISOString());
+    lines.push('#EXTINF:2.000,live');
+    lines.push(SEGB + 'live-' + i + '.ts');
+  }
+  return lines.join('\n') + '\n';
+}
+
+test('stitched preroll passed through, then live segments appear: the live segments are served, not dropped', function () {
+  var w = makeWorld(allTypes(adOnly('backup-')));
+  w.deps.setTimeout = function (f) { f(); return 1; }; // the poll deadline is already over
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var poll1 = preroll({ seq: 0, ads: 8 });
+  var poll2 = preroll({ seq: 0, live: 58602, ads: 8, from: 58602, to: 58603 });
+  var poll3 = preroll({ seq: 2, live: 58602, firstAd: 2, ads: 8, from: 58602, to: 58605 });
+  var seq2;
+  return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
+    assert.equal(out, poll1, 'ad-only preroll, no clean backup: original');
+    assert.ok(w.names().indexOf('ad-passthrough') !== -1);
+    return w.proc.onMedia(NATIVE_720, poll2);
+  }).then(function (out) {
+    assert.includes(out, SEGB + 'live-58602.ts', 'first live segment served');
+    assert.includes(out, SEGB + 'live-58603.ts', 'second live segment served');
+    seq2 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    return w.proc.onMedia(NATIVE_720, poll3);
+  }).then(function (out) {
+    var urls = segUrls(out);
+    assert.equal(urls[urls.length - 1], SEGB + 'live-58605.ts', 'newest live segment appended');
+    assert.includes(out, SEGB + 'live-58604.ts');
+    assert.equal(urls.filter(function (u) { return u === SEGB + 'live-58602.ts'; }).length <= 1, true, 'no segment twice');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq2, 'MEDIA-SEQUENCE monotonic');
+  });
+});
+
+test('stitched preroll with live segments passed through on the first poll: next polls still serve the live segments', function () {
+  var w = makeWorld(allTypes(adOnly('backup-')));
+  w.deps.setTimeout = function (f) { f(); return 1; };
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var poll1 = preroll({ seq: 0, live: 58602, ads: 8, from: 58602, to: 58603 }); // 2 live < minSegments: thin
+  var poll2 = preroll({ seq: 2, live: 58602, firstAd: 2, ads: 8, from: 58602, to: 58605 });
+  var poll3 = preroll({ seq: 4, live: 58602, firstAd: 4, ads: 8, from: 58602, to: 58607 });
+  var seq2;
+  return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
+    assert.equal(out, poll1, 'first poll too thin to strip, no clean backup: original');
+    return w.proc.onMedia(NATIVE_720, poll2);
+  }).then(function (out) {
+    assert.includes(out, SEGB + 'live-58604.ts', 'new live segment served');
+    assert.includes(out, SEGB + 'live-58605.ts', 'new live segment served');
+    seq2 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    return w.proc.onMedia(NATIVE_720, poll3);
+  }).then(function (out) {
+    var urls = segUrls(out);
+    assert.equal(urls[urls.length - 1], SEGB + 'live-58607.ts', 'newest live segment appended');
+    assert.includes(out, SEGB + 'live-58606.ts');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq2, 'MEDIA-SEQUENCE monotonic');
+  });
+});
+
+// ------------------------------------------------------------------ join-time prewarm, parallel search
+// Purple ec29b68 / d9cafb2: prewarm the first backup type's token + master when the live master is
+// seen; on an ad poll ask every candidate type at once and take the most preferred clean answer.
+
+test('prewarm: live master answered at once (token pending), first backup type asked once per channel per TTL', function () {
+  var w = makeWorld({});
+  var pending = [];
+  w.deps.getToken = function (ch, type) { w.tokens.push(type); return new Promise(function (r) { pending.push(r); }); };
+  w.settings.playerTypes = ['popout', 'site', 'embed']; // popout = the page token type: skipped
+  w.proc = __TAS__.createProcessor(w.deps);
+  var out = w.proc.onMaster(MASTER_URL, MASTER);
+  assert.equal(typeof out, 'string', 'synchronous answer');
+  assert.ok(w.proc.knowsMedia(NATIVE_720));
+  assert.deepEqual(w.tokens, ['site']);
+  w.t += 1000;
+  w.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(w.tokens, ['site'], 'no second prewarm within backupMasterTtlMs');
+  pending.forEach(function (r) { r(null); });
+  return flush().then(function () {
+    w.t += cfg.backupMasterTtlMs;
+    w.proc.onMaster(MASTER_URL, MASTER);
+    assert.deepEqual(w.tokens, ['site', 'site'], 'again after the TTL');
+  });
+});
+
+test('prewarm: none for VOD masters or with no backup types', function () {
+  var w = makeWorld({});
+  w.proc.onMaster('https://usher.ttvnw.net/vod/123456.m3u8?sig=a&token=b', MASTER);
+  assert.deepEqual(w.tokens, []);
+  w.settings.playerTypes = [];
+  w.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(w.tokens, []);
+});
+
+test('prewarm: the ad poll reuses the prewarmed master (done or still in flight): one embed token, one embed master', function () {
+  function embedUshers(w) { return w.fetched.filter(function (u) { return u.indexOf('tok-embed') !== -1; }).length; }
+  var w1 = makeWorld({ embed: cleanFor('embed') });
+  w1.proc.onMaster(MASTER_URL, MASTER);
+  return flush().then(function () {
+    assert.equal(embedUshers(w1), 1, 'prewarm finished');
+    return w1.proc.onMedia(NATIVE_720, PREROLL);
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+    assert.equal(w1.tokens.filter(function (t) { return t === 'embed'; }).length, 1);
+    assert.equal(embedUshers(w1), 1);
+    var w2 = makeWorld({ embed: cleanFor('embed') });
+    w2.proc.onMaster(MASTER_URL, MASTER);
+    return w2.proc.onMedia(NATIVE_720, PREROLL).then(function (out2) { // prewarm still in flight
+      assertSameSegments(out2, cleanFor('embed'));
+      assert.equal(w2.tokens.filter(function (t) { return t === 'embed'; }).length, 1);
+      assert.equal(embedUshers(w2), 1);
+    });
+  });
+});
+
+/** World whose backup media fetches each wait for release(type). */
+function gatedWorld(media) {
+  var w = makeWorld(media);
+  var gates = {};
+  w.release = function (type) { gates[type].open(); };
+  cfg.backupPlayerTypes.forEach(function (t) {
+    var g = {}; g.p = new Promise(function (r) { g.open = r; }); gates[t] = g;
+  });
+  var fast = w.deps.fetchText;
+  w.asked = [];
+  w.deps.fetchText = function (url) {
+    w.asked.push(url);
+    var m = /SYNTH-([a-z_]+)-720p60\.m3u8$/.exec(url);
+    return m && gates[m[1]] ? gates[m[1]].p.then(function () { return fast(url); }) : fast(url);
+  };
+  w.deps.setTimeout = function () { return 0; }; // the poll deadline never fires here
+  w.deps.clearTimeout = function () {};
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w;
+}
+
+test('parallel: every candidate type is asked before any answers (popout skipped)', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
+    ['embed', 'site', 'mobile_web'].forEach(function (t) {
+      assert.ok(w.asked.indexOf(backupMedia720(t)) !== -1, t + ' media requested');
+    });
+    assert.equal(w.asked.filter(function (u) { return u.indexOf('popout') !== -1; }).length, 0);
+    w.release('embed'); w.release('site'); w.release('mobile_web');
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'), 'all clean: the preferred type');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
+  });
+});
+
+test('parallel: a clean less-preferred type is served without waiting for a slower preferred one', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: PREROLL });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    w.release('mobile_web');
+    w.release('site');
+    return p; // embed still pending, no deadline timer fires
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('site'));
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:site');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
+    assert.ok(w.proc.stateOf('somechannel').lockouts.mobile_web > w.t, 'type with ads locked out');
+    w.release('embed');
+    return flush();
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'site', 'a late clean answer does not change the pin');
+  });
+});
+
+test('parallel: the preferred type wins when its clean answer is known with the others', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    w.release('site'); w.release('embed'); // same turn
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+  });
+});
+
+test('parallel: one search per channel; a poll during it starts no new requests', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+  var p1 = w.proc.onMedia(NATIVE_720, PREROLL3);
+  var tokens, fetched;
+  return flush().then(function () {
+    tokens = w.tokens.length; fetched = w.asked.length;
+    var p2 = w.proc.onMedia(NATIVE_720, PREROLL3);
+    return flush().then(function () {
+      assert.equal(w.tokens.length, tokens);
+      assert.equal(w.asked.length, fetched);
+      w.release('embed'); w.release('site'); w.release('mobile_web');
+      return Promise.all([p1, p2]);
+    });
+  }).then(function (outs) {
+    assertSameSegments(outs[0], cleanFor('embed'));
+  });
+});
+
+test('parallel: at most maxBackupTypesPerPoll types asked', function () {
+  var w = makeWorld(allTypes(PREROLL));
+  w.deps.cfg = Object.assign({}, cfg, { maxBackupTypesPerPoll: 2 });
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.deepEqual(w.tokens, ['embed', 'site']);
   });
 });

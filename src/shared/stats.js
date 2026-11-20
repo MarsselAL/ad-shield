@@ -64,6 +64,7 @@
       case 'ad-blocked-backup': return kind + ' ad blocked using backup stream "' + (d.playerType || '?') + '"' + where;
       case 'ad-stripped': return kind + ' ad blocked by removing ' + (d.removed || 0) + ' ad segment(s)' + where;
       case 'ad-unremovable': return 'Ad markers without removable segments (client-side ad?)' + where;
+      case 'ad-passthrough': return kind + ' ad played: no clean backup, and removing it would leave nothing to play' + where;
       case 'ad-end': return 'Ad break ended' + where;
       case 'failure': return 'Internal error, stream passed through untouched' + (d.where ? ' [' + d.where + ']' : '');
       case 'player-reload': return 'Player reloaded after a stall' + where;

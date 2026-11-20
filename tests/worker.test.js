@@ -8,14 +8,14 @@ var ns = __TAS__;
 var cfg = ns.config;
 var KEY = cfg.messageKey;
 var parts = { m3u8Factory: ns.m3u8Factory, processorFactory: ns.processorFactory, loggerFactory: ns.loggerFactory, workerMain: ns.workerMain };
-var boot = { settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true, debug: false }, degraded: [] };
+var boot = { settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true, debug: false } };
 
 var MASTER_URL = 'https://usher.ttvnw.net/api/channel/hls/somechannel.m3u8?allow_source=true&parent_domains=example.invalid&sig=S&token=T';
 var MASTER = fixture('master.m3u8');
 var PREROLL = fixture('preroll.m3u8');
 var CLEAN = fixture('clean.m3u8');
 var NATIVE_720 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-720p60.m3u8';
-var POPOUT_CLEAN = CLEAN.replace(/SYNTH-live/g, 'SYNTH-popout-live');
+var EMBED_CLEAN = CLEAN.replace(/SYNTH-live/g, 'SYNTH-embed-live');
 function segUrls(text) { return String(text).split('\n').filter(function (l) { return l && l.charAt(0) !== '#'; }); }
 
 // ---- minimal Response stand-in (jsc has no fetch API)
@@ -128,30 +128,50 @@ test('master: parent_domains removed from the request, HEVC variants removed fro
   });
 });
 
-test('media with ads: token via page message, clean popout backup served, event posted', function () {
+test('media with ads: token via page message, clean embed backup served, event posted', function () {
   var routes = {};
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
   routes[NATIVE_720] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-site-720p60.m3u8'] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = POPOUT_CLEAN;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = PREROLL;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-embed-720p60.m3u8'] = EMBED_CLEAN;
   var scope = makeScope(routes);
   runInWorker(scope);
   return scope.fetch(MASTER_URL).then(function () {
     return scope.fetch(NATIVE_720);
   }).then(function (r) { return r.text(); }).then(function (t) {
-    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN));
+    assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN));
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
-    assert.deepEqual(tokenReqs, ['site', 'popout']);
+    // embed: prewarmed when the master was seen; the media poll with ads asks every type at once.
+    assert.deepEqual(tokenReqs, ['embed', 'site', 'mobile_web'], 'default order: embed first, popout (the page token type) skipped, no autoplay');
     var events = msgs.filter(function (m) { return m.type === 'event'; }).map(function (m) { return m.name; });
     assert.ok(events.indexOf('ad-blocked-backup') !== -1);
   });
 });
 
-test('all backups have ads: stripped playlist served; ad segment fetch answered locally with blank TS', function () {
+test('live master: answered without waiting for the backup prewarm (one embed token request)', function () {
   var routes = {};
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
-  routes[NATIVE_720] = PREROLL;
+  var scope = makeScope(routes);
+  scope.postMessage = function (m) { scope.posted.push(m); }; // the page never answers the token request
+  runInWorker(scope);
+  return scope.fetch(MASTER_URL).then(function (r) { return r.text(); }).then(function (t) {
+    assert.includes(t, 'SYNTH-720p60.m3u8');
+    var reqs = ourMessages(scope, 'token-request').map(function (m) { return m.playerType; });
+    assert.deepEqual(reqs, ['embed']);
+    return scope.fetch(MASTER_URL);
+  }).then(function () {
+    assert.equal(ourMessages(scope, 'token-request').length, 1, 'one prewarm per channel per backupMasterTtlMs');
+  });
+});
+
+test('all backups have ads: stripped playlist served; ad segment fetch answered locally with blank TS', function () {
+  // Three live segments stay after stripping (enough to serve stripped on a first poll).
+  var seg106 = 'https://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-106.ts';
+  var routes = {};
+  routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
+  routes[NATIVE_720] = PREROLL.replace('#EXT-X-TWITCH-PREFETCH:' + seg106 + '\n',
+    '#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:12.008Z\n#EXTINF:2.000,live\n' + seg106 + '\n');
   cfg.backupPlayerTypes.forEach(function (t) {
     routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-' + t + '-720p60.m3u8'] = PREROLL;
   });
@@ -231,8 +251,8 @@ function adRoutes() {
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
   routes[MASTER_URL] = MASTER;
   routes[NATIVE_720] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-site-720p60.m3u8'] = PREROLL;
-  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = POPOUT_CLEAN;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-popout-720p60.m3u8'] = PREROLL;
+  routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-embed-720p60.m3u8'] = EMBED_CLEAN;
   return routes;
 }
 
@@ -242,7 +262,7 @@ function ourMessages(scope, type) {
 
 test('disabled from boot: master and media playlists pass through unchanged, no token requests', function () {
   var scope = makeScope(adRoutes());
-  var src = ns.buildWorkerSource(parts, cfg, { settings: { enabled: false, playerTypes: cfg.backupPlayerTypes.slice() }, degraded: [] }, '');
+  var src = ns.buildWorkerSource(parts, cfg, { settings: { enabled: false, playerTypes: cfg.backupPlayerTypes.slice() } }, '');
   globalThis.self = scope;
   (new Function(src))();
   return scope.fetch(MASTER_URL).then(function (r) { return r.text(); }).then(function (t) {
@@ -263,7 +283,7 @@ test('switched off after playlists are tracked: media and ad segments go to the 
   return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); }).then(function (r) {
     return r.text();
   }).then(function (t) {
-    assert.deepEqual(segUrls(t), segUrls(POPOUT_CLEAN), 'enabled: backup served (playlist now tracked)');
+    assert.deepEqual(segUrls(t), segUrls(EMBED_CLEAN), 'enabled: backup served (playlist now tracked)');
     scope.dispatch(offMessage());
     var calls = scope.realCalls.length;
     var tokens = ourMessages(scope, 'token-request').length;
@@ -284,11 +304,12 @@ test('switched off while a media playlist is being processed: original playlist 
   runInWorker(scope);
   var origPost = scope.postMessage;
   scope.postMessage = function (m) {
-    // The first token request means processing has started: flip the switch right then.
-    if (m[KEY] && m[KEY].type === 'token-request' && !scope.flipped) { scope.flipped = true; scope.dispatch(offMessage()); }
+    // The first token request of the media poll means processing has started: flip the switch
+    // right then (the master's prewarm request comes before and is ignored).
+    if (scope.armed && m[KEY] && m[KEY].type === 'token-request' && !scope.flipped) { scope.flipped = true; scope.dispatch(offMessage()); }
     return origPost.call(scope, m);
   };
-  return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); }).then(function (r) {
+  return scope.fetch(MASTER_URL).then(function () { scope.armed = true; return scope.fetch(NATIVE_720); }).then(function (r) {
     return r.text();
   }).then(function (t) {
     assert.ok(scope.flipped, 'switch flipped mid-processing');

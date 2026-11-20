@@ -83,6 +83,11 @@ test('rulesetPlan: curated rulesets follow the Ads / Trackers switches and the m
   assert.deepEqual(yt.disableRulesetIds, ['ads_1', 'youtube']);
   assert.deepEqual(B.rulesetPlan(['ads_1', 'youtube'], true, B.defaults(), { ads: true }).enableRulesetIds, ['youtube']);
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 1 } }]).ads, 1);
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 2 } }]).ads, 1);
+  // rule 3 adds pp=oAEBogYBLg to watch-page loads, 500001 is its loop guard (allow): nothing blocked
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 3 } }, { rule: { rulesetId: 'youtube', ruleId: 500001 } }]),
+    { ads: 0, trackers: 0, cookies: 0, banners: 0 }, 'pp redirect / allow not counted');
+  assert.deepEqual(B.YOUTUBE_UNCOUNTED_RULE_IDS, [3]);
 });
 
 test('removeparam ruleset: own switch, never counted', function () {
@@ -146,7 +151,7 @@ test('hostPatterns and contentScriptPlan', function () {
 
 test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their hosts, allowlist excluded, follow Ads + Page scripts', function () {
   var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
-  assert.deepEqual(hosts, ['youtube-nocookie.com', 'youtube.com', 'youtubekids.com']);
+  assert.deepEqual(hosts, ['m.youtube.com', 'youtube-nocookie.com', 'youtube.com', 'youtubekids.com'], 'm.youtube.com (rule youtube-mobile) is also inside youtube.com');
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
   assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site', 'as-css-youtube', 'as-scriptlets']);
   var css = plan[3], sl = plan[4];
@@ -159,7 +164,7 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   assert.equal(sl.allFrames, true);
   assert.equal(sl.matchOriginAsFallback, true);
   assert.equal(sl.persistAcrossSessions, true);
-  assert.deepEqual(sl.matches, ['*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*']);
+  assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(sl.excludeMatches, ['*://*.off.com/*']);
   var noAllow = B.contentScriptPlan(true, B.defaults(), [], hosts);
   assert.equal(noAllow[noAllow.length - 1].excludeMatches, undefined);

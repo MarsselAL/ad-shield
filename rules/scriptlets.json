@@ -4,7 +4,7 @@
   "rules": [
     {
       "id": "youtube",
-      "about": "Ad data removed before the player sees it: the page-embedded player response and initial data (setter traps), every JSON.parse / Response.json (player keys always; feed and Shorts ad items only in API responses, which have responseContext), and the youtubei fetch / XHR responses. Plus the onAbnormalityDetected reporter defused the web_streaming_watch flag off (research B recipe 1-7), and the 17 s \"fake buffering\" wait of flagged accounts (a native-code callback scheduled with setTimeout 17000) cut to 17 ms (research B section 1).",
+      "about": "Ad data removed before the player sees it, with as few hooks as possible (docs/DESIGN-v2.md, YouTube): the page-embedded player response and initial data (one-time setter traps; feed, search and Shorts ad items are pruned only here, later feed pages are left to rules/cosmetic/youtube.css), the player ad keys and a top-level Shorts entries list's isAd items in every JSON.parse / Response.json (plain key lookups after an indexOf needle check), and the youtubei player, get_watch, playlist, resolve_url and Shorts sequence fetch / XHR responses (player keys, the resolve_url prefetch playerResponse at endpoint.watchEndpoint.unserializedPrefetchData, and the Shorts isAd entries). Plus the 17 s \"fake buffering\" wait of flagged accounts (a native-code callback scheduled with setTimeout 17000) cut to 17 ms (research B section 1). No Promise.prototype.then or Function.prototype.toString hook and no ytcfg flag changes (uBO dropped onAbnormalityDetected and web_streaming_watch). Also uBO's \"oaeb\" tag edit (params oAEBogYBLg, plus #reloadxhr appended to playbackContext.contentPlaybackContext.referer; uAssets filters/quick-fixes.txt, ef0ac51 2026-11-02, dcf5811 2026-11-14 added oaeb, 1fbf62c 2026-11-17) on the two requests that fetch a player response: the youtubei /player request body (only requests with attestationRequest, client WEB) and the playerRequest of the get_watch request that in-page navigation sends (client WEB), by edit-request-body inside the fetch / XHR send wrappers (gzip Request bodies gunzipped and re-gzipped), where uBO uses a JSON.stringify hook. A direct watch-page load takes its player response from the HTML, so rules/youtube.json adds pp=oAEBogYBLg to www.youtube.com/watch page loads (DNR redirect). Why: for a video with a pre-roll YouTube's SABR stream answers with an ad context, a snackbar message and a backoff of 4-9 s (measured 2026-11-20, docs/DESIGN-v2.md); a client that plays the ad hides it behind the ad, a client without ad data shows a black player for that long. With oAEBogYBLg the response has no ad keys and no backoff (also without the extension). Not uBO's \"channel\" tag (clientScreen CHANNEL: UNPLAYABLE, answer/3037019, measured 2026-11-19) and not \"yahi\" (params YAHI: the same backoff, measured 2026-11-20). No userAgent tag, tag rotation or video reload.",
       "hosts": [
         "youtube.com",
         "youtube-nocookie.com",
@@ -23,37 +23,53 @@
         ],
         [
           "json-prune",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds"
-        ],
-        [
-          "json-prune",
-          "..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
-          "responseContext"
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"
         ],
         [
           "json-prune-fetch-response",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
-          "/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
         ],
         [
           "json-prune-xhr-response",
-          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds ..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
-          "/\\/youtubei\\/v1\\/(player|get_watch|next|browse|search|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
+          "adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd",
+          "/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"
         ],
         [
-          "prevent-promise-then-callback",
-          "onAbnormalityDetected"
+          "edit-request-body",
+          "/\\/youtubei\\/v1\\/player(\\?|$)/",
+          "attestationRequest",
+          "context.client.clientName==\"WEB\"",
+          "params=\"oAEBogYBLg\"",
+          "playbackContext.contentPlaybackContext.referer+=#reloadxhr"
         ],
         [
-          "set-constant",
-          "ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch",
-          "false"
+          "edit-request-body",
+          "/\\/youtubei\\/v1\\/get_watch(\\?|$)/",
+          "playerRequest",
+          "context.client.clientName==\"WEB\"",
+          "playerRequest.params=\"oAEBogYBLg\"",
+          "playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"
         ],
         [
           "adjust-setTimeout",
           "[native code]",
           "17000",
           "0.001"
+        ]
+      ]
+    },
+    {
+      "id": "youtube-mobile",
+      "about": "m.youtube.com only (as uBO and AdGuard): ad items (adSlotRenderer) removed from the itemSectionRenderer.contents lists of the youtubei get_watch fetch response, the watch page's list below the player. The body is parsed only when it contains the word adSlotRenderer.",
+      "hosts": [
+        "m.youtube.com"
+      ],
+      "scriptlets": [
+        [
+          "json-prune-fetch-response",
+          "..itemSectionRenderer.contents.[-].adSlotRenderer",
+          "/\\/youtubei\\/v1\\/get_watch(\\?|$)/"
         ]
       ]
     },

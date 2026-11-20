@@ -6,6 +6,7 @@ Usage:
     python3 -I tools/youtube_test.py --only ext      # with the extension only
     python3 -I tools/youtube_test.py --only noext    # control run without the extension
     python3 -I tools/youtube_test.py --seconds 45 --video kJQP7kiw5Fk
+    python3 -I tools/youtube_test.py --only ext --extension /path/to/copy --tag no-dnr   # another build
 
 Reuses the CDP pipe client from tools/live_test.py (fresh profile, quiet flags, extension loaded
 with Extensions.loadUnpacked). The user agent is the normal Chrome one (no "Headless"). A
@@ -16,6 +17,10 @@ debug flag; and it reports which ad keys (adPlacements, playerAds, adSlots) were
   - served: in the page HTML and in /youtubei/v1/player responses as they came off the network,
   - seen by the page: in window.ytInitialPlayerResponse and in movie_player.getPlayerResponse().
 "played" means the content video's currentTime passed 3 s while no ad was showing.
+Playback health of the main <video> (shared with live_test: stall events and ms, decoded / dropped
+frames, resolution over time and time below 720p, paused ms and pause events not caused by the
+harness) is sampled every 2 s per video; report.md gets a "Playback health" section per run and a
+side-by-side table when both runs exist.
 Results: results/<timestamp>-youtube/ (report.json, report.md, screenshots); results/ is not
 committed. This sends real traffic to youtube.com. Headless profiles often get no ads at all,
 so the run without the extension is the control.
@@ -87,6 +92,8 @@ PLAYER_BOX_JS = r"""(() => {
   return r.width ? [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)] : null;
 })()"""
 
+HEALTH_JS = lt.health_js("document.querySelector('#movie_player video') || document.querySelector('video')")
+
 SW_SCRIPTS_JS = "chrome.scripting.getRegisteredContentScripts().then(s => s.map(x => x.id))"
 
 
@@ -155,6 +162,7 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
         except lt.CDPError:
             continue
         if st["host"].startswith("consent.") or not net.consented:
+            lt.health_mark(cdp, sid)
             clicked = cdp.evaluate(sid, CONSENT_JS)
             if clicked:
                 consent = net.consented = clicked
@@ -164,7 +172,7 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
                 continue
         if st["host"] == "www.youtube.com" and st["t"] is not None:
             break
-    samples, shots, nudged = [], [], False
+    samples, shots, nudged, health = [], [], False, []
     first_ad_shot = False
     for i in range(seconds):
         time.sleep(1)
@@ -175,14 +183,18 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
             s = {"error": str(e)}
         s["i"] = i
         samples.append(s)
+        if i % 2 == 0:
+            health.append(lt.health_sample(cdp, sid, HEALTH_JS, video_id))
         if i < 15 and not net.consented:
             # The in-page consent dialog can appear after the player; it pauses the video.
+            lt.health_mark(cdp, sid)
             clicked = cdp.evaluate(sid, CONSENT_JS)
             if clicked:
                 consent = net.consented = clicked
                 s["consentClicked"] = clicked
         if i in (5, 15) and s.get("paused") and not s.get("adShowing"):
             # Autoplay stalled (headless / no gesture): one real click on the player, then play().
+            lt.health_mark(cdp, sid, 5000)  # a click on the player toggles play / pause
             box = cdp.evaluate(sid, PLAYER_BOX_JS)
             if box:
                 for typ in ("mouseMoved", "mousePressed", "mouseReleased"):
@@ -196,6 +208,7 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
             first_ad_shot = True
             shots.append(screenshot(cdp, sid, os.path.join(outdir, "%s-%s-ad.png" % (tag, video_id))))
     shots.append(screenshot(cdp, sid, os.path.join(outdir, "%s-%s-end.png" % (tag, video_id))))
+    health.append(lt.health_sample(cdp, sid, HEALTH_JS, video_id))
     net.pump()
     content_t = [s["t"] for s in samples if s.get("t") is not None and not s.get("adShowing")]
     last = next((s for s in reversed(samples) if "host" in s), {})
@@ -215,18 +228,20 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
         "adSlotRenderersInDom": last.get("adSlotRenderers"),
         "pageExceptions": net.exceptions[:10], "pageExceptionCount": len(net.exceptions),
         "title": last.get("title"), "screenshots": [s for s in shots if s],
+        "health": lt.health_summary(health),
+        "healthSamples": health,
         "samples": samples,
     }
 
 
-def run_once(with_extension, videos, seconds, outdir):
+def run_once(with_extension, videos, seconds, outdir, extension=None):
     cdp = lt.PipeCDP(lt.LIVE_FLAGS, headless=True)
     tag = "ext" if with_extension else "noext"
     try:
         ua = cdp.send("Browser.getVersion").get("userAgent", "").replace("HeadlessChrome", "Chrome")
         ext_id, registered = None, None
         if with_extension:
-            ext_id = lt.load_extension(cdp)
+            ext_id = lt.load_extension(cdp, extension)
             sw = lt.find_sw_target(cdp, ext_id)
             if sw:
                 sw_sid = lt.attach(cdp, sw["targetId"])
@@ -251,8 +266,10 @@ def run_once(with_extension, videos, seconds, outdir):
                 r["pageSaw"]["initialKeys"], r["pageSaw"]["playerKeys"], r["served"]["htmlAdKeys"],
                 r["served"]["playerResponsesWithAdKeys"], r["served"]["playerResponses"], r["served"]["playerResponseAdKeys"]), flush=True)
             results.append(r)
-        return {"withExtension": with_extension, "extensionId": ext_id, "registeredScripts": registered,
-                "userAgent": ua, "videos": results}
+        all_health = [h for r in results for h in r["healthSamples"]]  # grouped by video id
+        return {"withExtension": with_extension, "extensionId": ext_id, "extensionPath": extension or lt.ROOT if with_extension else None,
+                "registeredScripts": registered,
+                "userAgent": ua, "health": lt.health_summary(all_health), "videos": results}
     finally:
         cdp.close()
 
@@ -262,6 +279,7 @@ def write_md(outdir, runs, seconds):
              "Each video watched for %d s in a fresh headless profile. Ad keys: %s." % (seconds, ", ".join(AD_KEYS)), ""]
     for run in runs:
         lines += ["## %s" % ("With Ad Shield" if run["withExtension"] else "Without extension (control)"), "",
+                  "Extension: %s" % (run.get("extensionPath") or "-"), "",
                   "Registered scripts: %s" % (run.get("registeredScripts") or "-"), "",
                   "| Video | Played | Max content t | ad-showing s | Skip btn | SSAP | Wall | Page saw (initial / player) | Served (HTML / player responses) | Page exceptions |",
                   "|---|---|---|---|---|---|---|---|---|---|"]
@@ -271,7 +289,29 @@ def write_md(outdir, runs, seconds):
                 v["enforcementSeen"], v["pageSaw"]["initialKeys"], v["pageSaw"]["playerKeys"], v["served"]["htmlAdKeys"],
                 v["served"]["playerResponsesWithAdKeys"], v["served"]["playerResponses"], v["served"]["playerResponseAdKeys"],
                 v["pageExceptionCount"]))
+        lines += ["", "### Playback health (%s)" % ("with Ad Shield" if run["withExtension"] else "without extension"), ""]
+        lines += lt.HEALTH_MD_HEAD
+        for v in run["videos"]:
+            lines.append(lt.health_md_row(v["video"], v.get("health")))
+        lines.append(lt.health_md_row("**all videos**", run.get("health")))
         lines.append("")
+    if len(runs) >= 2:
+        lines += ["## Playback health: with vs without the extension", "",
+                  "Totals over all videos (separate fresh profiles, one after the other).", ""]
+        lines += lt.health_compare_md([("with Ad Shield" if r["withExtension"] else "without extension", r.get("health"))
+                                       for r in runs])
+        lines += ["", "| Video | " + " | ".join("%s: stall events / ms / dropped %% / below 720p %% / pauses" % (
+            "ext" if r["withExtension"] else "noext") for r in runs) + " |", "|---" * (len(runs) + 1) + "|"]
+        for vid in [v["video"] for v in runs[0]["videos"]]:
+            cells = []
+            for r in runs:
+                h = next((v.get("health") for v in r["videos"] if v["video"] == vid), None) or {}
+                cells.append("%s / %s / %s / %s / %s" % (h.get("stall_events"), h.get("stall_ms"), h.get("dropped_pct"),
+                                                         h.get("below_720p_pct"), h.get("pause_events")))
+            lines.append("| %s | %s |" % (vid, " | ".join(cells)))
+        lines.append("")
+    lines += ["Playback health: stall ms = time the playhead did not advance while not paused (ad playback "
+              "included); frames from getVideoPlaybackQuality(); pauses exclude the harness's own clicks / play().", ""]
     with open(os.path.join(outdir, "report.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -281,15 +321,19 @@ def main(argv=None):
     ap.add_argument("--only", choices=["ext", "noext"])
     ap.add_argument("--seconds", type=int, default=30)
     ap.add_argument("--video", action="append", help="video id (repeatable); default: three popular videos")
+    ap.add_argument("--extension", metavar="DIR", help="unpacked extension folder to load (default: this checkout)")
+    ap.add_argument("--tag", help="suffix for the results folder name, e.g. the variant under test")
     args = ap.parse_args(argv)
+    if args.extension and not os.path.isfile(os.path.join(args.extension, "manifest.json")):
+        ap.error("--extension: no manifest.json in %s" % args.extension)
     videos = [(v, v) for v in args.video] if args.video else VIDEOS
-    outdir = lt.results_dir("youtube")
+    outdir = lt.results_dir("youtube" + ("-" + re.sub(r"[^A-Za-z0-9_.-]", "_", args.tag) if args.tag else ""))
     runs = []
     for with_ext in (True, False):
         if args.only and args.only != ("ext" if with_ext else "noext"):
             continue
         print("ext" if with_ext else "noext", flush=True)
-        runs.append(run_once(with_ext, videos, args.seconds, outdir))
+        runs.append(run_once(with_ext, videos, args.seconds, outdir, os.path.abspath(args.extension) if args.extension else None))
     with open(os.path.join(outdir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(runs, f, indent=1)
     write_md(outdir, runs, args.seconds)

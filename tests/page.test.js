@@ -1,13 +1,14 @@
 /*
  * Page script (MAIN world) against browser stubs: Worker wrapping, the playerType rewrite and
- * recovery must all stand down once the bridge reports settings.enabled === false.
+ * playback health must all stand down once the bridge reports settings.enabled === false.
+ * Health samples the video only while it plays: no timer otherwise, no player action here.
  * One page.js install per jsc process (it has an install guard), so the tests run in order.
  */
 load('tests/lib/browser-stubs.js');
 var env = installBrowserStubs();
 loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/frame.js',
   'src/core/m3u8.js', 'src/core/gql.js', 'src/core/processor.js', 'src/worker/worker-main.js',
-  'src/core/worker-source.js', 'src/page/recovery.js');
+  'src/core/worker-source.js', 'src/page/health.js');
 var cfg = __TAS__.config;
 var S = __TAS__.settings;
 var KEY = cfg.messageKey;
@@ -33,6 +34,13 @@ function workerSays(w, msg) {
 }
 
 function timerCount() { return Object.keys(__timers.list).length; }
+
+// The player's main <video> (MSE: blob: source), found by health.js through the document.
+var video = { nodeName: 'VIDEO', currentSrc: 'blob:https://www.twitch.tv/v', src: '', currentTime: 5, paused: false, ended: false,
+  pause: function () { throw new Error('page tests must not touch the player'); },
+  play: function () { throw new Error('page tests must not touch the player'); } };
+document.querySelectorAll = function (sel) { return sel === cfg.player.videoSelector ? [video] : []; };
+function mediaEvent(type) { document.dispatchEvent({ type: type, target: video, isTrusted: true }); }
 
 test('hooks installed: fetch and Worker replaced, namespace removed, hello sent', function () {
   assert.ok(globalThis.fetch !== stubFetch, 'fetch hooked');
@@ -81,32 +89,73 @@ test('disabled: page token request body passed through untouched', function () {
   });
 });
 
-test('disabled: in-flight worker token requests get null without a GQL request; recovery stays idle', function () {
+test('disabled: in-flight worker token requests get null without a GQL request; health stays idle', function () {
   var w = env.workers[0];
   var fetchesBefore = env.fetches.length;
   var timersBefore = timerCount();
   workerSays(w, { type: 'token-request', id: 7, channel: 'somechannel', playerType: 'popout' });
   workerSays(w, { type: 'event', name: 'playlist-switch', data: { channel: 'somechannel' } });
   workerSays(w, { type: 'event', name: 'ad-end', data: { channel: 'somechannel' } });
+  mediaEvent('playing');
   return Promise.resolve().then(function () {
     assert.equal(env.fetches.length, fetchesBefore, 'no token fetch');
     var reply = w.posted.map(function (m) { return m[KEY]; }).filter(function (m) { return m.type === 'token-response'; });
     assert.equal(reply.length, 1);
     assert.equal(reply[0].id, 7);
     assert.equal(reply[0].token, null);
-    assert.equal(timerCount(), timersBefore, 'recovery did not arm a watch timer');
+    assert.equal(timerCount(), timersBefore, 'health started no sampling timer');
   });
 });
 
-test('re-enabled: new workers are wrapped again and recovery arms after a switch', function () {
+test('re-enabled: new workers are wrapped again; health samples only while the video plays', function () {
   env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
   var w = new Worker(TWITCH_WORKER);
   assert.equal(w.scriptURL.indexOf('blob:'), 0);
   var timersBefore = timerCount();
-  workerSays(w, { type: 'event', name: 'playlist-switch', data: { channel: 'somechannel' } });
-  assert.equal(timerCount(), timersBefore + 1, 'recovery watch armed');
-  // Switching off while a watch runs: the next tick disarms without touching the player.
+  video.paused = true;
+  workerSays(w, { type: 'event', name: 'playlist-switch', data: { channel: 'somechannel', to: 'stripped' } });
+  assert.equal(timerCount(), timersBefore, 'paused video: no timer');
+  video.paused = false;
+  mediaEvent('playing');
+  assert.equal(timerCount(), timersBefore + 1, 'playing video: one sampling timer');
+  workerSays(w, { type: 'event', name: 'playlist-switch', data: { channel: 'somechannel', to: 'native' } });
+  assert.equal(timerCount(), timersBefore + 1, 'still one timer');
+  // Health events are debug-only: none reach the bridge with debug off.
+  video.currentTime += 1;
+  __advanceTimers(cfg.health.reportMs);
+  assert.equal(env.messages(cfg.events.toBridge).filter(function (m) { return m.name === 'health'; }).length, 0);
+  // Switching off while sampling: the next sample stops the timer without touching the player.
   env.toPage(cfg, { type: 'settings', settings: settingsWith(false) });
-  __advanceTimers(cfg.recovery.checkIntervalMs);
-  assert.equal(timerCount(), timersBefore, 'watch timer cleared');
+  __advanceTimers(cfg.health.sampleMs);
+  assert.equal(timerCount(), timersBefore, 'sampling timer cleared');
+});
+
+test('no degrade message to workers any more (strip-only mode was recovery-only)', function () {
+  env.workers.forEach(function (x) {
+    x.posted.forEach(function (m) { assert.ok(m[KEY].type !== 'degrade'); });
+  });
+  var hellos = env.messages(cfg.events.toBridge).filter(function (m) { return m.type === 'hello'; });
+  assert.equal(hellos[0].degraded, undefined);
+});
+
+// Parallel backup search (Purple d9cafb2): the worker asks for several playerTypes at once; each
+// gets its own GQL request right away (no queue), with the playerType the worker asked for.
+test('enabled: concurrent worker token requests each start their own GQL request at once', function () {
+  env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  var w = new Worker(TWITCH_WORKER);
+  var before = env.fetches.length;
+  var types = ['embed', 'site', 'mobile_web'];
+  types.forEach(function (t, i) { workerSays(w, { type: 'token-request', id: 30 + i, channel: 'somechannel', playerType: t }); });
+  var sent = env.fetches.slice(before);
+  assert.equal(sent.length, 3, 'all three requested synchronously');
+  sent.forEach(function (f, i) {
+    assert.equal(f.input, cfg.gql.url);
+    assert.includes(f.init.body, '"playerType":"' + types[i] + '"', 'not rewritten to the page token type');
+  });
+  var p = Promise.resolve();
+  for (var k = 0; k < 6; k++) p = p.then(function () {});
+  return p.then(function () {
+    var replies = w.posted.map(function (m) { return m[KEY]; }).filter(function (m) { return m.type === 'token-response'; });
+    assert.deepEqual(replies.map(function (m) { return m.id; }).sort(), [30, 31, 32]);
+  });
 });

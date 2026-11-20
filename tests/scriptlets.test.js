@@ -346,6 +346,18 @@ test('makePruner.mayMatch: true only when the text has the last word of some pat
   assert.ok(L.makePruner('[-].[]').mayMatch('{"x":1}'), 'a path with no key in it: every text is a candidate');
 });
 
+test('makePruner(obj, text): a deep path walks only when its own needle is in the text', function () {
+  var p = L.makePruner('adPlacements ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd');
+  var touches = [];
+  var inner = watched({ entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] }, touches);
+  var o = { adPlacements: [1], deep: inner };
+  assert.equal(p(o, '{"adPlacements":[1]}'), 1, 'plain key removed');
+  assert.deepEqual(touches, [], 'no isAd in the text: the deep path never walked');
+  var o2 = { adPlacements: [1], deep: { entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] } };
+  assert.equal(p(o2, '{"adPlacements":[1],"isAd":true}'), 2, 'needle present: walked');
+  assert.equal(p({ deep: { entries: [{ command: { reelWatchEndpoint: { adClientParams: { isAd: true } } } }] } }), 1, 'no text: every path, as before');
+});
+
 test('json-prune: JSON.parse of a needle-free string is not walked; with a needle it is pruned as before', function () {
   var win = fakeWin();
   var touches = [];
@@ -449,7 +461,8 @@ test('prevent-setTimeout: needle and delay', function () {
 });
 
 test('adjust-setTimeout: matching source and delay shortened; others untouched; looks native', function () {
-  var FP = { toString: Function.prototype.toString };
+  var nativeTs = Function.prototype.toString;
+  var FP = { toString: nativeTs };
   var win = fakeWin('www.youtube.com');
   win.Function = { prototype: FP };
   var base = win.setTimeout;
@@ -465,7 +478,9 @@ test('adjust-setTimeout: matching source and delay shortened; others untouched; 
   assert.equal(win.timers[2].ms, 17000, 'non-matching source untouched');
   win.setTimeout('x()', 17000);
   assert.equal(win.timers[3].ms, 17000, 'string callback that does not match');
-  assert.equal(FP.toString.call(win.setTimeout), FP.toString.call(base), 'toString shows the original');
+  assert.equal(win.setTimeout.toString(), nativeTs.call(base), 'own toString shows the original');
+  assert.equal(String(win.setTimeout), nativeTs.call(base), 'String() too');
+  assert.ok(FP.toString === nativeTs, "the realm's Function.prototype.toString is not patched");
   assert.equal(win.setTimeout.name, base.name);
   // any delay, default factor 0.05, string callback, clamping
   var w2 = fakeWin('x.com');
@@ -484,6 +499,38 @@ test('adjust-setTimeout: matching source and delay shortened; others untouched; 
   run(w4, 'adjust-setTimeout', ['x', 'abc']);
   assert.ok(w4.setTimeout === b4, 'bad delay: not wrapped');
   assert.notOk(L.scriptlets['adjust-setTimeout'].frames, 'not re-applied to child frames');
+});
+
+/** A second copy of lib.js whose captured Function.prototype.toString counts its calls. */
+function toStringCountingLib() {
+  var FPT = Function.prototype, orig = FPT.toString, c = { calls: 0 };
+  FPT.toString = function toString() { c.calls++; return orig.call(this); };
+  try { load('src/scriptlets/lib.js'); c.lib = asScriptlets; } finally { FPT.toString = orig; asScriptlets = L; }
+  return c;
+}
+
+test('adjust-setTimeout: other delays never read the callback source (no toString of any kind)', function () {
+  var c = toStringCountingLib();
+  var win = fakeWin('www.youtube.com');
+  c.lib.scriptlets['adjust-setTimeout'](win, ['[native code]', '17000', '0.001'], log);
+  var own = 0;
+  var cb = function () {};
+  cb.toString = function () { own++; return 'function () { [native code] }'; };
+  var objCb = { toString: function () { own++; return '[native code]'; } };
+  var bound = function () {}.bind(null);
+  [0, 16999, 17001, 5000, undefined].forEach(function (ms) {
+    win.setTimeout(cb, ms);
+    win.setTimeout(objCb, ms);
+    win.setTimeout(bound, ms);
+  });
+  assert.equal(c.calls, 0, 'Function.prototype.toString not called for other delays');
+  assert.equal(own, 0, "the callback's own toString not called");
+  assert.ok(win.timers.every(function (t) { return t.ms !== 17; }), 'nothing shortened');
+  win.setTimeout(bound, 17000);
+  assert.equal(win.timers[win.timers.length - 1].ms, 17, '17000 native: shortened');
+  assert.equal(c.calls, 1, 'source read once, only for the matching delay');
+  win.setTimeout(function () { return 'page'; }, 17000);
+  assert.equal(win.timers[win.timers.length - 1].ms, 17000, '17000 page code: untouched');
 });
 
 test('rules: adjust-setTimeout for the 17 s fake-buffering delay on youtube.com', function () {
@@ -509,18 +556,29 @@ test('prevent-promise-then-callback: the onAbnormalityDetected callback becomes 
 });
 
 // ------------------------------------------------------------------ native look and frames
-test('wrapped functions keep name / length and look native through the patched toString', function () {
-  var FP = { toString: Function.prototype.toString };
+test('wrapped functions keep name / length and get a non-enumerable own toString; Function.prototype.toString untouched', function () {
+  var nativeTs = Function.prototype.toString;
+  var FP = { toString: nativeTs };
   var win = fakeWin();
   win.Function = { prototype: FP };
   var orig = win.JSON.parse;
+  var src = nativeTs.call(orig);
   run(win, 'json-prune', ['adPlacements']);
+  run(win, 'json-prune', ['adSlots']); // wrapped twice: still the first original's source
   assert.ok(win.JSON.parse !== orig);
   assert.equal(win.JSON.parse.name, 'parse');
   assert.equal(win.JSON.parse.length, 2);
-  assert.equal(FP.toString.call(win.JSON.parse), Function.prototype.toString.call(orig));
-  assert.includes(FP.toString.call(FP.toString), '[native code]', 'the toString patch hides itself');
-  assert.throws(function () { FP.toString.call(5); }, 'non-functions still throw');
+  assert.equal(win.JSON.parse.toString(), src);
+  assert.equal(win.JSON.parse + '', src);
+  var d = Object.getOwnPropertyDescriptor(win.JSON.parse, 'toString');
+  assert.ok(d && d.enumerable === false, 'own, non-enumerable');
+  assert.deepEqual(Object.keys(win.JSON.parse), [], 'nothing enumerable added');
+  assert.includes(win.JSON.parse.toString.toString(), '[native code]', 'the own toString looks native itself');
+  assert.ok(FP.toString === nativeTs, 'no realm-wide toString patch');
+  assert.ok(Function.prototype.toString === nativeTs, 'global Function.prototype.toString untouched');
+  var parsed = win.JSON.parse(PLAYER);
+  assert.equal(parsed.adPlacements, undefined, 'still prunes');
+  assert.equal(parsed.adSlots, undefined, 'second wrapper too');
 });
 
 test('runner: frame scriptlets reach a same-origin about:blank child through contentWindow', function () {
@@ -577,7 +635,7 @@ test('rules/scriptlets.json: every scriptlet exists, hosts are plain domains', f
   });
 });
 
-test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts, ytcfg flag, abnormality reporter', function () {
+test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts; no ytcfg flag, no abnormality hook', function () {
   var bodies = {
     '/youtubei/v1/player?prettyPrint=false': PLAYER,
     '/youtubei/v1/browse?prettyPrint=false': JSON.stringify(feed()),
@@ -592,27 +650,204 @@ test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts,
   win.ytInitialData = feed();
   assert.deepEqual(feedIds(win.ytInitialData), ['a', 'b', 'more', 'c'], 'ytInitialData');
   assertPlayerClean(win.JSON.parse(PLAYER), 'JSON.parse');
+  assert.deepEqual(feedIds(win.JSON.parse(JSON.stringify(feed()))), ['a', 'AD', 'b', 'more', 'AD', 'c'], 'JSON.parse: feed items no longer pruned (youtube.css hides them)');
   win.ytcfg = { data_: {} };
   win.ytcfg.data_.EXPERIMENT_FLAGS = { web_streaming_watch: true };
-  assert.equal(win.ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch, false);
+  assert.equal(win.ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch, true, 'web_streaming_watch left alone');
   var x = new win.XMLHttpRequest();
   x.open('POST', '/youtubei/v1/player?prettyPrint=false');
   x.send();
   assertPlayerClean(JSON.parse(x.responseText), 'XHR');
   var hits = [];
-  win.Promise.resolve().then(function () { hits.push('a'); this.onAbnormalityDetected(); });
+  win.Promise.resolve().then(function onAbnormalityDetected() { hits.push('a'); });
   return win.fetch('/youtubei/v1/player?prettyPrint=false').then(function (r) { return r.text(); }).then(function (t) {
     assertPlayerClean(JSON.parse(t), 'fetch /player');
     return win.fetch('/youtubei/v1/browse?prettyPrint=false');
   }).then(function (r) { return r.text(); }).then(function (t) {
-    assert.deepEqual(feedIds(JSON.parse(t)), ['a', 'b', 'more', 'c'], 'fetch /browse');
+    assert.deepEqual(feedIds(JSON.parse(t)), ['a', 'AD', 'b', 'more', 'AD', 'c'], 'fetch /browse not pruned');
     return win.fetch('/youtubei/v1/reel/reel_watch_sequence?x=1');
   }).then(function (r) { return r.json(); }).then(function (o) {
     assert.equal(o.entries.length, 2, 'Shorts ad entry removed');
     return win.fetch('/youtubei/v1/player/heartbeat');
   }).then(function (r) {
     assert.equal(r.headers.get('content-length'), '999', 'heartbeat not matched by the URL pattern');
-    assert.deepEqual(hits, []);
+    assert.deepEqual(hits, ['a'], 'then() callbacks run as written');
+  });
+});
+
+test('YouTube rules: no Promise.prototype.then and no Function.prototype.toString patch', function () {
+  var nativeTs = Function.prototype.toString, nativeThen = Promise.prototype.then;
+  var FP = { toString: nativeTs };
+  var win = fakeWin('www.youtube.com');
+  win.Function = { prototype: FP };
+  var thenBefore = win.Promise.prototype.then;
+  var ran = R.run(win, L, RULES, log);
+  assert.equal(ran.indexOf('prevent-promise-then-callback'), -1, ran.join());
+  assert.equal(ran.indexOf('set-constant'), -1, ran.join());
+  assert.notOk(Object.prototype.hasOwnProperty.call(win.Promise.prototype, 'then'), 'no then on the page Promise');
+  assert.ok(win.Promise.prototype.then === thenBefore && thenBefore === nativeThen, 'then untouched');
+  assert.ok(FP.toString === nativeTs, "the page realm's Function.prototype.toString untouched");
+  assert.ok(Function.prototype.toString === nativeTs && Promise.prototype.then === nativeThen, 'globals untouched');
+  var names = R.pick(RULES, 'www.youtube.com').map(function (s) { return s.join(' '); });
+  names.forEach(function (n) {
+    assert.notIncludes(n, 'onAbnormalityDetected');
+    assert.notIncludes(n, 'web_streaming_watch');
+    assert.notIncludes(n, 'responseContext');
+  });
+  assert.equal(R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'json-prune'; }).length, 1, 'only the player-keys json-prune');
+});
+
+test('YouTube rules: fetch / XHR pruning applies to /youtubei/v1/player, not to /youtubei/v1/browse', function () {
+  var c = countingLib();
+  var bodies = {
+    '/youtubei/v1/player?prettyPrint=false': PLAYER,
+    '/youtubei/v1/browse?prettyPrint=false': PLAYER,
+    '/youtubei/v1/next?prettyPrint=false': PLAYER,
+    '/youtubei/v1/search?prettyPrint=false': PLAYER,
+    '/youtubei/v1/get_watch?prettyPrint=false': PLAYER,
+    '/youtubei/v1/navigation/resolve_url?prettyPrint=false': PLAYER
+  };
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, c.lib, RULES, log);
+  c.parses = 0; // setup: edit-request-body parses its JSON edit values once
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/browse?prettyPrint=false');
+  x.send();
+  assert.equal(x.responseText, PLAYER, 'XHR /browse untouched');
+  assert.equal(c.parses, 0, 'XHR /browse body not parsed');
+  x.open('POST', '/youtubei/v1/player?prettyPrint=false');
+  x.send();
+  assertPlayerClean(JSON.parse(x.responseText), 'XHR /player');
+  var parses = c.parses;
+  var unpruned = ['browse', 'next', 'search'];
+  return unpruned.reduce(function (p, ep) {
+    return p.then(function () { return win.fetch('/youtubei/v1/' + ep + '?prettyPrint=false'); }).then(function (r) {
+      assert.equal(r.headers.get('content-length'), '999', ep + ': the original response');
+      assert.equal(c.parses, parses, ep + ': body not read or parsed');
+    });
+  }, Promise.resolve()).then(function () {
+    return ['player', 'get_watch', 'navigation/resolve_url'].reduce(function (p, ep) {
+      return p.then(function () { return win.fetch('/youtubei/v1/' + ep + '?prettyPrint=false'); }).then(function (r) {
+        assert.equal(r.headers.get('content-length'), null, ep + ': pruned copy');
+        return r.text();
+      }).then(function (t) { assertPlayerClean(JSON.parse(t), ep); });
+    }, Promise.resolve());
+  });
+});
+
+function resolveUrlResponse() {
+  return {
+    responseContext: { visitorData: 'v' },
+    endpoint: {
+      commandMetadata: { webCommandMetadata: { url: '/watch?v=jNQXAC9IVRw' } },
+      watchEndpoint: { videoId: 'jNQXAC9IVRw', unserializedPrefetchData: { playerResponse: player() } }
+    }
+  };
+}
+function assertResolveUrlClean(o, msg) {
+  assert.equal(o.responseContext.visitorData, 'v', msg + ' responseContext kept');
+  assert.equal(o.endpoint.commandMetadata.webCommandMetadata.url, '/watch?v=jNQXAC9IVRw', msg + ' commandMetadata kept');
+  assert.equal(o.endpoint.watchEndpoint.videoId, 'jNQXAC9IVRw', msg + ' watchEndpoint kept');
+  assertPlayerClean(o.endpoint.watchEndpoint.unserializedPrefetchData.playerResponse, msg + ' prefetch playerResponse');
+}
+
+test('YouTube rules: navigation/resolve_url prefetch playerResponse (endpoint.watchEndpoint.unserializedPrefetchData.playerResponse) loses playerAds / adPlacements / adSlots, fetch and XHR', function () {
+  var body = JSON.stringify(resolveUrlResponse());
+  var url = '/youtubei/v1/navigation/resolve_url?prettyPrint=false';
+  var bodies = {};
+  bodies[url] = body;
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, L, RULES, log);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', url);
+  x.send();
+  assertResolveUrlClean(JSON.parse(x.responseText), 'XHR');
+  return win.fetch(url).then(function (r) { return r.json(); }).then(function (o) {
+    assertResolveUrlClean(o, 'fetch');
+  });
+});
+
+test('YouTube rules: /youtubei/v1/player_xyz and /youtubei/v1/playerX are not matched by the player URL pattern', function () {
+  var c = countingLib();
+  var bodies = { '/youtubei/v1/player_xyz?prettyPrint=false': PLAYER, '/youtubei/v1/playerX': PLAYER };
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, c.lib, RULES, log);
+  c.parses = 0; // setup: edit-request-body parses its JSON edit values once
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/player_xyz?prettyPrint=false');
+  x.send();
+  assert.equal(x.responseText, PLAYER, 'XHR /player_xyz untouched');
+  assert.equal(c.parses, 0, 'XHR /player_xyz body not parsed');
+  return ['player_xyz?prettyPrint=false', 'playerX'].reduce(function (p, ep) {
+    return p.then(function () { return win.fetch('/youtubei/v1/' + ep); }).then(function (r) {
+      assert.equal(r.headers.get('content-length'), '999', ep + ': the original response');
+      assert.equal(c.parses, 0, ep + ': body not read or parsed');
+    });
+  }, Promise.resolve());
+});
+
+function ruleArgs(host, name) {
+  return R.pick(RULES, host).filter(function (s) { return s[0] === name; });
+}
+
+test('YouTube rules: a Shorts batch read with JSON.parse loses its isAd entries; JSON.parse stays a needle check plus key lookups', function () {
+  var win = fakeWin('m.youtube.com');
+  R.run(win, L, RULES, log);
+  var reels = win.JSON.parse(JSON.stringify(reelSequence()));
+  assert.deepEqual(reels.entries.map(function (e) { return e.command.reelWatchEndpoint.videoId; }), ['s1', 's2'], 'isAd:true removed, isAd:false stays');
+  var nested = win.JSON.parse(JSON.stringify({ deep: reelSequence() }));
+  assert.equal(nested.deep.entries.length, 3, 'only a top-level entries list (no deep walk on JSON.parse)');
+  var jp = ruleArgs('m.youtube.com', 'json-prune');
+  assert.equal(jp.length, 1);
+  jp[0][1].split(' ').forEach(function (p) { assert.ok(p.indexOf('..') !== 0, 'plain path: ' + p); });
+  var p = L.makePruner(jp[0][1]);
+  assert.notOk(p.mayMatch('{"videoDetails":{},"entries":[{"command":{}}]}'), 'no needle word: not walked');
+  assert.ok(p.mayMatch('{"entries":[{"isAd":true}]}'), 'isAd is a needle');
+});
+
+function getWatchBody() {
+  var items = [
+    { videoWithContextRenderer: { videoId: 'v1' } },
+    { adSlotRenderer: { adSlotMetadata: {} } },
+    { videoWithContextRenderer: { videoId: 'v2' } }
+  ];
+  return JSON.stringify([
+    { playerResponse: player() },
+    { response: { contents: { singleColumnWatchNextResults: { results: { results: { contents: [
+      { itemSectionRenderer: { contents: items } },
+      { slimVideoMetadataSectionRenderer: { contents: [{ adSlotRenderer: { keep: 'not an itemSectionRenderer list' } }] } }
+    ] } } } } } }
+  ]);
+}
+function watchNext(o) {
+  var c = o[1].response.contents.singleColumnWatchNextResults.results.results.contents;
+  return {
+    ids: c[0].itemSectionRenderer.contents.map(function (x) { return x.adSlotRenderer ? 'AD' : x.videoWithContextRenderer.videoId; }),
+    other: c[1].slimVideoMetadataSectionRenderer.contents.length
+  };
+}
+
+test('m.youtube.com get_watch: adSlotRenderer items leave itemSectionRenderer.contents (fetch); www and other endpoints untouched', function () {
+  var bodies = {
+    '/youtubei/v1/get_watch?prettyPrint=false': getWatchBody(),
+    '/youtubei/v1/next?prettyPrint=false': getWatchBody()
+  };
+  assert.equal(ruleArgs('www.youtube.com', 'json-prune-fetch-response').length, 1, 'www: only the shared fetch rule');
+  assert.equal(ruleArgs('m.youtube.com', 'json-prune-fetch-response').length, 2, 'm: plus the get_watch item rule');
+  var m = fakeWin('m.youtube.com', { bodies: bodies });
+  var www = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(m, L, RULES, log);
+  R.run(www, L, RULES, log);
+  return m.fetch('/youtubei/v1/get_watch?prettyPrint=false').then(function (r) { return r.json(); }).then(function (o) {
+    assertPlayerClean(o[0].playerResponse, 'm get_watch');
+    assert.deepEqual(watchNext(o), { ids: ['v1', 'v2'], other: 1 }, 'm get_watch: ad item gone, other lists kept');
+    return m.fetch('/youtubei/v1/next?prettyPrint=false');
+  }).then(function (r) { return r.json(); }).then(function (o) {
+    assert.deepEqual(watchNext(o).ids, ['v1', 'AD', 'v2'], 'm /next: not matched by the URL pattern');
+    return www.fetch('/youtubei/v1/get_watch?prettyPrint=false');
+  }).then(function (r) { return r.json(); }).then(function (o) {
+    assertPlayerClean(o[0].playerResponse, 'www get_watch');
+    assert.deepEqual(watchNext(o).ids, ['v1', 'AD', 'v2'], 'www get_watch: items left to youtube.css');
   });
 });
 
@@ -1012,6 +1247,276 @@ test('rules: youtube-enforcement-dismiss runs on youtube.com only', function () 
   assert.ok(names('m.youtube.com').indexOf('youtube-enforcement-dismiss') !== -1, 'm.youtube.com');
   ['example.com', 'notyoutube.com', 'www.youtube-nocookie.com'].forEach(function (h) {
     assert.equal(names(h).indexOf('youtube-enforcement-dismiss'), -1, h);
+  });
+});
+
+// ------------------------------------------------------------------ edit-request-body (YouTube /player request)
+// uBO's "channel" tag edit: the generic scriptlet tests use it (the shipped rule uses "yahi", see the rules test)
+var ERB_ARGS = ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
+  'context.client.clientScreen="CHANNEL"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr'];
+function erbArgs() { return ERB_ARGS.slice(); }
+/** The shipped edit-request-body rule whose URL pattern mentions `endpoint` (player or get_watch). */
+function ruleErbArgs(endpoint) {
+  var s = R.pick(RULES, 'www.youtube.com').filter(function (x) { return x[0] === 'edit-request-body'; });
+  assert.equal(s.length, 2, 'two edit-request-body rules on www.youtube.com (/player and /get_watch)');
+  s = s.filter(function (x) { return x[1].indexOf('\\/' + endpoint + '(') !== -1; });
+  assert.equal(s.length, 1, 'one edit-request-body rule for ' + endpoint);
+  return s[0].slice(1);
+}
+/** A get_watch request body as YouTube's WEB client sends it on in-page navigation (2026-11-20). */
+function getWatchRequestBody(o) {
+  o = o || {};
+  return JSON.stringify({
+    context: { client: { clientName: o.clientName || 'WEB', userAgent: 'Mozilla/5.0 (Macintosh)' } },
+    playerRequest: {
+      videoId: 'kJQP7kiw5Fk',
+      playbackContext: { contentPlaybackContext: { currentUrl: '/watch?v=kJQP7kiw5Fk', referer: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' } },
+      serviceIntegrityDimensions: { poToken: 'tok' }
+    },
+    watchNextRequest: { videoId: 'kJQP7kiw5Fk', playbackContext: { vis: 0 } }
+  });
+}
+function playerRequestBody(o) {
+  o = o || {};
+  var b = {
+    videoId: 'kJQP7kiw5Fk',
+    context: { client: { clientName: o.clientName || 'WEB', clientScreen: 'WATCH_FULL_SCREEN', userAgent: 'Mozilla/5.0 (Macintosh)' } },
+    playbackContext: { contentPlaybackContext: { referer: o.referer || 'https://www.youtube.com/watch?v=kJQP7kiw5Fk', html5Preference: 'HTML5_PREF_WANTS' } },
+    cpn: 'abc'
+  };
+  if (!o.noAttestation) b.attestationRequest = { omitBotguardData: true };
+  return JSON.stringify(b);
+}
+function assertEditedBody(text, msg) {
+  var o = JSON.parse(text);
+  assert.equal(o.context.client.clientScreen, 'CHANNEL', msg + ': clientScreen');
+  assert.equal(o.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr', msg + ': referer');
+  assert.equal(o.context.client.userAgent, 'Mozilla/5.0 (Macintosh)', msg + ': userAgent untouched');
+  assert.equal(o.playbackContext.contentPlaybackContext.html5Preference, 'HTML5_PREF_WANTS', msg + ': other keys kept');
+  assert.deepEqual(Object.keys(o), ['videoId', 'context', 'playbackContext', 'cpn', 'attestationRequest'], msg + ': key order kept');
+}
+/** fetch that records its arguments and answers {} */
+function recordingFetch(win) {
+  win.sent = [];
+  var Resp = win.Response;
+  win.fetch = function fetch(input, init) { win.sent.push({ input: input, init: init, n: arguments.length }); return Promise.resolve(new Resp('{}')); };
+}
+
+test('edit-request-body: /player fetch with a string body and attestationRequest is edited', function () {
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  run(win, 'edit-request-body', erbArgs());
+  var init = { method: 'POST', body: playerRequestBody(), credentials: 'same-origin' };
+  return win.fetch('/youtubei/v1/player?prettyPrint=false', init).then(function () {
+    var s = win.sent[0];
+    assert.equal(s.input, '/youtubei/v1/player?prettyPrint=false', 'same URL');
+    assert.ok(s.init !== init, 'a copy of init');
+    assert.equal(s.init.credentials, 'same-origin', 'other init fields kept');
+    assert.equal(init.body, playerRequestBody(), "the page's own init object is not changed");
+    assertEditedBody(s.init.body, 'fetch');
+    // already #reloadxhr: not appended twice
+    return win.fetch('https://www.youtube.com/youtubei/v1/player', { method: 'POST', body: playerRequestBody({ referer: 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr' }) });
+  }).then(function () {
+    assertEditedBody(win.sent[1].init.body, 'already tagged referer');
+  });
+});
+
+test('edit-request-body: untouched for /next, /player without the needle, non-string bodies and non-WEB clients', function () {
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  var c = countingLib();
+  c.lib.scriptlets['edit-request-body'](win, erbArgs(), log);
+  var cases = [
+    ['/youtubei/v1/next?prettyPrint=false', { method: 'POST', body: playerRequestBody() }],
+    ['/youtubei/v1/player/heartbeat?prettyPrint=false', { method: 'POST', body: playerRequestBody() }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody({ noAttestation: true }) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: { attestationRequest: 1 } }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: new Uint8Array([123, 125]) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody({ clientName: 'MWEB' }) }],
+    ['/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: '{"attestationRequest":' }]
+  ];
+  var parsesBefore = c.parses;
+  return Promise.all(cases.map(function (k) { return win.fetch(k[0], k[1]); })).then(function () {
+    cases.forEach(function (k, i) {
+      assert.ok(win.sent[i].init === k[1], 'same init object: ' + i);
+      assert.ok(win.sent[i].init.body === k[1].body, 'same body: ' + i);
+    });
+    assert.equal(c.parses - parsesBefore, 2, 'only the two needle-bearing /player string bodies (MWEB, truncated) were parsed');
+    return win.fetch('/youtubei/v1/player?prettyPrint=false');
+  }).then(function () {
+    assert.equal(win.sent[cases.length].n, 1, 'plain fetch(url) passed through with its own arguments');
+  });
+});
+
+test('edit-request-body: XMLHttpRequest.send(string) on /player edited; /next, needle-free and non-string untouched', function () {
+  var win = fakeWin('www.youtube.com');
+  var bodies = [];
+  win.XMLHttpRequest.prototype.send = function (b) { bodies.push(b); };
+  run(win, 'edit-request-body', erbArgs());
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/player?prettyPrint=false');
+  x.send(playerRequestBody());
+  assertEditedBody(bodies[0], 'XHR');
+  x.open('POST', '/youtubei/v1/next?prettyPrint=false'); // the same xhr reused for another URL
+  x.send(playerRequestBody());
+  assert.equal(bodies[1], playerRequestBody(), '/next untouched');
+  x.open('POST', '/youtubei/v1/player');
+  x.send(playerRequestBody({ noAttestation: true }));
+  assert.equal(bodies[2], playerRequestBody({ noAttestation: true }), 'no needle: untouched');
+  var blob = { size: 3 };
+  x.open('POST', '/youtubei/v1/player');
+  x.send(blob);
+  assert.ok(bodies[3] === blob, 'non-string body untouched');
+  x.send();
+  assert.equal(bodies[4], undefined, 'no body');
+});
+
+/** Request / Response / gzip stream fakes: "gzip" data is 'GZ:' + text. */
+function requestWin(opts) {
+  opts = opts || {};
+  var win = fakeWin('www.youtube.com');
+  function Stream(data) { this.data = data; }
+  Stream.prototype.pipeThrough = function (t) { return new Stream(t.run(this.data)); };
+  function CResp(body) { this._data = body instanceof Stream ? body.data : body; }
+  Object.defineProperty(CResp.prototype, 'body', { get: function () { return new Stream(this._data); } });
+  CResp.prototype.text = function () { return Promise.resolve(String(this._data)); };
+  CResp.prototype.arrayBuffer = function () { return Promise.resolve(this._data); };
+  win.Response = CResp;
+  win.codec = [];
+  if (!opts.noCodec) {
+    win.DecompressionStream = function (f) { win.codec.push('gunzip ' + f); this.run = function (d) { if (String(d).indexOf('GZ:') !== 0) throw new Error('not gzip'); return String(d).slice(3); }; };
+    win.CompressionStream = function (f) { win.codec.push('gzip ' + f); this.run = function (d) { return 'GZ:' + d; }; };
+  }
+  function Req(input, init) {
+    init = init || {};
+    var src = typeof input === 'string' ? { url: input, method: 'GET', headers: new FakeHeaders(), _body: null } : input;
+    this.url = src.url;
+    this.method = init.method || src.method;
+    this.headers = init.headers ? new FakeHeaders(init.headers) : new FakeHeaders(src.headers);
+    this._body = init.body !== undefined ? init.body : src._body;
+    this.bodyUsed = false;
+    this.signal = src.signal;
+    win.clones = win.clones || 0;
+  }
+  Object.defineProperty(Req.prototype, 'body', { get: function () { return this._body === null ? null : new Stream(this._body); } });
+  Req.prototype.clone = function () { win.clones++; return new Req(this); };
+  Req.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(String(this._body)); };
+  win.Request = Req;
+  recordingFetch(win);
+  return win;
+}
+
+test('edit-request-body: fetch(Request) on /player edited, gzip bodies gunzipped and gzipped again', function () {
+  var win = requestWin();
+  run(win, 'edit-request-body', erbArgs());
+  var plain = new win.Request('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody(), headers: { 'content-type': 'application/json' } });
+  var gz = new win.Request('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: 'GZ:' + playerRequestBody(), headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' } });
+  gz.signal = 'sig';
+  return win.fetch(plain).then(function () {
+    var s = win.sent[0];
+    assert.ok(s.input !== plain && s.input instanceof win.Request, 'a new Request');
+    assert.equal(s.input.url, plain.url, 'same URL');
+    assert.equal(s.input.method, 'POST', 'same method');
+    assert.equal(s.input.headers.get('content-type'), 'application/json', 'headers kept');
+    assertEditedBody(s.input._body, 'Request');
+    assert.notOk(plain.bodyUsed, "the page's Request body is not consumed");
+    assert.deepEqual(win.codec, [], 'no codec for a plain body');
+    return win.fetch(gz);
+  }).then(function () {
+    var s = win.sent[1];
+    assert.deepEqual(win.codec, ['gunzip gzip', 'gzip gzip'], 'gunzip, then gzip');
+    assert.equal(s.input.headers.get('content-encoding'), 'gzip', 'still gzip');
+    assert.equal(String(s.input._body).slice(0, 3), 'GZ:', 'body gzipped again');
+    assertEditedBody(String(s.input._body).slice(3), 'gzip Request');
+    assert.equal(s.input.signal, 'sig', 'Request built from the original (signal kept)');
+  });
+});
+
+test('edit-request-body: fetch(Request) untouched for /next, no needle, no codec, unknown encoding, GET', function () {
+  var win = requestWin();
+  run(win, 'edit-request-body', erbArgs());
+  var next = new win.Request('/youtubei/v1/next?prettyPrint=false', { method: 'POST', body: playerRequestBody() });
+  var noNeedle = new win.Request('/youtubei/v1/player', { method: 'POST', body: playerRequestBody({ noAttestation: true }) });
+  var br = new win.Request('/youtubei/v1/player', { method: 'POST', body: 'xx', headers: { 'content-encoding': 'br' } });
+  var get = new win.Request('/youtubei/v1/player');
+  var notGzip = new win.Request('/youtubei/v1/player', { method: 'POST', body: playerRequestBody(), headers: { 'content-encoding': 'gzip' } });
+  var reqs = [next, noNeedle, br, get, notGzip];
+  return Promise.all(reqs.map(function (r) { return win.fetch(r); })).then(function () {
+    var inputs = win.sent.map(function (x) { return x.input; });
+    assert.equal(inputs.length, reqs.length, 'all sent');
+    reqs.forEach(function (r, i) { assert.ok(inputs.indexOf(r) !== -1, 'same Request object: ' + i); });
+    assert.equal(win.clones, 2, 'only the needle-free POST and the bad gzip body were read (from clones)');
+    var noCodec = requestWin({ noCodec: true });
+    run(noCodec, 'edit-request-body', erbArgs());
+    var gz = new noCodec.Request('/youtubei/v1/player', { method: 'POST', body: 'GZ:' + playerRequestBody(), headers: { 'content-encoding': 'gzip' } });
+    return noCodec.fetch(gz).then(function () {
+      assert.ok(noCodec.sent[0].input === gz, 'no CompressionStream: sent as it came');
+      assert.equal(noCodec.clones, 0, 'not read');
+    });
+  });
+});
+
+test('edit-request-body: bad arguments install nothing; no JSON.stringify / JSON.parse / Promise.prototype.then patch', function () {
+  var win = fakeWin('www.youtube.com');
+  var fetch0 = win.fetch, send0 = win.XMLHttpRequest.prototype.send;
+  [[], ['/player/', 'attestationRequest'], ['/player/', '', 'a=1'], ['/player/', 'x', 'a=notjson'], ['/player/', 'x', 'a==1'], ['/player/', 'x', 'nonsense']].forEach(function (args) {
+    run(win, 'edit-request-body', args);
+    assert.ok(win.fetch === fetch0 && win.XMLHttpRequest.prototype.send === send0, 'nothing installed for ' + JSON.stringify(args));
+  });
+  var parse0 = win.JSON.parse, stringify0 = win.JSON.stringify, then0 = win.Promise.prototype.then;
+  run(win, 'edit-request-body', erbArgs());
+  assert.ok(win.fetch !== fetch0 && win.XMLHttpRequest.prototype.send !== send0, 'fetch and XHR send wrapped');
+  assert.ok(win.JSON.stringify === stringify0 && win.JSON.parse === parse0, 'JSON untouched');
+  assert.notOk(Object.prototype.hasOwnProperty.call(win.Promise.prototype, 'then'), 'no then on the page Promise');
+  assert.ok(win.Promise.prototype.then === then0, 'then untouched');
+  assert.ok(L.scriptlets['edit-request-body'].frames, 're-applied to same-origin child frames');
+});
+
+test('rules: edit-request-body (uBO "oaeb" edit) for the youtubei /player request on youtube.com only', function () {
+  var args = ruleErbArgs('player');
+  assert.deepEqual(args, ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
+    'params="oAEBogYBLg"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
+  assert.equal(args.join(' ').indexOf('CHANNEL'), -1, 'not clientScreen CHANNEL (UNPLAYABLE, measured 2026-11-19)');
+  assert.equal(args.join(' ').indexOf('YAHI'), -1, 'not params YAHI (still a 4-9 s SABR backoff, measured 2026-11-20)');
+  ['example.com', 'notyoutube.com'].forEach(function (h) {
+    assert.equal(R.pick(RULES, h).filter(function (s) { return s[0] === 'edit-request-body'; }).length, 0, h);
+  });
+  var about = RULES.rules.filter(function (r) { return r.id === 'youtube'; })[0].about;
+  ['ef0ac51', 'dcf5811', '1fbf62c', 'oAEBogYBLg'].forEach(function (x) { assert.includes(about, x); });
+  var win = fakeWin('www.youtube.com');
+  recordingFetch(win);
+  R.run(win, L, RULES, log);
+  return win.fetch('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody() }).then(function () {
+    var o = JSON.parse(win.sent[0].init.body);
+    assert.equal(o.params, 'oAEBogYBLg', 'params');
+    assert.equal(o.context.client.clientScreen, 'WATCH_FULL_SCREEN', 'clientScreen untouched');
+    assert.equal(o.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr', 'referer');
+  });
+});
+
+test('rules: edit-request-body (uBO "oaeb" edit) on the playerRequest of get_watch, the in-page navigation request', function () {
+  var args = ruleErbArgs('get_watch');
+  assert.deepEqual(args, ['/\\/youtubei\\/v1\\/get_watch(\\?|$)/', 'playerRequest', 'context.client.clientName=="WEB"',
+    'playerRequest.params="oAEBogYBLg"', 'playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
+  var win = requestWin();
+  R.run(win, L, RULES, log);
+  var gz = new win.Request('/youtubei/v1/get_watch?prettyPrint=false', { method: 'POST', body: 'GZ:' + getWatchRequestBody(), headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' } });
+  return win.fetch(gz).then(function () {
+    var s = win.sent[0];
+    assert.equal(String(s.input._body).slice(0, 3), 'GZ:', 'body gzipped again');
+    var o = JSON.parse(String(s.input._body).slice(3));
+    assert.equal(o.playerRequest.params, 'oAEBogYBLg', 'playerRequest.params');
+    assert.equal(o.playerRequest.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=jNQXAC9IVRw#reloadxhr', 'referer');
+    assert.equal(o.params, undefined, 'no top-level params added');
+    assert.deepEqual(o.watchNextRequest, { videoId: 'kJQP7kiw5Fk', playbackContext: { vis: 0 } }, 'watchNextRequest untouched');
+    assert.equal(o.playerRequest.serviceIntegrityDimensions.poToken, 'tok', 'poToken kept');
+    var plain = new win.Request('/youtubei/v1/get_watch', { method: 'POST', body: getWatchRequestBody({ clientName: 'MWEB' }) });
+    return win.fetch(plain);
+  }).then(function () {
+    assert.equal(win.sent[1].input._body, getWatchRequestBody({ clientName: 'MWEB' }), 'client MWEB untouched');
+    return win.fetch(new win.Request('/youtubei/v1/next', { method: 'POST', body: getWatchRequestBody() }));
+  }).then(function () {
+    assert.equal(win.sent[2].input._body, getWatchRequestBody(), '/next untouched');
   });
 });
 

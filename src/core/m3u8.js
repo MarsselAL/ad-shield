@@ -50,6 +50,7 @@
       if (line.indexOf('#EXT-X-DATERANGE') !== 0) return false;
       var cls = daterangeClass(line);
       if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) return false;
+      if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) return false;
       if (cls && cfg.adDaterangeClasses.indexOf(cls) !== -1) return true;
       for (var i = 0; i < cfg.adMarkers.length; i++) {
         if (line.indexOf(cfg.adMarkers[i]) !== -1) return true;
@@ -57,11 +58,24 @@
       return false;
     }
 
-    /** True if the media playlist contains any ad marker (ignored DATERANGE classes excluded). */
+    /** An #EXTINF line whose title marks an ad: Amazon|..., or (live playlist) not `live`. */
+    function isAdTitle(extinfLine, live, cfg) {
+      var title = extinfTitle(extinfLine);
+      for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
+        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
+      }
+      return live && title.indexOf(cfg.liveSegmentTitle) === -1;
+    }
+
+    /**
+     * True if the media playlist has an ad: a stitched-ad marker (ignored and client-side
+     * DATERANGE classes excluded), or an ad segment title (Amazon|..., or not `live` in a live
+     * playlist). A client-side ad DATERANGE (twitch-maf-ad) over live segments is not an ad.
+     */
     function hasAds(text, cfg) {
       if (!text) return false;
       var s = String(text);
-      // Fast path: no marker and no ad DATERANGE class anywhere.
+      // Any marker or ad DATERANGE class anywhere? (else only segment titles can say "ad")
       var any = false;
       for (var i = 0; i < cfg.adMarkers.length && !any; i++) {
         if (s.indexOf(cfg.adMarkers[i]) !== -1) any = true;
@@ -69,15 +83,17 @@
       for (var c = 0; c < cfg.adDaterangeClasses.length && !any; c++) {
         if (s.indexOf('"' + cfg.adDaterangeClasses[c] + '"') !== -1) any = true;
       }
-      if (!any) return false;
+      var live = isLivePlaylist(s);
       var lines = splitLines(s);
       for (var j = 0; j < lines.length; j++) {
         var line = lines[j];
+        if (line.charAt(0) !== '#') continue;
         if (line.indexOf('#EXT-X-DATERANGE') === 0) {
-          if (isIgnoredDaterange(line, cfg)) continue;
-          if (isAdDaterange(line, cfg)) return true;
+          if (any && isAdDaterange(line, cfg)) return true;
           continue;
         }
+        if (line.indexOf('#EXTINF') === 0 && isAdTitle(line, live, cfg)) return true;
+        if (!any) continue;
         for (var k = 0; k < cfg.adMarkers.length; k++) {
           if (line.indexOf(cfg.adMarkers[k]) !== -1) return true;
         }
@@ -93,14 +109,15 @@
       return false;
     }
 
-    /** List DATERANGE classes found, split into ad / ignored / unknown (for diagnostics). */
+    /** List DATERANGE classes found, split into ad / ignored / client / unknown (diagnostics). */
     function classifyDateranges(text, cfg) {
-      var res = { ad: [], ignored: [], unknown: [] };
+      var res = { ad: [], ignored: [], client: [], unknown: [] };
       splitLines(text || '').forEach(function (line) {
         if (line.indexOf('#EXT-X-DATERANGE') !== 0) return;
         var cls = daterangeClass(line);
         var bucket;
         if (cls && cfg.ignoredDaterangeClasses.indexOf(cls) !== -1) bucket = res.ignored;
+        else if (cls && (cfg.clientAdDaterangeClasses || []).indexOf(cls) !== -1) bucket = res.client;
         else if (isAdDaterange(line, cfg)) bucket = res.ad;
         else bucket = res.unknown;
         var name = cls || '(no class)';
@@ -295,15 +312,24 @@
      * map: the #EXT-X-MAP line in force for the segment (fMP4 init segment; a MAP applies to every
      * following segment until the next one, RFC 8216 §4.3.2.5), null for MPEG-TS. tailMap: a MAP
      * after the last URI that differs from the last segment's (it belongs to the tail's prefetch).
-     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first segment; the following
-     * ones count up until the first DISCONTINUITY after it (past that, unknown).
+     * Live numbers: #EXT-X-TWITCH-LIVE-SEQUENCE is the number of the first LIVE segment. When
+     * some #EXTINF titles carry cfg.liveSegmentTitle ("live"), only those segments are numbered:
+     * the first live-titled one gets the header's number, the following live-titled ones count
+     * up until a DISCONTINUITY between them or a segment that is not live (stitched preroll:
+     * ad segments first, then the live ones; the ads get null). Titled segments but none live
+     * (ad-only preroll poll that already carries the header): nothing is numbered. With no titles
+     * at all, the first segment gets the number and the following ones count up until the first
+     * DISCONTINUITY after it. Past that, unknown (null).
+     * cfg is optional (only liveSegmentTitle is read; default "live").
      */
-    function parseMedia(text) {
+    function parseMedia(text, cfg) {
+      var liveTitle = (cfg && cfg.liveSegmentTitle) || 'live';
       var lines = splitLines(text || '');
       var r = { header: [], segs: [], tail: [], tailMap: null, mediaSeq: 0, discSeq: 0, liveSeq: null, targetDuration: 0, endlist: false };
       var pending = [];
       var started = false;
       var map = null;
+      var liveTitled = [], anyLiveTitle = false, anyOtherTitle = false;
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         if (line === '') continue;
@@ -319,10 +345,16 @@
           continue;
         }
         var seg = { url: line, tags: [], disc: false, map: map, pdt: null, dur: 0, live: null };
+        var isLive = false;
         for (var p = 0; p < pending.length; p++) {
           var t = pending[p];
           if (t === '#EXT-X-DISCONTINUITY') { seg.disc = true; continue; }
-          if (t.indexOf('#EXTINF') === 0) seg.dur = parseFloat(tagValue(t)) || 0;
+          if (t.indexOf('#EXTINF') === 0) {
+            seg.dur = parseFloat(tagValue(t)) || 0;
+            var title = extinfTitle(t);
+            isLive = title.indexOf(liveTitle) !== -1;
+            if (!isLive && title) anyOtherTitle = true;
+          }
           if (t.indexOf('#EXT-X-PROGRAM-DATE-TIME:') === 0) {
             var ms = Date.parse(tagValue(t));
             if (!isNaN(ms)) seg.pdt = ms;
@@ -330,6 +362,8 @@
           seg.tags.push(t);
         }
         r.segs.push(seg);
+        liveTitled.push(isLive);
+        if (isLive) anyLiveTitle = true;
         pending = [];
         started = true;
       }
@@ -337,10 +371,17 @@
         if (pending[q].indexOf('#EXTINF') !== 0 && pending[q] !== '#EXT-X-DISCONTINUITY') r.tail.push(pending[q]);
       }
       if (map !== null && (!r.segs.length || r.segs[r.segs.length - 1].map !== map)) r.tailMap = map;
-      if (r.liveSeq !== null) {
+      if (r.liveSeq !== null && anyLiveTitle) {
+        var n = 0;
         for (var k = 0; k < r.segs.length; k++) {
-          if (k > 0 && r.segs[k].disc) break;
-          r.segs[k].live = r.liveSeq + k;
+          if (!liveTitled[k]) { if (n > 0) break; continue; }
+          if (n > 0 && r.segs[k].disc) break;
+          r.segs[k].live = r.liveSeq + n++;
+        }
+      } else if (r.liveSeq !== null && !anyOtherTitle) {
+        for (var k2 = 0; k2 < r.segs.length; k2++) {
+          if (k2 > 0 && r.segs[k2].disc) break;
+          r.segs[k2].live = r.liveSeq + k2;
         }
       }
       return r;
@@ -350,8 +391,7 @@
     function newSequenceState() {
       return {
         active: false, win: [], seen: new Map(), next: 0, baseDn: 0,
-        lastEnd: null, lastLive: null, lastSource: null, lastHeader: null, lastTarget: 0, lastLiveSeq: null, lastCount: 0,
-        passthrough: null
+        lastEnd: null, lastLive: null, lastSource: null, passthrough: null
       };
     }
 
@@ -376,7 +416,7 @@
      *  - The output lists the newest max(source segments, minSegments) segments given (so an
      *    all-stripped poll repeats the newest known ones instead of an empty playlist).
      * state.passthrough: the last playlist served untouched before the first rewrite; its
-     * numbering seeds the state. text null = no new source this poll (hold).
+     * numbering seeds the state.
      * Returns { text, appended, repeat } (repeat: an appended segment overlaps what was given).
      */
     function resequence(st, text, sourceKey, opts) {
@@ -385,7 +425,7 @@
       var overlapTol = o.overlapToleranceMs === undefined ? 250 : o.overlapToleranceMs;
       var gapTol = o.gapToleranceMs === undefined ? 1500 : o.gapToleranceMs;
       var repeatTol = o.repeatToleranceMs === undefined ? 500 : o.repeatToleranceMs;
-      var p = text === null || text === undefined ? null : parseMedia(text);
+      var p = parseMedia(text);
 
       function remember(s, seq, dn, src) {
         var e = { seq: seq, url: s.url, tags: s.tags, map: s.map || null, dn: dn, dur: s.dur, live: s.live, pdt: s.pdt };
@@ -409,15 +449,12 @@
             remember(seed.segs[a], seed.mediaSeq + a, dn0, 'native');
           }
           st.next = seed.mediaSeq + seed.segs.length;
-          st.lastHeader = seed.header; st.lastTarget = seed.targetDuration; st.lastLiveSeq = seed.liveSeq;
-        } else if (p) {
+        } else {
           st.next = p.mediaSeq;
           st.baseDn = p.discSeq;
         }
       }
-      if (p) { st.lastHeader = p.header; st.lastTarget = p.targetDuration; st.lastLiveSeq = p.liveSeq; }
-
-      var segs = p ? p.segs : [];
+      var segs = p.segs;
       var appended = 0, repeat = false;
       for (var i = 0; i < segs.length; i++) {
         var s = segs[i];
@@ -440,12 +477,10 @@
       while (st.win.length > maxWindow) st.win.shift();
       while (st.seen.size > maxSeen) st.seen.delete(st.seen.keys().next().value);
 
-      // Hold (no source): list what was listed last time.
-      var out = st.win.slice(-Math.max(p ? segs.length : (st.lastCount || 0), minSegments));
-      st.lastCount = out.length;
-      var header = (p ? p.header : st.lastHeader) || [];
+      var out = st.win.slice(-Math.max(segs.length, minSegments));
+      var header = p.header;
       var lines = [];
-      var td = p ? p.targetDuration : st.lastTarget;
+      var td = p.targetDuration;
       for (var d = 0; d < out.length; d++) td = Math.max(td, Math.ceil(out[d].dur));
       var rest = header.filter(function (l) { return l.indexOf('#EXTM3U') !== 0; });
       var vi = -1;
@@ -454,7 +489,11 @@
       var numbering = ['#EXT-X-TARGETDURATION:' + (td || 6)];
       numbering.push('#EXT-X-MEDIA-SEQUENCE:' + (out.length ? out[0].seq : st.next));
       numbering.push('#EXT-X-DISCONTINUITY-SEQUENCE:' + (out.length ? out[0].dn : st.baseDn));
-      var liveSeq = out.length && out[0].live !== null ? out[0].live : st.lastLiveSeq;
+      // Twitch's meaning: the number of the first live segment listed (parseMedia).
+      var liveSeq = p.liveSeq;
+      for (var lv = 0; lv < out.length; lv++) {
+        if (out[lv].live !== null && out[lv].live !== undefined) { liveSeq = out[lv].live; break; }
+      }
       if (liveSeq !== null && liveSeq !== undefined) numbering.push('#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq);
       rest.splice(vi + 1, 0, numbering.join('\n'));
       lines.push(rest.join('\n'));
@@ -467,7 +506,7 @@
         lines.push(out[j].url);
       }
       // Prefetch hints belong to the source's newest segment: only when that is our newest too.
-      if (p && segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
+      if (segs.length && out.length && out[out.length - 1].url === segs[segs.length - 1].url) {
         if (p.tailMap && p.tail.length && p.tailMap !== curMap) lines.push(p.tailMap);
         for (var q = 0; q < p.tail.length; q++) lines.push(p.tail[q]);
       }
@@ -540,41 +579,31 @@
     }
 
     /**
-     * Pick the backup variant that best matches the current one.
-     * Exact RESOLUTION (preferring equal FRAME-RATE), else closest pixel area; audio-only
-     * targets match audio-only variants. With preferAvc, AVC variants are preferred when any exist.
+     * Pick the backup variant for the variant the player chose (docs/DESIGN-v2.md "Never lower
+     * quality"): the same RESOLUTION (width and height; audio-only matches audio-only) and the
+     * same codec family, else null, so a backup never lowers the quality or switches the decoder
+     * to another codec. Among those: equal FRAME-RATE, then the same CODECS string (profile/level
+     * and audio codec: no decoder reconfiguration), then the higher bandwidth.
+     * A target without CODECS (family unknown) accepts any family.
      */
-    function pickVariant(variants, target, cfg, opts) {
+    function pickVariant(variants, target, cfg) {
       if (!variants || !variants.length || !target) return null;
-      var preferAvc = !!(opts && opts.preferAvc);
-      var cands = variants.filter(function (v) { return !!v.url; });
-      if (preferAvc) {
-        var avc = cands.filter(function (v) { return codecFamily(v.codecs, cfg) === 'avc'; });
-        if (avc.length) cands = avc;
-      }
-      if (!cands.length) return null;
-      if (!target.width) {
-        var audio = cands.filter(function (v) { return !v.width; });
-        return audio.length ? audio[0] : null;
-      }
-      var video = cands.filter(function (v) { return v.width > 0; });
-      if (!video.length) return null;
-      var tFps = target.frameRate || 0;
+      var tw = target.width || 0, th = target.height || 0;
       var tFam = codecFamily(target.codecs, cfg);
-      var tArea = target.width * target.height;
+      var cands = variants.filter(function (v) {
+        return !!v.url && (v.width || 0) === tw && (v.height || 0) === th &&
+          (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
+      });
+      var tFps = target.frameRate || 0;
       function score(v) {
-        var exact = v.width === target.width && v.height === target.height ? 0 : 1;
-        var area = Math.abs(v.width * v.height - tArea);
         var fps = Math.abs((v.frameRate || 0) - tFps);
-        var fam = codecFamily(v.codecs, cfg) === tFam ? 0 : 1;
-        // Same CODECS string (profile/level and audio codec) avoids a decoder reconfiguration.
         var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
-        return [exact, exact ? area : 0, fps, fam, codecs, -(v.bandwidth || 0)];
+        return [fps, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
-      for (var i = 0; i < video.length; i++) {
-        var s = score(video[i]);
-        if (!best || compare(s, bestScore) < 0) { best = video[i]; bestScore = s; }
+      for (var i = 0; i < cands.length; i++) {
+        var s = score(cands[i]);
+        if (!best || compare(s, bestScore) < 0) { best = cands[i]; bestScore = s; }
       }
       return best;
     }

@@ -27,13 +27,13 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 | `cosmetic/ads_generic.css`, `cosmetic/cookies_generic.css` | generic hiding, registered as content-script CSS (all frames). Simple `#id` / `.class` selectors grouped 100 per rule, everything else one rule per selector (an invalid selector only drops itself). |
 | `cosmetic/site.json` | site selectors per host (`ads`, `cookies`), exceptions per host, `genericExceptionHosts`, `generichide`, `elemhide` |
 | `cosmetic/generic.json` | the generic selectors again, for hosts that have exceptions (loaded only for them) |
-| `youtube.json` (hand-written) | static DNR ruleset `youtube`: blocks `\|\|youtube.com/pagead/` and `\|\|youtube.com/youtubei/v1/player/ad_break` (research-v2 B.5; never `/api/stats/` or `get_drm_license`). EasyList has both too; ours stays when the weekly update replaces `ads_N`. Toggled by Ads, counted as ads, last in the manifest; `tools/build_rules.py` keeps it (`HAND_RULESETS`), `tests/validate_manifest.py` pins its two rules. |
+| `youtube.json` (hand-written) | static DNR ruleset `youtube`: blocks `\|\|youtube.com/pagead/` and `\|\|youtube.com/youtubei/v1/player/ad_break` (research-v2 B.5; never `/api/stats/` or `get_drm_license`). EasyList has both too; ours stays when the weekly update replaces `ads_N`. Toggled by Ads, counted as ads, last in the manifest; `tools/build_rules.py` keeps it (`HAND_RULESETS`), `tests/validate_manifest.py` pins its rules. Also adds `pp=oAEBogYBLg` to `www.youtube.com/watch` page loads (redirect, rule 3, not counted; an allow rule, 500001, for URLs that already have it stops a loop): uBO's "oaeb" player params, so the page's player response has no ad data and YouTube's stream skips its 4-9 s ad backoff (docs/DESIGN-v2.md). |
 | `removeparams.txt` -> `removeparam.json` | our own tracking-parameter list (MIT, 46 names: UTM tags, ad click ids, e-mail tracking ids; each commented). Static ruleset `removeparam`, toggled by "Remove tracking parameters from links" (`stripTrackingParams`, default on), never counted in the popup. Two rules per name (`urlFilter` `?name=` and `&name=`, case-sensitive), each a `redirect` with `transform.queryTransform.removeParams` = all 46 names, `resourceTypes` `main_frame` + `sub_frame`, `excludedRequestDomains` `doubleclick.net`, `googleadservices.com` (click redirectors that pass the id on). A rule fires only when a listed name is present, so the redirect always changes the URL (no loop). Priority 50: above every list rule (1..4, so list `@@` exceptions do not stop it), below the allowlist rule (100). urlFilters instead of one alternation regex: Chrome compiles each `regexFilter` under a 2 KB RE2 memory limit. `tests/validate_manifest.py` allows redirect rules only here and checks this exact shape (`dnr_schema.removeparam_ruleset_errors`). |
 | `cosmetic/youtube.css` (hand-written) | YouTube hiding, registered for YouTube hosts only (below) |
 | `scriptlets.json` (hand-written) | our scriptlet rules (below) |
 | `build-info.json` | list versions, rule counts, skipped filters by reason, `curated` host counts |
 
-Total static rules today: 14,918 (14,916 enabled by default; 2 of them the hand-written `youtube` ruleset, 92 the `removeparam` ruleset), under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
+Total static rules today: 14,920 (14,918 enabled by default; 4 of them the hand-written `youtube` ruleset, 92 the `removeparam` ruleset), under `GUARANTEED_MINIMUM_STATIC_RULES` (30,000), so
 the shared global pool is never needed; `tests/validate_manifest.py` enforces this, the regex
 limit (1,000) and the ruleset count limits.
 
@@ -82,8 +82,10 @@ AdGuard code (GPL).
   `youtube-enforcement-dismiss`. Each is `fn(win, args, log)` and only touches `win.X`, so tests
   use fake windows and child frames can be patched too. Argument syntax (paths with `[]`, `[-]`,
   leading `..`; URL / needle as substring or `/regex/`) is documented at the top of the file.
-  Patched functions are Proxies of the originals (name and length kept) and the
-  realm's `Function.prototype.toString` returns the original source for them. Every hook catches
+  Patched functions are Proxies of the originals (name and length kept) with a non-enumerable
+  own `toString` (a bound `Function.prototype.toString` of the original), so `fn.toString()` and
+  `String(fn)` show the original source; `Function.prototype.toString` itself is not hooked
+  (2.0: a realm-wide proxy cost every `toString` call). Every hook catches
   its own errors and falls back to the original behaviour; the fetch / XHR pruning returns the
   original response when nothing was removed or the body is not JSON, and otherwise a new
   `Response` with the original status, status text, headers (minus `content-length`), `url`,
@@ -105,16 +107,19 @@ AdGuard code (GPL).
   sites pay nothing. On while the master switch, Ads and "Fix YouTube ads and anti-adblock walls
   (page scripts)" (`blocking.scriptlets`, default on) are on; allowlisted sites are excluded.
   Shipped in the package only, never downloaded, no telemetry.
-- **Cost on YouTube**: one ~35 KB script per frame at document_start. Every pruner first looks
-  for its needle words (the last key of each path: `adPlacements`, `adSlots`, `playerAds`,
-  `adSlotRenderer`, `searchPyvRenderer`, `isAd`) in the JSON text with a plain `indexOf`; a text
-  without any is not pruned at all (`JSON.parse` returns the native result; a matching youtubei
-  fetch / XHR body is not parsed, and the fetch `Response` comes back as the same object).
-  Otherwise `JSON.parse` / `Response.json` check a few top-level keys per call; the deep feed
-  paths walk an object only when it has `responseContext` (YouTube API responses, ~1 ms per
-  response). Matching youtubei responses with a needle are additionally parsed and re-serialised
-  once, and `Response.json` of such an already pruned copy is not pruned again. `Promise.prototype.then` checks each
-  callback's source once (cached per function). `youtube-ad-skip`: two capture listeners
+- **Cost on YouTube** (2.0, docs/DESIGN-v2.md: fewer, cheaper hooks against short FPS dips):
+  one ~35 KB script per frame at document_start. No hook on `Promise.prototype.then` or
+  `Function.prototype.toString`. Every pruner first looks for its needle words (the last key of
+  each path: `adPlacements`, `adSlots`, `playerAds`, `isAd`) in the JSON text with a plain
+  `indexOf`; a text without any is not pruned at all (`JSON.parse` returns the native result,
+  primitives are returned before any check; a matching youtubei fetch / XHR body is not parsed,
+  and the fetch `Response` comes back as the same object). Otherwise `JSON.parse` /
+  `Response.json` check a few top-level keys per call (no deep walk: the feed `json-prune` is
+  gone). A deep (`..`) path walks a parsed body only when its own needle is in the text (the
+  Shorts `isAd` path in the fetch / XHR pruners). Only the youtubei player, get_watch, playlist,
+  resolve_url and Shorts sequence responses are read at all (not next / browse / search, the
+  large feed bodies); matching ones with a needle are parsed and re-serialised once, and
+  `Response.json` of such an already pruned copy is not pruned again. `youtube-ad-skip`: two capture listeners
   (`loadedmetadata`, `playing`) and one MutationObserver per player on its `class` attribute; no
   timers, no polling. `youtube-enforcement-dismiss`: two capture listeners (`animationstart`,
   `pause`) and a wrapper around `navigator.mediaSession.setActionHandler`; a `pause` costs one
@@ -127,15 +132,17 @@ The YouTube rules (research-v2 B recipe 1-7 and 11):
 | Scriptlet | What |
 |---|---|
 | `prune-on-assign ytInitialPlayerResponse` | setter trap: the page-embedded player response loses `adPlacements`, `adSlots`, `playerAds` |
-| `prune-on-assign ytInitialData` | feed / search / watch-next / Shorts ad items removed from the initial data |
-| `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys |
-| `json-prune` (feed keys, requires `responseContext`) | `..contents.[-]...adSlotRenderer`, `..continuationItems.[-]...`, `..results.[-].adSlotRenderer`, `..contents.[-].searchPyvRenderer`, `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` |
-| `json-prune-fetch-response`, `json-prune-xhr-response` | both key sets, for `/youtubei/v1/(player\|get_watch\|next\|browse\|search\|reel/reel_watch_sequence\|reel/reel_item_watch)` |
-| `prevent-promise-then-callback onAbnormalityDetected` | the player's anti-adblock reporter callback becomes a no-op |
-| `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false` | avoids the muted-playback side effect AdGuard reports |
+| `prune-on-assign ytInitialData` | feed / search / watch-next / Shorts ad items removed from the initial data (one-time; the only feed pruning: later feed pages are left to `youtube.css`) |
+| `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys, after the needle check |
+| `json-prune-fetch-response`, `json-prune-xhr-response` | player keys plus `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` (Shorts), for `/youtubei/v1/(player\|get_watch\|playlist\|(navigation/)?resolve_url\|reel/reel_watch_sequence\|reel/reel_item_watch)` (uBO's URL set) |
 | `adjust-setTimeout [native code] 17000 0.001` | the 17 s "fake buffering" wait of flagged accounts (research-v2 B section 1): a `setTimeout` with delay exactly 17000 and a native-code callback (e.g. a bound function) runs after 17 ms. Generic arguments: needle (source substring or `/regex/`), delay (`''` = any), factor (clamped to 0.001-50, default 0.05). Not re-applied to child frames |
 | `youtube-ad-skip` (youtube.com) | `.html5-video-player.ad-showing`: mute, seek the ad to its end, click Skip; unmute after. At most one seek per ad (per video `src` + duration, forgotten when `ad-showing` clears): the class observer also fires on `ytp-autohide` etc., and repeated seeks into the MSE stream stalled playback (1.1.5). No seek when the ad is longer than 90 s (a stitched stream whose end is the end of the video; Skip is still clicked) or in the content stream (same `src` as the content, or `getStatsForNerds().debug_info` starts with `SSAP`, asked only right before a seek): seeking there would skip the video |
 | `youtube-enforcement-dismiss` (youtube.com) | The anti-adblock dialog (`ytd-enforcement-message-view-model` in a modal `tp-yt-paper-dialog`, research-v2 B.3) is closed, not hidden: hiding it with CSS (up to 1.1.0) left its scroll lock, backdrop and forced pauses in place. Detected by `animationstart` of a 1 ms animation `as-yt-enf` that `youtube.css` gives the element, or on a player `pause`. Calls the dialog's `close()` (else removes it), closes an opened `tp-yt-iron-overlay-backdrop`, clears `overflow:hidden` on html / body and `no-scroll` on html / body / `ytd-app`. While the dialog is open, or within 3 s after it was last found open (and closed), a player video that pauses without user activation (`navigator.userActivation.isActive` false; no resume if the API is missing), not ended, not `seeking`, with `readyState` >= 3 and no ad showing, is resumed with `play()`, at most 3 times per 10 s. Other pauses are the player's own (source / quality switches, ad -> content, seeks): up to 1.1.4 they were resumed for the rest of the page once a dialog had been seen, which put audio and video out of sync. Not resumed within 1.5 s of a `navigator.mediaSession` action handler call (`pause`, `play`, `stop`, `seekto`, `previoustrack`, `nexttrack`: media keys, headphones, picture-in-picture), so those pauses stay the viewer's; `setActionHandler` is wrapped on the `MediaSession` prototype and keeps its native look |
+
+Removed in 2.0 (docs/DESIGN-v2.md; uBO commented both out): `prevent-promise-then-callback
+onAbnormalityDetected` (a Proxy on every `Promise.prototype.then`; the scriptlet stays in the
+library, unused), `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false`, and the
+`JSON.parse` feed `json-prune` (`responseContext`) that walked every large API response.
 
 Not done (research-v2 B): client-variant rotation against "fake buffering" (phase 3), text
 renaming of ad keys in unparsable bodies, `muteOnStart` / `youThereRenderer` removal, generic
@@ -285,7 +292,7 @@ almost untouched.
 | `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`, `setTimeout`: poll deadline, single-flight search, ordered answers, renumbering. |
 | `src/worker/worker-main.js` | inlined in worker | Replaces the worker's `fetch`, talks to the page, serves blank ad-segment answers. |
 | `src/core/worker-source.js` | MAIN, tests | Builds the replacement worker source from the factories' `toString()` plus JSON data plus Twitch's original source. |
-| `src/page/recovery.js` | MAIN | Stall and frozen-picture watch (user-intent tracking, play/seek/nudge, muted-play retry), React-fiber player reload, reload rate limit, localStorage preservation. |
+| `src/page/health.js` | MAIN | Playback metrics while the video plays (debug-only `health` events) and the one gated pause/play nudge after a playlist switch (2.0; replaced `recovery.js`). |
 | `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements. |
@@ -304,7 +311,7 @@ a complete program. `worker-source.js` produces:
 ["use strict";]                       (only if Twitch's worker starts with it)
 /* __TAS_WORKER__ */                  (marker: never wrap twice)
 ;(function () {
-  var cfg = {...}; var boot = {settings, degraded};
+  var cfg = {...}; var boot = {settings};
   var M = (factory)(); var createProcessor = (factory)(); var createLogger = (factory)();
   (workerMain)(self, cfg, boot, M, createProcessor, createLogger);   // in try/catch
 })();
@@ -341,10 +348,10 @@ against a fake worker global; the smoke test runs it in a real Chrome worker.
    variant URL with its resolution, frame rate and codecs. With *Prefer AVC* it removes HEVC/AV1
    variants (and their rendition groups) when AVC exists.
 6. **Media playlist** – see the algorithm in the README. Messages worker → page:
-   `token-request`, `event`; page → worker: `token-response`, `settings`, `degrade`. All carry
+   `token-request`, `event`; page → worker: `token-response`, `settings`. All carry
    the key `__tas_v1`; our listeners are registered first and call `stopImmediatePropagation`
    so Twitch's handlers never see them.
-7. **Events** – worker → page (`recovery.onEvent`) → bridge (toast) → background (stats,
+7. **Events** – worker → page (`health.onEvent`) → bridge (toast) → background (stats,
    badge, last event). Each break counts once: `ad-detected`, then `ad-blocked-backup` and/or
    `ad-stripped` or `ad-unremovable`, then `ad-end`.
 
@@ -354,8 +361,6 @@ All in `src/config.js`, see the README table. Code places that encode Twitch str
 config values:
 
 - `m3u8.stripAds` – the segment model (EXTINF title `live`, CUE-OUT/IN, DATERANGE classes).
-- `recovery.findPlayerAndState` – React fiber walk (`setPlayerActive` +
-  `props.mediaPlayerInstance[.playerInstance]`, `setSrc` + `setInitialPlaybackSettings`).
 - `gql.buildTokenBody` – persisted-query body shape.
 
 ## Recovery strategy
@@ -363,42 +368,26 @@ config values:
 - **Never break the player**: every hook is in `try/catch`; on an internal exception the original
   request/response passes through untouched (`failure` event). The Worker hook falls back to the
   original URL; the worker prelude is wrapped so Twitch's code still runs if our install fails.
-- **Stalls after switching** (`recovery.js`, numbers in `config.recovery`; thresholds from
-  research-2026-11-13.md F6/F9): a watch is armed by `playlist-switch` / `ad-end`, and, while a
-  backup or stripped playlist is served and for 30 s after native returns, by the video's
-  `waiting`/`stalled` events and by pauses nobody asked for. A pause is the viewer's only if it
-  follows a click/key on the player within 1.5 s (capturing listeners on the document); the
-  player pausing itself during a switch is a stall. Once a second, only while the tab is
-  visible: paused (not by the viewer) 2 s -> `play()`; playhead stuck 3 s, `readyState < 3` and
-  a hole in `buffered` -> seek to the next range + 0.05 s; stuck with < 0.5 s buffered ahead ->
-  pause/play. Picture frozen while the sound plays (research-2026-11-13.md C5/F7: playhead
-  advancing >= 0.5 s per tick but `getVideoPlaybackQuality().totalVideoFrames` /
-  `webkitDecodedFrameCount` flat, or `videoWidth` 0) for 4 ticks in a row -> pause/play, then
-  the same ladder as a stall (reason `frozen-picture`, which may reload even in a soft watch);
-  skipped when the viewer chose audio-only (`video-quality`) or no frame counter exists. A watch
-  armed by `ad-end` lasts at least 40 s, since the wedge follows breaks.
-  At most 2 soft actions per watch, 8 s apart, 6 per 2 min. Still stuck 15 s after
-  the first one -> one hard reload via `setSrc({isNewMediaPlayerInstance: true,
-  refreshAccessToken: true})` (not within 15 s of the previous one; `video-quality`,
-  `video-muted`, `volume`, `lowLatencyModeEnabled` pinned for 5 s), skipped for a watch armed
-  only by a break that stripped nothing or used a backup of native quality. Then 60 s of no
-  automatic actions: no loops. Re-arming extends a watch but never resets its counters.
-  `play()` rejected with `NotAllowedError`: one muted retry; sound restored at the next
-  gesture unless someone unmuted meanwhile; a video the viewer muted is never touched.
-  `segment-repeat` from the worker: one pause/play, at most every 20 s.
-- **Reload cap**: 3 hard reloads per channel per 5 minutes. The 4th stall sets the channel to
-  strip-only (`degrade` to every worker; future workers get it in `boot`) for the page session,
-  reports `degraded`, and shows it in the popup. No more reloads on that channel.
+- **Playback health** (`health.js`, numbers in `config.health`; docs/DESIGN-v2.md): no seeks,
+  no reloads, no localStorage writes, no strip-only "degraded" mode (all removed in 2.0). While
+  the main `<video>` (blob: source) plays, one sample every 2 s (no timer otherwise): playhead
+  advance, `waiting` events, dropped/total frames, `videoHeight`, paused time; a `health` event
+  at most every 30 s, forwarded to the bridge only with debug on. The one nudge: within 30 s of
+  a `playlist-switch`, tab visible, video playing, playhead frozen 5 s with >= 1 s buffered
+  ahead, no click/key on the player in the last 1.5 s -> `pause()` then `play()`; at most once
+  per ad break (`ad-detected` starts one) and once per 60 s. A rejected `play()` is not retried.
 - **Backup lockouts**: a player type that fails or has its own ad is skipped for 5 s; at most 5
   types per search; backup masters cached 60 s per type (the type being served keeps its master
   while its media fetch works, so a steady-state backup poll is one fetch); the last working
-  non-`autoplay` type is tried first. Among equal resolutions the backup variant with the
-  native `CODECS` string wins.
+  type is tried first. Default order `popout, embed, site, mobile_web` (no 360p `autoplay`; the
+  1.x default stored on install is migrated by `settings.normalize`). A backup is used only at
+  the exact `RESOLUTION` (width and height) and codec family of the variant the player chose
+  (`m3u8.pickVariant`); a type without one is skipped for that poll (no lockout). Among those,
+  equal `FRAME-RATE`, then the native `CODECS` string wins.
 - **Poll deadline** (`backupPollDeadlineMs`, 1.8 s): a media poll waits at most this long for the
   backup search, then gets the stripped playlist; the search goes on in the background, one
-  per channel (later polls join it). While a backup is being served, one missed poll is
-  answered with what the player already has (hold, up to 4 s) instead of flipping sources.
-  Leaving a backup needs 2 clean native polls in a row.
+  per channel (later polls join it). No hold and no replay of an older playlist: a missed poll
+  gets the stripped native playlist. Leaving a backup needs 2 clean native polls in a row.
 - **Order**: per channel, answers leave in request order and their state changes (switch
   events, numbering) happen in that order, so a slow older answer never overtakes a newer one.
 - **Numbering** (`m3u8.resequence`, research-2026-11-13.md C1/F1/F2): once a live playlist has
@@ -421,13 +410,14 @@ config values:
   `stripAds` never writes an ad's MAP; a live segment after an ad gets its live MAP again.
   Playlists never rewritten pass through untouched. Known limit: numbering is per variant URL;
   after an ABR switch mid-break, two variants may number the same time differently.
-- **Empty after stripping**: the newest known segments are listed again with their numbers; the
-  last clean playlist is used only while at most 6 s old.
+- **Empty after stripping**: the newest known segments are listed again with their numbers
+  (`resequence`, so the player gets nothing new and nothing renumbered); 1.x's replay of the
+  last clean playlist is gone.
 - **Ad segment answers**: ad segments never appear in served playlists. A leftover request for
   a remembered ad URL is answered locally with one MPEG-TS null packet (or an MP4 `ftyp`),
   i.e. no media. Chosen over an empty 204 (cannot be tested against Twitch's player here) and
   over a generated silent/black segment (it would have to match the stream's codecs and
-  timestamps; a mismatch is a decode error, worse than a hole the recovery watch seeks over).
+  timestamps; a mismatch is a decode error, worse than a hole).
 - **Off switch while a tab is open**: the worker and fetch hooks see `enabled: false` and become
   passive at once; the scripts disappear on the next reload.
 

@@ -121,11 +121,11 @@ Twitch:
 | `privacy_curated` | 1 (45 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
-| `youtube` | 2 | 0 | `rules/youtube.json` (ours, hand-written) |
+| `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,918 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.
@@ -206,7 +206,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host. |
 | Prefer AVC (H.264) streams | on | Removes HEVC/AV1 variants when H.264 exists (avoids player errors when switching during ads; turns off 1440p/4K "enhanced" quality). |
-| Backup stream order | site, popout, mobile_web, embed, autoplay | Validated: known types only, no duplicates, `autoplay` (360p) last. |
+| Backup stream order | popout, embed, site, mobile_web | Validated: known types only, no duplicates, `autoplay` (360p) last if listed. A backup is used only at the resolution and codec family the player chose. |
 | Show a notice when an ad is blocked | on | Small "Ad blocked – using backup stream" note in the player. |
 | Reset statistics | | Clears Twitch tab and lifetime counts. |
 

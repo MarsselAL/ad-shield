@@ -23,8 +23,25 @@ test('hasAds: midroll detected', function () {
 test('hasAds: only ignored DATERANGE classes (incl. one whose ID mentions stitched-ad) is NOT an ad', function () {
   assert.notOk(M.hasAds(fixture('ignored-only.m3u8'), cfg));
 });
-test('hasAds: twitch-maf-ad detected even when CLASS is not the first attribute', function () {
-  assert.ok(M.hasAds(fixture('maf-ad.m3u8'), cfg));
+// TTV-AB issue #98: twitch-maf-ad (client-side ad, a separate video beside the stream) appears in
+// playlists whose segments are all `live`. It is not a stitched ad: nothing to replace or strip.
+test('hasAds: twitch-maf-ad DATERANGE over all-live segments is NOT an ad (client-side ad)', function () {
+  assert.notOk(M.hasAds(fixture('maf-ad.m3u8'), cfg));
+  assert.equal(cfg.adMarkers.filter(function (m) { return m.indexOf('maf') !== -1; }).length, 0);
+  assert.equal(cfg.adDaterangeClasses.indexOf('twitch-maf-ad'), -1);
+  assert.ok(cfg.clientAdDaterangeClasses.indexOf('twitch-maf-ad') !== -1);
+});
+test('hasAds: twitch-maf-ad together with a stitched ad segment is an ad (by the segment)', function () {
+  var t = fixture('maf-ad.m3u8').replace('#EXTINF:2.000,live\nhttps://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-live-301.ts',
+    '#EXTINF:2.000,Amazon|123\nhttps://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-ad-301.ts');
+  assert.ok(t !== fixture('maf-ad.m3u8'));
+  assert.ok(M.hasAds(t, cfg));
+});
+test('hasAds: ad segment titles alone (no marker) are ads in a live playlist', function () {
+  assert.ok(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,Amazon|9\nb.ts\n', cfg), 'Amazon title');
+  assert.ok(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,\nb.ts\n', cfg), 'untitled in live');
+  assert.notOk(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,live\nb.ts\n', cfg), 'all live');
+  assert.notOk(M.hasAds('#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXT-X-ENDLIST\n', cfg), 'VOD untitled');
 });
 test('hasAds: CUE-OUT marker detected', function () {
   assert.ok(M.hasAds('#EXTM3U\n#EXT-X-CUE-OUT:30\n#EXTINF:2.000,live\nseg.ts\n', cfg));
@@ -46,6 +63,9 @@ test('classifyDateranges splits ad / ignored / unknown classes', function () {
   assert.deepEqual(clean.ad, []);
   assert.deepEqual(clean.unknown, []);
   assert.ok(clean.ignored.indexOf('timestamp') !== -1);
+  var maf = M.classifyDateranges(fixture('maf-ad.m3u8'), cfg);
+  assert.deepEqual(maf.ad, []);
+  assert.deepEqual(maf.client, ['twitch-maf-ad']);
 });
 // Regression (live probe 2026-11-11): every live playlist carries a twitch-trigger DATERANGE
 // even with no ad segments; it must not count as an ad.
@@ -116,11 +136,24 @@ test('stripAds clean playlist: unchanged (prefetch kept)', function () {
   assert.equal(r.removed, 0);
   assert.equal(r.text, src);
 });
-test('stripAds maf-ad (client-side): nothing removable, live segments kept, ad DATERANGE dropped', function () {
-  var r = M.stripAds(fixture('maf-ad.m3u8'), cfg);
+test('stripAds maf-ad only (client-side): nothing changed (DATERANGE and prefetch kept)', function () {
+  var src = fixture('maf-ad.m3u8');
+  var r = M.stripAds(src, cfg);
   assert.equal(r.removed, 0);
   assert.equal(r.kept, 2);
-  assert.notIncludes(r.text, 'CLASS="twitch-maf-ad"');
+  assert.equal(r.text, src);
+});
+test('stripAds stitched ad + maf-ad: ad segment removed, maf-ad DATERANGE kept with tracking URLs neutralised', function () {
+  var src = '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n' +
+    '#EXT-X-DATERANGE:ID="m1",CLASS="twitch-maf-ad",START-DATE="2025-11-11T20:00:00.000Z",X-TV-TWITCH-AD-CLICK-TRACKING-URL="https://ads.example.invalid/t?x=1"\n' +
+    '#EXT-X-DATERANGE:ID="s1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=2.000\n' +
+    '#EXTINF:2.000,live\nlive-10.ts\n#EXTINF:2.000,live\nlive-11.ts\n#EXTINF:2.000,Amazon|1\nad-12.ts\n';
+  var r = M.stripAds(src, cfg);
+  assert.equal(r.removed, 1);
+  assert.deepEqual(r.removedUrls, ['ad-12.ts']);
+  assert.notIncludes(r.text, 'twitch-stitched-ad');
+  assert.includes(r.text, 'CLASS="twitch-maf-ad"');
+  assert.notIncludes(r.text, 'ads.example.invalid');
 });
 test('stripAds VOD (ENDLIST): untitled segments are NOT treated as ads', function () {
   var vod = '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.000,\n0.ts\n#EXTINF:10.000,\n1.ts\n#EXT-X-ENDLIST\n';
@@ -166,31 +199,38 @@ test('codecFamily', function () {
 });
 test('pickVariant: exact resolution + frame rate', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg, { preferAvc: true });
+  var p = M.pickVariant(v, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg);
   assert.includes(p.url, 'SYNTH-720p60.m3u8');
 });
-test('pickVariant: exact resolution prefers same codec family without preferAvc', function () {
+test('pickVariant: same resolution must also be the same codec family', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg, { preferAvc: false });
-  assert.includes(p.url, 'SYNTH-1080p60-hevc.m3u8');
-  var q = M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg, { preferAvc: true });
-  assert.includes(q.url, 'SYNTH-chunked.m3u8');
+  assert.includes(M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'hev1.1.6.L123.B0' }, cfg).url, 'SYNTH-1080p60-hevc.m3u8');
+  assert.includes(M.pickVariant(v, { width: 1920, height: 1080, frameRate: 60, codecs: 'avc1.64002A' }, cfg).url, 'SYNTH-chunked.m3u8');
+  // 1440p exists only as HEVC: an AVC 1440p target gets nothing (no codec switch).
+  assert.equal(M.pickVariant(v, { width: 2560, height: 1440, frameRate: 60, codecs: 'avc1.64002A' }, cfg), null);
 });
-test('pickVariant: closest pixel area when no exact match', function () {
+test('pickVariant: no variant of the exact resolution -> null (never a lower or other quality)', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  var p = M.pickVariant(v, { width: 1600, height: 900, frameRate: 60, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(p.url, 'SYNTH-720p60.m3u8'); // 900p: 720p area (921,600) is closer than 1080p (2,073,600)
-  var p2 = M.pickVariant(v, { width: 2560, height: 1440, frameRate: 60, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(p2.url, 'SYNTH-chunked.m3u8'); // 1440p HEVC excluded by preferAvc -> largest AVC
-  var q = M.pickVariant(v, { width: 768, height: 432, frameRate: 30, codecs: 'avc1' }, cfg, { preferAvc: true });
-  assert.includes(q.url, 'SYNTH-480p30.m3u8');
-  var r = M.pickVariant(v, { width: 160, height: 90, frameRate: 30, codecs: 'avc1' }, cfg, {});
-  assert.includes(r.url, 'SYNTH-160p30.m3u8');
+  assert.equal(M.pickVariant(v, { width: 1600, height: 900, frameRate: 60, codecs: 'avc1' }, cfg), null);
+  assert.equal(M.pickVariant(v, { width: 768, height: 432, frameRate: 30, codecs: 'avc1' }, cfg), null);
+  assert.equal(M.pickVariant(v, { width: 1280, height: 721, frameRate: 60, codecs: 'avc1' }, cfg), null, 'height must match');
+  assert.equal(M.pickVariant(v, { width: 1279, height: 720, frameRate: 60, codecs: 'avc1' }, cfg), null, 'width must match');
+  // A 360p-only backup master (autoplay-like) never stands in for 720p.
+  var only360 = v.filter(function (x) { return x.height === 360; });
+  assert.equal(M.pickVariant(only360, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg), null);
+});
+test('pickVariant: same resolution, other frame rate is still accepted; equal frame rate preferred', function () {
+  var vs = [
+    { url: 'a', width: 1280, height: 720, frameRate: 30, codecs: 'avc1.4D401F', bandwidth: 9 },
+    { url: 'b', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F', bandwidth: 1 }
+  ];
+  assert.equal(M.pickVariant(vs, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg).url, 'b');
+  assert.equal(M.pickVariant(vs.slice(0, 1), { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg).url, 'a');
 });
 test('pickVariant: audio-only target picks audio-only variant; empty input -> null', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
-  assert.includes(M.pickVariant(v, { width: 0, height: 0 }, cfg, {}).url, 'audio_only');
-  assert.equal(M.pickVariant([], { width: 1, height: 1 }, cfg, {}), null);
+  assert.includes(M.pickVariant(v, { width: 0, height: 0, codecs: 'mp4a.40.2' }, cfg).url, 'audio_only');
+  assert.equal(M.pickVariant([], { width: 1, height: 1 }, cfg), null);
 });
 test('filterMasterCodecs drops HEVC/AV1 variants when AVC exists', function () {
   var r = M.filterMasterCodecs(fixture('master.m3u8'), cfg);
@@ -357,14 +397,14 @@ test('resequence (F-28): repeat detected when a switched-to playlist without liv
   assert.notOk(r2.repeat);
 });
 
-test('resequence: an all-stripped poll lists the newest known segments again (same numbers), hold keeps them too', function () {
+test('resequence: an all-stripped poll lists the newest known segments again (same numbers)', function () {
   var st = M.newSequenceState();
   st.passthrough = pl({ seq: 20, live: 20, segs: ids(20, 23) });
   var empty = M.stripAds(pl({ seq: 24, live: 24, segs: [{ id: 24, ad: true }, { id: 25, ad: true }] }), cfg).text;
   var n1 = numbering(M.resequence(st, empty, 'native', cfg.sequencer).text);
   assert.deepEqual(n1.urls.map(short), ['native-21.ts', 'native-22.ts', 'native-23.ts']);
   assert.equal(n1.seq, 21);
-  var n2 = numbering(M.resequence(st, null, 'native', cfg.sequencer).text);
+  var n2 = numbering(M.resequence(st, empty, 'native', cfg.sequencer).text);
   assert.deepEqual(n2.urls, n1.urls);
   assert.equal(n2.seq, 21);
 });
@@ -375,7 +415,7 @@ test('pickVariant prefers the exact CODECS string among equal resolutions', func
     { url: 'b', width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2', bandwidth: 1 }
   ];
   var t = { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.64002A,mp4a.40.2' };
-  assert.equal(M.pickVariant(vs, t, cfg, { preferAvc: true }).url, 'b');
+  assert.equal(M.pickVariant(vs, t, cfg).url, 'b');
 });
 
 // ------------------------------------------------------------------ fMP4 init segments (EXT-X-MAP)
@@ -415,6 +455,65 @@ test('parseMedia: every segment carries the MAP in force for it; MAP lines leave
     assert.notIncludes(l, '#EXT-X-MAP');
   });
   assert.equal(M.parseMedia(fixture('clean.m3u8')).segs[0].map, null, 'TS: no MAP');
+});
+
+/** Stitched preroll as captured on Twitch: LIVE-SEQUENCE numbers the first LIVE segment. */
+function stitchedPreroll(liveSeq, ads, live) {
+  var l = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:5', '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-TWITCH-LIVE-SEQUENCE:' + liveSeq,
+    '#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:00:00.000Z",DURATION=15.235,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"'];
+  for (var a = 0; a < ads; a++) {
+    if (a === 0) l.push('#EXT-X-DISCONTINUITY');
+    l.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + a * 2000).toISOString(), '#EXTINF:2.000,Amazon|248888310', SEG_BASE + 'ad-' + a + '.ts');
+  }
+  for (var i = 0; i < live; i++) {
+    if (i === 0) l.push('#EXT-X-DISCONTINUITY');
+    l.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(T0 + (ads + i) * 2000).toISOString(), '#EXTINF:2.000,live', SEG_BASE + 'live-' + (liveSeq + i) + '.ts');
+  }
+  return l.join('\n') + '\n';
+}
+
+test('parseMedia: stitched preroll: ad segments get no live number, LIVE-SEQUENCE is the first live segment', function () {
+  var p = M.parseMedia(stitchedPreroll(58602, 8, 3));
+  assert.equal(p.liveSeq, 58602);
+  assert.deepEqual(p.segs.map(function (s) { return s.live; }), [null, null, null, null, null, null, null, null, 58602, 58603, 58604]);
+});
+
+test('parseMedia: live-titled numbering stops at a DISCONTINUITY between live segments and at an ad after the run', function () {
+  var midroll = pl({ seq: 10, live: 10, segs: ids(10, 11).concat([{ id: 12, ad: true }, { id: 13, disc: true }]) });
+  assert.deepEqual(M.parseMedia(midroll).segs.map(function (s) { return s.live; }), [10, 11, null, null], 'ad after the run');
+  var split = pl({ seq: 10, live: 10, segs: ids(10, 11).concat([{ id: 12, disc: true }]) });
+  assert.deepEqual(M.parseMedia(split).segs.map(function (s) { return s.live; }), [10, 11, null], 'DISCONTINUITY between live segments');
+});
+
+test('parseMedia: no live titles: first segment numbered, counting up to the first DISCONTINUITY (unchanged)', function () {
+  var text = ['#EXTM3U', '#EXT-X-MEDIA-SEQUENCE:5', '#EXT-X-TWITCH-LIVE-SEQUENCE:700',
+    '#EXTINF:2.000,', 'a.ts', '#EXTINF:2.000,', 'b.ts', '#EXT-X-DISCONTINUITY', '#EXTINF:2.000,', 'c.ts'].join('\n') + '\n';
+  assert.deepEqual(M.parseMedia(text).segs.map(function (s) { return s.live; }), [700, 701, null]);
+});
+
+test('resequence seeded from a passed-through stitched preroll keeps the live segments that follow', function () {
+  var st = M.newSequenceState();
+  st.passthrough = stitchedPreroll(58602, 8, 2);
+  var next = M.stripAds(stitchedPreroll(58602, 8, 4), cfg).text;
+  var r = M.resequence(st, next, 'native', cfg.sequencer);
+  var urls = segUrls(r.text).map(short);
+  assert.deepEqual(urls.slice(-2), ['live-58604.ts', 'live-58605.ts'], 'new live segments appended');
+  assert.equal(r.appended, 2);
+  assert.equal(tagLines(r.text, '#EXT-X-TWITCH-LIVE-SEQUENCE:')[0], '#EXT-X-TWITCH-LIVE-SEQUENCE:58602', 'header = first live segment listed');
+});
+
+test('parseMedia: ad-only preroll poll that already has LIVE-SEQUENCE (no live segment yet): nothing numbered', function () {
+  var text = stitchedPreroll(58602, 8, 0) + '#EXT-X-DISCONTINUITY\n';
+  assert.deepEqual(M.parseMedia(text).segs.map(function (s) { return s.live; }), [null, null, null, null, null, null, null, null]);
+});
+
+test('resequence seeded from an ad-only preroll with LIVE-SEQUENCE keeps the live segments that follow (kaicenat 2026-11-19)', function () {
+  var st = M.newSequenceState();
+  st.passthrough = stitchedPreroll(58602, 8, 0) + '#EXT-X-DISCONTINUITY\n';
+  var next = M.stripAds(stitchedPreroll(58602, 8, 3), cfg).text;
+  var r = M.resequence(st, next, 'native', cfg.sequencer);
+  assert.deepEqual(segUrls(r.text).map(short).slice(-3), ['live-58602.ts', 'live-58603.ts', 'live-58604.ts']);
+  assert.equal(r.appended, 3);
 });
 
 test('stripAds fMP4 pre-roll (100% ad): no segments and no ad MAP left', function () {

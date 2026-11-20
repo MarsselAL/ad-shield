@@ -88,8 +88,7 @@
         log.debug('event', name, data);
         post({ type: 'event', name: name, data: data || {} });
       },
-      log: log,
-      degraded: boot.degraded || []
+      log: log
     });
 
     scope.addEventListener('message', function (e) {
@@ -104,8 +103,6 @@
           if (cb) { pending.delete(msg.id); cb(msg.token || null); }
         } else if (msg.type === 'settings') {
           settings = msg.settings || settings;
-        } else if (msg.type === 'degrade') {
-          proc.setDegraded(msg.channel);
         }
       } catch (err) {
         log.warn('message handling failed', err && err.message);
