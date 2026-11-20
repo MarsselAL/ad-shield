@@ -405,8 +405,8 @@ def find_sw_target(cdp, ext_id, timeout=15):
     return None
 
 
-def load_extension(cdp):
-    return cdp.send("Extensions.loadUnpacked", {"path": ROOT}, timeout=60)["id"]
+def load_extension(cdp, path=None):
+    return cdp.send("Extensions.loadUnpacked", {"path": path or ROOT}, timeout=60)["id"]
 
 
 def results_dir(tag):

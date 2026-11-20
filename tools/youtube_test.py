@@ -6,6 +6,7 @@ Usage:
     python3 -I tools/youtube_test.py --only ext      # with the extension only
     python3 -I tools/youtube_test.py --only noext    # control run without the extension
     python3 -I tools/youtube_test.py --seconds 45 --video kJQP7kiw5Fk
+    python3 -I tools/youtube_test.py --only ext --extension /path/to/copy --tag no-dnr   # another build
 
 Reuses the CDP pipe client from tools/live_test.py (fresh profile, quiet flags, extension loaded
 with Extensions.loadUnpacked). The user agent is the normal Chrome one (no "Headless"). A
@@ -233,14 +234,14 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag):
     }
 
 
-def run_once(with_extension, videos, seconds, outdir):
+def run_once(with_extension, videos, seconds, outdir, extension=None):
     cdp = lt.PipeCDP(lt.LIVE_FLAGS, headless=True)
     tag = "ext" if with_extension else "noext"
     try:
         ua = cdp.send("Browser.getVersion").get("userAgent", "").replace("HeadlessChrome", "Chrome")
         ext_id, registered = None, None
         if with_extension:
-            ext_id = lt.load_extension(cdp)
+            ext_id = lt.load_extension(cdp, extension)
             sw = lt.find_sw_target(cdp, ext_id)
             if sw:
                 sw_sid = lt.attach(cdp, sw["targetId"])
@@ -266,7 +267,8 @@ def run_once(with_extension, videos, seconds, outdir):
                 r["served"]["playerResponsesWithAdKeys"], r["served"]["playerResponses"], r["served"]["playerResponseAdKeys"]), flush=True)
             results.append(r)
         all_health = [h for r in results for h in r["healthSamples"]]  # grouped by video id
-        return {"withExtension": with_extension, "extensionId": ext_id, "registeredScripts": registered,
+        return {"withExtension": with_extension, "extensionId": ext_id, "extensionPath": extension or lt.ROOT if with_extension else None,
+                "registeredScripts": registered,
                 "userAgent": ua, "health": lt.health_summary(all_health), "videos": results}
     finally:
         cdp.close()
@@ -277,6 +279,7 @@ def write_md(outdir, runs, seconds):
              "Each video watched for %d s in a fresh headless profile. Ad keys: %s." % (seconds, ", ".join(AD_KEYS)), ""]
     for run in runs:
         lines += ["## %s" % ("With Ad Shield" if run["withExtension"] else "Without extension (control)"), "",
+                  "Extension: %s" % (run.get("extensionPath") or "-"), "",
                   "Registered scripts: %s" % (run.get("registeredScripts") or "-"), "",
                   "| Video | Played | Max content t | ad-showing s | Skip btn | SSAP | Wall | Page saw (initial / player) | Served (HTML / player responses) | Page exceptions |",
                   "|---|---|---|---|---|---|---|---|---|---|"]
@@ -318,15 +321,19 @@ def main(argv=None):
     ap.add_argument("--only", choices=["ext", "noext"])
     ap.add_argument("--seconds", type=int, default=30)
     ap.add_argument("--video", action="append", help="video id (repeatable); default: three popular videos")
+    ap.add_argument("--extension", metavar="DIR", help="unpacked extension folder to load (default: this checkout)")
+    ap.add_argument("--tag", help="suffix for the results folder name, e.g. the variant under test")
     args = ap.parse_args(argv)
+    if args.extension and not os.path.isfile(os.path.join(args.extension, "manifest.json")):
+        ap.error("--extension: no manifest.json in %s" % args.extension)
     videos = [(v, v) for v in args.video] if args.video else VIDEOS
-    outdir = lt.results_dir("youtube")
+    outdir = lt.results_dir("youtube" + ("-" + re.sub(r"[^A-Za-z0-9_.-]", "_", args.tag) if args.tag else ""))
     runs = []
     for with_ext in (True, False):
         if args.only and args.only != ("ext" if with_ext else "noext"):
             continue
         print("ext" if with_ext else "noext", flush=True)
-        runs.append(run_once(with_ext, videos, args.seconds, outdir))
+        runs.append(run_once(with_ext, videos, args.seconds, outdir, os.path.abspath(args.extension) if args.extension else None))
     with open(os.path.join(outdir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(runs, f, indent=1)
     write_md(outdir, runs, args.seconds)
