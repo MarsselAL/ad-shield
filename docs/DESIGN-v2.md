@@ -61,7 +61,7 @@ over CDP, so nothing is exposed on `window`.
 | `adjust-setTimeout [native code] 17000 0.001` | on | kept; delay compared before any string work | uBO ships it |
 | `prune-on-assign` ytInitialPlayerResponse / ytInitialData | on | kept | one-time |
 | `youtube-ad-skip`, `youtube-enforcement-dismiss` | 1.1.5 limits | kept | fallbacks, already limited |
-| `edit-request-body` on the youtubei `/player` request | - | **new**: `params` YAHI + referer `#reloadxhr` (client WEB, `attestationRequest` bodies only) | uBO's request tagging against fake buffering, without its JSON.stringify hook |
+| `edit-request-body` on the youtubei `/player` and `get_watch` requests, `pp` on watch-page loads | - | **new**: `params` oAEBogYBLg + referer `#reloadxhr` (client WEB; `/player` bodies with `attestationRequest`, `get_watch` `playerRequest`), DNR `pp=oAEBogYBLg` on `www.youtube.com/watch` | uBO's request tagging against fake buffering, without its JSON.stringify hook |
 
 ## Not changed
 
@@ -87,15 +87,27 @@ Done:
   poll asks all backup types at once, serving the most preferred clean answer (Purple ec29b68 / d9cafb2).
 - YouTube: prune `endpoint.watchEndpoint.unserializedPrefetchData.playerResponse` ad keys in
   resolve_url responses (uBO fed4e61, 2026-10-31).
-- YouTube fake buffering (with Ad Shield, ad videos started after 4-16 s of a 0x0 player): the
-  `/player` request body gets uBO's tag edit (uAssets ef0ac51 / dcf5811 / 1fbf62c), done by
-  `edit-request-body` inside the fetch / XHR send wrappers, not by a JSON.stringify hook. YouTube
-  sends that request as `fetch(Request)` with a gzip body, so the scriptlet reads a clone, gunzips,
-  edits and gzips again (Compression/DecompressionStream). uBO's first tag, clientScreen CHANNEL,
-  made YouTube answer UNPLAYABLE (support answer 3037019) in our headless runs; the "yahi" edit
-  (`params` YAHI + referer `#reloadxhr`), uBO's next tag, plays. Limit: a direct watch-page load
-  takes its player response from the HTML, not from `/player`, so only in-page navigation and
-  reloads are edited.
+- YouTube fake buffering (with Ad Shield, videos whose pre-roll was removed started after 4-16 s
+  of a black 0x0 player). Cause, measured 2026-11-20 by decoding the SABR (UMP) responses: for a
+  video with a pre-roll the first `videoplayback` answer carries an ad context (SABR context
+  update, type 5), a snackbar message and a NEXT_REQUEST_POLICY backoff of 4,000-8,800 ms. It
+  comes with and without the extension; a client that plays the ad hides the wait behind the ad,
+  a client with the ad data removed shows a black player until it ends. No scriptlet causes it:
+  each one switched off alone (and the `youtube` DNR rules off) still waited 4-11 s. Fix: uBO's
+  "oaeb" player params (uAssets dcf5811): with `params` / `pp` oAEBogYBLg YouTube serves a player
+  response without ad keys and the stream starts without the backoff (also without the
+  extension). Applied where a player response is requested: `edit-request-body` on the `/player`
+  body (`attestationRequest`) and on the `playerRequest` of `get_watch` (in-page navigation, which
+  sends no `/player` request), inside the fetch / XHR send wrappers, not by a JSON.stringify hook
+  (gzip `fetch(Request)` bodies gunzipped, edited, gzipped again); a direct watch-page load takes
+  its player response from the HTML, so `rules/youtube.json` adds `pp=oAEBogYBLg` to
+  `www.youtube.com/watch` page loads (the page then shows the URL without it). tools/youtube_test.py, 3
+  videos x 60 s: stall 10-20 s -> 0-2 s (without the extension 0.3-0.6 s), ads 0. Not uBO's other
+  tags: "channel" (clientScreen CHANNEL) made YouTube answer UNPLAYABLE (support answer 3037019),
+  "yahi" (`params` YAHI) left the same backoff. No tag rotation and no video reload.
+  The "Something went wrong" error after ~40-45 s of content in those headless runs is
+  STREAM_PROTECTION_STATUS 3 (attestation required) and happens without the extension too; it
+  inflates "paused ms" for runs that reach 40 s of content, not an Ad Shield effect.
 
 Rejected:
 - 360p "bridge" during prerolls (TTV-AB Low Quality Fallback): brings back the blur; its users report it

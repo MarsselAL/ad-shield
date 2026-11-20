@@ -83,6 +83,11 @@ test('rulesetPlan: curated rulesets follow the Ads / Trackers switches and the m
   assert.deepEqual(yt.disableRulesetIds, ['ads_1', 'youtube']);
   assert.deepEqual(B.rulesetPlan(['ads_1', 'youtube'], true, B.defaults(), { ads: true }).enableRulesetIds, ['youtube']);
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 1 } }]).ads, 1);
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 2 } }]).ads, 1);
+  // rule 3 adds pp=oAEBogYBLg to watch-page loads, 500001 is its loop guard (allow): nothing blocked
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'youtube', ruleId: 3 } }, { rule: { rulesetId: 'youtube', ruleId: 500001 } }]),
+    { ads: 0, trackers: 0, cookies: 0, banners: 0 }, 'pp redirect / allow not counted');
+  assert.deepEqual(B.YOUTUBE_UNCOUNTED_RULE_IDS, [3]);
 });
 
 test('removeparam ruleset: own switch, never counted', function () {

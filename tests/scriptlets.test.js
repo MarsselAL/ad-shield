@@ -1255,10 +1255,26 @@ test('rules: youtube-enforcement-dismiss runs on youtube.com only', function () 
 var ERB_ARGS = ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
   'context.client.clientScreen="CHANNEL"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr'];
 function erbArgs() { return ERB_ARGS.slice(); }
-function ruleErbArgs() {
+/** The shipped edit-request-body rule whose URL pattern mentions `endpoint` (player or get_watch). */
+function ruleErbArgs(endpoint) {
   var s = R.pick(RULES, 'www.youtube.com').filter(function (x) { return x[0] === 'edit-request-body'; });
-  assert.equal(s.length, 1, 'one edit-request-body rule on www.youtube.com');
+  assert.equal(s.length, 2, 'two edit-request-body rules on www.youtube.com (/player and /get_watch)');
+  s = s.filter(function (x) { return x[1].indexOf('\\/' + endpoint + '(') !== -1; });
+  assert.equal(s.length, 1, 'one edit-request-body rule for ' + endpoint);
   return s[0].slice(1);
+}
+/** A get_watch request body as YouTube's WEB client sends it on in-page navigation (2026-11-20). */
+function getWatchRequestBody(o) {
+  o = o || {};
+  return JSON.stringify({
+    context: { client: { clientName: o.clientName || 'WEB', userAgent: 'Mozilla/5.0 (Macintosh)' } },
+    playerRequest: {
+      videoId: 'kJQP7kiw5Fk',
+      playbackContext: { contentPlaybackContext: { currentUrl: '/watch?v=kJQP7kiw5Fk', referer: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' } },
+      serviceIntegrityDimensions: { poToken: 'tok' }
+    },
+    watchNextRequest: { videoId: 'kJQP7kiw5Fk', playbackContext: { vis: 0 } }
+  });
 }
 function playerRequestBody(o) {
   o = o || {};
@@ -1456,24 +1472,51 @@ test('edit-request-body: bad arguments install nothing; no JSON.stringify / JSON
   assert.ok(L.scriptlets['edit-request-body'].frames, 're-applied to same-origin child frames');
 });
 
-test('rules: edit-request-body (uBO "yahi" edit) for the youtubei /player request on youtube.com only', function () {
-  var args = ruleErbArgs();
+test('rules: edit-request-body (uBO "oaeb" edit) for the youtubei /player request on youtube.com only', function () {
+  var args = ruleErbArgs('player');
   assert.deepEqual(args, ['/\\/youtubei\\/v1\\/player(\\?|$)/', 'attestationRequest', 'context.client.clientName=="WEB"',
-    'params="YAHI"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
+    'params="oAEBogYBLg"', 'playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
   assert.equal(args.join(' ').indexOf('CHANNEL'), -1, 'not clientScreen CHANNEL (UNPLAYABLE, measured 2026-11-19)');
+  assert.equal(args.join(' ').indexOf('YAHI'), -1, 'not params YAHI (still a 4-9 s SABR backoff, measured 2026-11-20)');
   ['example.com', 'notyoutube.com'].forEach(function (h) {
     assert.equal(R.pick(RULES, h).filter(function (s) { return s[0] === 'edit-request-body'; }).length, 0, h);
   });
   var about = RULES.rules.filter(function (r) { return r.id === 'youtube'; })[0].about;
-  ['ef0ac51', 'dcf5811', '1fbf62c'].forEach(function (sha) { assert.includes(about, sha); });
+  ['ef0ac51', 'dcf5811', '1fbf62c', 'oAEBogYBLg'].forEach(function (x) { assert.includes(about, x); });
   var win = fakeWin('www.youtube.com');
   recordingFetch(win);
   R.run(win, L, RULES, log);
   return win.fetch('/youtubei/v1/player?prettyPrint=false', { method: 'POST', body: playerRequestBody() }).then(function () {
     var o = JSON.parse(win.sent[0].init.body);
-    assert.equal(o.params, 'YAHI', 'params');
+    assert.equal(o.params, 'oAEBogYBLg', 'params');
     assert.equal(o.context.client.clientScreen, 'WATCH_FULL_SCREEN', 'clientScreen untouched');
     assert.equal(o.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=kJQP7kiw5Fk#reloadxhr', 'referer');
+  });
+});
+
+test('rules: edit-request-body (uBO "oaeb" edit) on the playerRequest of get_watch, the in-page navigation request', function () {
+  var args = ruleErbArgs('get_watch');
+  assert.deepEqual(args, ['/\\/youtubei\\/v1\\/get_watch(\\?|$)/', 'playerRequest', 'context.client.clientName=="WEB"',
+    'playerRequest.params="oAEBogYBLg"', 'playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr']);
+  var win = requestWin();
+  R.run(win, L, RULES, log);
+  var gz = new win.Request('/youtubei/v1/get_watch?prettyPrint=false', { method: 'POST', body: 'GZ:' + getWatchRequestBody(), headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' } });
+  return win.fetch(gz).then(function () {
+    var s = win.sent[0];
+    assert.equal(String(s.input._body).slice(0, 3), 'GZ:', 'body gzipped again');
+    var o = JSON.parse(String(s.input._body).slice(3));
+    assert.equal(o.playerRequest.params, 'oAEBogYBLg', 'playerRequest.params');
+    assert.equal(o.playerRequest.playbackContext.contentPlaybackContext.referer, 'https://www.youtube.com/watch?v=jNQXAC9IVRw#reloadxhr', 'referer');
+    assert.equal(o.params, undefined, 'no top-level params added');
+    assert.deepEqual(o.watchNextRequest, { videoId: 'kJQP7kiw5Fk', playbackContext: { vis: 0 } }, 'watchNextRequest untouched');
+    assert.equal(o.playerRequest.serviceIntegrityDimensions.poToken, 'tok', 'poToken kept');
+    var plain = new win.Request('/youtubei/v1/get_watch', { method: 'POST', body: getWatchRequestBody({ clientName: 'MWEB' }) });
+    return win.fetch(plain);
+  }).then(function () {
+    assert.equal(win.sent[1].input._body, getWatchRequestBody({ clientName: 'MWEB' }), 'client MWEB untouched');
+    return win.fetch(new win.Request('/youtubei/v1/next', { method: 'POST', body: getWatchRequestBody() }));
+  }).then(function () {
+    assert.equal(win.sent[2].input._body, getWatchRequestBody(), '/next untouched');
   });
 });
 

@@ -121,11 +121,11 @@ Twitch:
 | `privacy_curated` | 1 (45 hosts) | 0 | `rules/curated_hosts.txt` (ours) |
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
-| `youtube` | 2 | 0 | `rules/youtube.json` (ours, hand-written) |
+| `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
 
-Total 14,918 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
+Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
 (1,000 domains per rule), which is why the counts are small. Cosmetic: 13,635 generic and 16,492
 site-specific EasyList selectors, 15,272 generic and 18,736 site-specific cookie-list selectors.

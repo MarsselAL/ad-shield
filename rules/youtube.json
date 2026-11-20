@@ -1,4 +1,6 @@
 [
 {"action":{"type":"block"},"condition":{"urlFilter":"||youtube.com/pagead/"},"id":1,"priority":1},
-{"action":{"type":"block"},"condition":{"urlFilter":"||youtube.com/youtubei/v1/player/ad_break"},"id":2,"priority":1}
+{"action":{"type":"block"},"condition":{"urlFilter":"||youtube.com/youtubei/v1/player/ad_break"},"id":2,"priority":1},
+{"action":{"type":"redirect","redirect":{"transform":{"queryTransform":{"addOrReplaceParams":[{"key":"pp","value":"oAEBogYBLg"}]}}}},"condition":{"urlFilter":"|https://www.youtube.com/watch?","resourceTypes":["main_frame"]},"id":3,"priority":1},
+{"action":{"type":"allow"},"condition":{"urlFilter":"|https://www.youtube.com/watch?*pp=oAEBogYBLg","resourceTypes":["main_frame"]},"id":500001,"priority":2}
 ]
