@@ -49,28 +49,41 @@ browser smoke test pass (the smoke test checks the general rules with Chrome's o
 the cosmetic CSS on a local page); a live Twitch run showed normal playback, but no ad appeared
 in the automated run, so Twitch ad blocking was not yet proven there.
 
-## Install from this folder
+## Install
 
-1. Open `chrome://extensions`.
-2. Turn on **Developer mode** (top right).
-3. Click **Load unpacked** and choose the folder that contains `manifest.json`.
-4. Reload tabs that were already open.
+**From a browser store** (store listings are being submitted; links will be added here when they are live):
 
-## Share it / install on another computer (free, no store)
+- Chrome Web Store: _link to be added_
+- Microsoft Edge Add-ons: _link to be added_
+- Opera add-ons: _link to be added_
 
-Ad Shield is not on the Chrome Web Store; the zip is the way to share it.
+**From source (unpacked)**, for development or before the store listings are live:
+
+1. Get the code: `git clone https://github.com/MarsselAL/ad-shield.git` (or download the zip from GitHub).
+2. Open `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`).
+3. Turn on **Developer mode** (top right).
+4. Click **Load unpacked** and choose the folder that contains `manifest.json`.
+5. Reload tabs that were already open.
+
+The built files in `build/` are committed. To rebuild them: `python3 tools/build.py`.
+
+## Share a build / install on another computer (no store)
 
 1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
    `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
    Tests, tools, docs and test results are left out.
 2. Send the zip (USB stick, cloud drive, e-mail).
 3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
-   `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`), turn on
-   **Developer mode**, **Load unpacked**, pick the `ad-shield` folder. It also covers macOS, the
-   "developer mode extensions" message at browser start (expected; close it, do not disable),
-   pinning the icon, the settings, weekly list updates, updating to a new zip (replace the folder
-   contents, keep the path, press reload on the extension card: settings are kept) and
-   uninstalling.
+   `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `ad-shield`
+   folder. It also covers macOS, the "developer mode extensions" message at browser start
+   (expected; close it, do not disable), pinning the icon, the settings, weekly list updates,
+   updating to a new zip and uninstalling.
+
+## Contributing and security
+
+Bug reports and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report
+security problems privately as described in [SECURITY.md](SECURITY.md). Store submission notes
+for maintainers are in [docs/store/](docs/store/) (release steps: [docs/store/release.md](docs/store/release.md)).
 
 ## How it works
 
@@ -148,7 +161,6 @@ To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests
 | `declarativeNetRequest` | Static rulesets in `rules/` and the dynamic allowlist rule. |
 | `declarativeNetRequestFeedback` | Popup counts via `getMatchedRules` and the badge count (see below). |
 | host `<all_urls>` | Needed for `modifyHeaders` (cookie stripping), for CSS on all sites and for autoconsent. |
-| host `*://*.twitch.tv/*` | Twitch scripts (kept explicitly; covered by `<all_urls>`). |
 
 There is no `tabs`, `webRequest`, `webNavigation`, `cookies` or `proxy` permission.
 
@@ -238,8 +250,8 @@ Reload the tab after switching.
   at the start or end of an ad break. Ads may still appear when no ad-free backup is available.
 - Client-side Twitch ads (`twitch-maf-ad`) have nothing to strip; only the network block rule
   applies. VODs are only stripped; there is no backup stream for VODs.
-- Not on the Chrome Web Store (on purpose: shared as a free zip, see above). `clips.twitch.tv` is
-  excluded. No Firefox build.
+- `clips.twitch.tv` is excluded. No Firefox build. Sites such as YouTube and Twitch change often,
+  so those features can stop working until an update; some ads cannot be removed.
 - Do not run another ad blocker at the same time.
 
 ## When something changes

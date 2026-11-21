@@ -3,7 +3,7 @@
   "name": "Ad Shield",
   "short_name": "Ad Shield",
   "version": "2.0.0",
-  "description": "Blocks ads, trackers, tracking cookies and cookie banners on all sites, and video ads on Twitch. EasyList-based. No telemetry, no remote config.",
+  "description": "Free, open-source ad, tracker and cookie-banner blocker with Twitch video-ad support. No telemetry, no remote config.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",
@@ -14,8 +14,7 @@
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "*://*.twitch.tv/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js"

@@ -112,7 +112,7 @@ def main():
     check(perms == ALLOWED_PERMISSIONS, "expected exactly %s" % sorted(ALLOWED_PERMISSIONS))
     hosts = set(m.get("host_permissions", []))
     check(hosts <= ALLOWED_HOSTS, "host_permissions not allowed: %s" % sorted(hosts - ALLOWED_HOSTS))
-    check("*://*.twitch.tv/*" in hosts, "host_permissions must include *://*.twitch.tv/*")
+    check(hosts == {"<all_urls>"}, "host_permissions must be exactly <all_urls> (it already covers twitch.tv)")
     check("optional_permissions" not in m and "optional_host_permissions" not in m, "no optional permissions expected")
     cs = m.get("content_scripts", [])
     check(any(c.get("world") == "MAIN" and c.get("run_at") == "document_start" for c in cs), "MAIN-world document_start content script required")
