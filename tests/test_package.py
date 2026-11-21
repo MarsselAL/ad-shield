@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for tools/package.py: the zip has INSTALL.txt and manifest.json under ad-shield/ and no
-tests, tools, results or other docs.
+"""Tests for tools/package.py: the zip to share has INSTALL.txt and manifest.json under ad-shield/
+and no tests, tools, results or other docs; the store zip has manifest.json at its root and no
+INSTALL.txt.
 
 Run with:  python3 -I tests/test_package.py      (offline; prints "RESULT OK <n> passed")
 """
@@ -26,6 +27,13 @@ class Package(unittest.TestCase):
         with zipfile.ZipFile(cls.out) as z:
             cls.names = z.namelist()
             cls.install = z.read("ad-shield/INSTALL.txt").decode("utf-8")
+        cls.store_out = os.path.join(cls.tmp, "ad-shield-test-store.zip")
+        package.build_store_zip(cls.store_out)
+        with zipfile.ZipFile(cls.store_out) as z:
+            cls.store_names = z.namelist()
+            cls.store_bytes = {n: z.read(n) for n in cls.store_names}
+        with zipfile.ZipFile(cls.out) as z:
+            cls.folder_bytes = {n: z.read(n) for n in cls.names}
 
     @classmethod
     def tearDownClass(cls):
@@ -61,11 +69,124 @@ class Package(unittest.TestCase):
     def test_install_text_is_the_repo_copy_and_covers_the_steps(self):
         with open(os.path.join(ROOT, "docs", "INSTALL.txt"), encoding="utf-8") as fh:
             repo = fh.read()
-        tip = package._build_module().donate_url()
-        self.assertEqual(self.install, repo.rstrip("\n") + "\n\nLike Ad Shield? An optional tip: " + tip + "\n" if tip else repo)
+        info = package._build_module().donate_info()
+        self.assertEqual(self.install, repo.rstrip("\n") + "\n\n" + package.support_text(info))
+        self.assertTrue(self.install.endswith(
+            "\n\nLike Ad Shield? Optional support:\n"
+            "  Tip via Revolut: %s\n"
+            "  USDC on Ethereum (ERC-20) only: %s\n"
+            "  BTC on the Bitcoin network only: %s\n"
+            "Sending other coins or using other networks will lose the funds.\n"
+            % (info["url"], info["usdc_erc20"], info["btc"])), self.install[-400:])
         for words in ("chrome://extensions", "edge://extensions", "brave://extensions", "Developer mode", "Load unpacked",
                       "macOS", "Windows", "permanent", "reload", "pin", "Settings", "week", "Remove", "Disable"):
             self.assertIn(words, self.install, words)
+
+
+    def test_install_addresses_equal_donate_js(self):
+        """The addresses in INSTALL.txt are the ones the popup and settings page show."""
+        import re
+        with open(os.path.join(ROOT, "src", "shared", "donate.js"), encoding="utf-8") as fh:
+            js = fh.read()
+        for key, label in (("url", "Tip via Revolut"), ("usdcErc20", "USDC on Ethereum (ERC-20) only"),
+                           ("btc", "BTC on the Bitcoin network only")):
+            value = re.search(r"\b%s: '([^']*)'" % key, js).group(1)
+            self.assertTrue(value, key)
+            self.assertIn("\n  %s: %s\n" % (label, value), self.install)
+
+    def test_store_zip_has_manifest_at_root(self):
+        self.assertIn("manifest.json", self.store_names)
+        for n in ("LICENSE", "NOTICE.md", "src/background/service-worker.js", "build/isolated-world.js",
+                  "icons/icon128.png"):
+            self.assertIn(n, self.store_names)
+        self.assertFalse([n for n in self.store_names if n.startswith("ad-shield/")])
+
+    def test_store_zip_has_no_install_metadata_or_dev_files(self):
+        bad = {"tests", "tools", "results", "dist", "docs", "__pycache__", ".git", ".claude", "_metadata"}
+        self.assertNotIn("INSTALL.txt", self.store_names)
+        for n in self.store_names:
+            parts = n.split("/")
+            self.assertFalse(set(parts[:-1]) & bad, n)
+            self.assertFalse(n.startswith("_metadata"), n)
+            self.assertFalse(parts[-1].startswith("."), n)
+            self.assertFalse(n.endswith(".pyc"), n)
+            self.assertNotEqual(parts[-1], "INSTALL.txt", n)
+
+    def test_store_zip_is_folder_zip_without_install_and_prefix(self):
+        expect = {n[len("ad-shield/"):]: b for n, b in self.folder_bytes.items() if n != "ad-shield/INSTALL.txt"}
+        self.assertEqual(sorted(self.store_names), sorted(expect))
+        self.assertEqual(len(self.store_names), len(set(self.store_names)))
+        for n, b in expect.items():
+            self.assertEqual(self.store_bytes[n], b, n)
+
+
+class InstallSupportLines(unittest.TestCase):
+    """INSTALL.txt in the zip to share gets one line per value set in docs/donate.txt."""
+
+    URL = "https://revolut.me/someone"
+    USDC = "0x" + "aB" * 20
+    BTC = "bc1q" + "q" * 38
+
+    def install(self, donate):
+        d = tempfile.mkdtemp(prefix="adshield-test-install-")
+        try:
+            os.makedirs(os.path.join(d, "docs"))
+            for name, text in (("manifest.json", "{}"), ("LICENSE", "x"), ("NOTICE.md", "x"),
+                               ("docs/INSTALL.txt", "Install steps\n\n")):
+                with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            if donate is not None:
+                with open(os.path.join(d, "docs", "donate.txt"), "w", encoding="utf-8") as fh:
+                    fh.write(donate)
+            out = os.path.join(d, "out.zip")
+            package.build_zip(out, root=d)
+            with zipfile.ZipFile(out) as z:
+                return z.read("ad-shield/INSTALL.txt").decode("utf-8")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_no_donate_file_leaves_install_unchanged(self):
+        self.assertEqual(self.install(None), "Install steps\n\n")
+        self.assertEqual(self.install("# nothing\n"), "Install steps\n\n")
+
+    def test_url_only(self):
+        self.assertEqual(self.install(self.URL + "\n"),
+                         "Install steps\n\nLike Ad Shield? Optional support:\n  Tip via Revolut: %s\n" % self.URL)
+
+    def test_url_usdc_and_btc(self):
+        self.assertEqual(
+            self.install("%s\nusdc-erc20: %s\nbtc: %s\n" % (self.URL, self.USDC, self.BTC)),
+            "Install steps\n\nLike Ad Shield? Optional support:\n"
+            "  Tip via Revolut: %s\n"
+            "  USDC on Ethereum (ERC-20) only: %s\n"
+            "  BTC on the Bitcoin network only: %s\n"
+            "Sending other coins or using other networks will lose the funds.\n" % (self.URL, self.USDC, self.BTC))
+
+    def test_btc_only(self):
+        self.assertEqual(
+            self.install("btc: %s\n" % self.BTC),
+            "Install steps\n\nLike Ad Shield? Optional support:\n"
+            "  BTC on the Bitcoin network only: %s\n"
+            "Sending other coins or using other networks will lose the funds.\n" % self.BTC)
+
+    def test_bad_donate_file_fails_the_build(self):
+        with self.assertRaises(ValueError):
+            self.install("GB29 NWBK 6016 1331 9268 19\n")
+
+    def test_store_zip_ignores_donate_and_install(self):
+        d = tempfile.mkdtemp(prefix="adshield-test-store-")
+        try:
+            os.makedirs(os.path.join(d, "docs"))
+            os.makedirs(os.path.join(d, "_metadata"))
+            for name in ("manifest.json", "LICENSE", "NOTICE.md", "docs/INSTALL.txt", "_metadata/x.json"):
+                with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                    fh.write("x")
+            out = os.path.join(d, "store.zip")
+            package.build_store_zip(out, root=d)
+            with zipfile.ZipFile(out) as z:
+                self.assertEqual(sorted(z.namelist()), ["LICENSE", "NOTICE.md", "manifest.json"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class Donate(unittest.TestCase):
