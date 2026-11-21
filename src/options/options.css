@@ -26,3 +26,28 @@ textarea {
 button:disabled { opacity: 0.5; cursor: default; }
 code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 input:disabled + .track { opacity: 0.5; }
+a.button {
+  display: inline-block;
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 10px;
+  text-decoration: none;
+}
+a.button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+#support [hidden] { display: none; }
+.coin-label { margin: 12px 0 4px; }
+.coin { flex-wrap: wrap; }
+.address {
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  overflow-wrap: anywhere;
+  user-select: all;
+  min-width: 0;
+}
+.warn-note { color: var(--warn); font-size: 12px; margin: 6px 0 0; }

@@ -2,7 +2,8 @@
  * Options page. Toggles save immediately; the playerType list and the allowlist save after
  * validation. Twitch/master settings live under "settings" (src/shared/settings.js), the
  * all-sites settings and allowlist under "blocking" (src/shared/blocking.js), "My filters" under
- * "userFilters" (src/shared/userfilters.js; the element picker adds to it).
+ * "userFilters" (src/shared/userfilters.js; the element picker adds to it). "Support Ad Shield"
+ * shows the tip link and the USDC and BTC addresses from src/shared/donate.js.
  */
 (function () {
   'use strict';
@@ -197,6 +198,29 @@
   $('lists-update').addEventListener('click', function () { listsAction('as-lists-update-now', 'Downloading and converting…'); });
   $('lists-reset').addEventListener('click', function () { listsAction('as-lists-reset', 'Switching to the built-in lists…'); });
   refreshLists();
+
+  // ---------------------------------------------------------------- support
+  var donate = ns.donate;
+  if (donate && donate.url) {
+    $('support-link').href = donate.url;
+    $('support-revolut').hidden = false;
+  }
+  function showAddress(id, address, note) {
+    if (!address) return;
+    $(id + '-address').textContent = address;
+    $(id + '-note').textContent = note;
+    $('support-' + id).hidden = false;
+    $(id + '-copy').addEventListener('click', function () {
+      navigator.clipboard.writeText(address).then(function () {
+        flash(id + '-copied', 'Copied.');
+      }, function () { flash(id + '-copied', 'Could not copy; select the address and copy it.'); });
+    });
+  }
+  if (donate) {
+    showAddress('usdc', donate.usdcErc20, donate.usdcNote);
+    showAddress('btc', donate.btc, donate.btcNote);
+  }
+  if (!donate || (!donate.url && !donate.usdcErc20 && !donate.btc)) $('support').hidden = true;
 
   $('known').textContent = cfg.knownPlayerTypes.join(', ');
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;

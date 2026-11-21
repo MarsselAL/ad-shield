@@ -289,6 +289,19 @@ Then bump `version` in `manifest.json` and `src/config.js`, and reload the exten
 
 See [docs/TESTING.md](docs/TESTING.md) for results.
 
+## Support
+
+Ad Shield is free. If it saves you time, an optional tip is welcome:
+
+- Revolut: https://revolut.me/marsel951u
+- Crypto: USDC, `0xD26B379f952D9a3008eB5a8C908d335F5715b18A` – **USDC on Ethereum (ERC-20)
+  only**; other coins or networks will be lost.
+- Crypto: Bitcoin, `bc1q37wpzj5zdfnpj7xa0vzwjyy6nep7fnf3s02cns` – **BTC on the Bitcoin network only**; other
+  coins or networks will be lost.
+
+The popup footer and the settings page show the same links (values in `docs/donate.txt` and
+`src/shared/donate.js`, kept in step by `tests/test_package.py`).
+
 ## Licence and credits
 
 Code: MIT, see [LICENSE](LICENSE). Filter data: The EasyList authors (https://easylist.to/),

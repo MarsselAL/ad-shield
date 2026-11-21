@@ -13,6 +13,10 @@ td { padding: 3px 0; border-top: 1px solid var(--border); }
 td + td { text-align: right; font-variant-numeric: tabular-nums; width: 64px; }
 .last { margin: 0; min-height: 1.4em; }
 footer { padding-top: 2px; }
+footer .small { margin: 0; }
+.support { color: var(--muted); font-size: 12px; text-decoration: none; }
+.support:hover, .support:focus-visible { color: var(--fg); text-decoration: underline; }
+.support[hidden] { display: none; }
 .site-text { min-width: 0; }
 .site-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site button { margin-top: 8px; }

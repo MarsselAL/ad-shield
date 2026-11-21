@@ -1,4 +1,9 @@
-# Optional tip link shown in the shared builds (userscript header and INSTALL.txt in the zip).
-# Put ONE public https link on the line below, e.g. https://revolut.me/yourname
-# Leave it empty for no tip text. Never put bank account numbers here: the file is public.
+# Optional support details shown in the shared builds (userscript header, INSTALL.txt in the zip).
+# Line 1: ONE public https link, e.g. https://revolut.me/yourname (or leave it out).
+# Optional line: "usdc-erc20: 0x..." – a USDC address on the Ethereum network (ERC-20) only.
+# Optional line: "btc: bc1q..." – a Bitcoin address (lowercase bech32) on the Bitcoin network only.
+# Keep src/shared/donate.js (popup and settings page) in step; tests/test_package.py checks it.
+# Never put bank account numbers here: the file is public.
 https://revolut.me/marsel951u
+usdc-erc20: 0xD26B379f952D9a3008eB5a8C908d335F5715b18A
+btc: bc1q37wpzj5zdfnpj7xa0vzwjyy6nep7fnf3s02cns

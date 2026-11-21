@@ -95,6 +95,66 @@ class Donate(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.check(bad)
 
+    def info(self, text):
+        d = tempfile.mkdtemp(prefix="adshield-test-donate-")
+        try:
+            os.makedirs(os.path.join(d, "docs"))
+            with open(os.path.join(d, "docs", "donate.txt"), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return package._build_module().donate_info(d)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_usdc_line_accepted(self):
+        addr = "0x" + "aB" * 20
+        both = "https://revolut.me/someone\nusdc-erc20: %s\n" % addr
+        self.assertEqual(self.info(both), {"url": "https://revolut.me/someone", "usdc_erc20": addr, "btc": ""})
+        self.assertEqual(self.info("usdc-erc20: %s\n" % addr), {"url": "", "usdc_erc20": addr, "btc": ""})
+        self.assertEqual(self.check(both), "https://revolut.me/someone")
+
+    def test_btc_line_accepted(self):
+        for btc in ("bc1q" + "q" * 38, "bc1q" + "p" * 58):
+            self.assertEqual(self.info("btc: %s\n" % btc), {"url": "", "usdc_erc20": "", "btc": btc})
+
+    def test_bad_btc_line_rejected(self):
+        for bad in ("btc: bc1q123", "btc: BC1Q" + "Q" * 38, "btc: bc1q" + "b" * 38, "btc: 1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+                    "btc: bc1q" + "q" * 40, "btc: bc1q%s\nbtc: bc1q%s" % ("q" * 38, "p" * 38)):
+            with self.assertRaises(ValueError, msg=bad):
+                self.info(bad)
+
+    def test_bad_usdc_line_rejected(self):
+        for bad in ("usdc-erc20: 0x123", "usdc-erc20: 0x" + "g" * 40, "usdc-erc20: bc1qxyz",
+                    "usdc-erc20: 0x%s\nusdc-erc20: 0x%s" % ("1" * 40, "2" * 40), "btc: 0x" + "1" * 40):
+            with self.assertRaises(ValueError, msg=bad):
+                self.info(bad)
+
+    def test_extension_copy_matches_donate_txt(self):
+        """src/shared/donate.js (popup and settings page) holds the same values as docs/donate.txt."""
+        import re
+        info = package._build_module().donate_info()
+        with open(os.path.join(ROOT, "src", "shared", "donate.js"), encoding="utf-8") as fh:
+            js = fh.read()
+        url = re.search(r"\burl: '([^']*)'", js)
+        usdc = re.search(r"\busdcErc20: '([^']*)'", js)
+        btc = re.search(r"\bbtc: '([^']*)'", js)
+        self.assertTrue(url and usdc and btc, "donate.js must define url, usdcErc20 and btc: '...'")
+        self.assertEqual(url.group(1), info["url"])
+        self.assertEqual(usdc.group(1), info["usdc_erc20"])
+        self.assertEqual(btc.group(1), info["btc"])
+
+    def test_owner_values(self):
+        info = package._build_module().donate_info()
+        self.assertEqual(info["url"], "https://revolut.me/marsel951u")
+        self.assertEqual(info["usdc_erc20"], "0xD26B379f952D9a3008eB5a8C908d335F5715b18A")
+        self.assertEqual(info["btc"], "bc1q37wpzj5zdfnpj7xa0vzwjyy6nep7fnf3s02cns")
+
+    def test_owner_addresses_have_their_formats(self):
+        """USDC: 0x + 40 hex (Ethereum). BTC: lowercase bech32 bc1q (native SegWit)."""
+        import re
+        info = package._build_module().donate_info()
+        self.assertRegex(info["usdc_erc20"], r"^0x[0-9a-fA-F]{40}$")
+        self.assertRegex(info["btc"], r"^bc1q[02-9ac-hj-np-z]{38}(?:[02-9ac-hj-np-z]{20})?$")
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])

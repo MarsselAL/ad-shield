@@ -9,6 +9,7 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
+ * Footer: Settings, an optional "Support Ad Shield" tip link (src/shared/donate.js), version.
  */
 (function () {
   'use strict';
@@ -165,6 +166,17 @@
     e.preventDefault();
     chrome.runtime.openOptionsPage();
   });
+
+  // "Support Ad Shield": opens the tip page (src/shared/donate.js) in a new tab; hidden without one.
+  var donate = ns.donate;
+  if (donate && donate.url) {
+    $('support').href = donate.url;
+    $('support').hidden = false;
+    $('support').addEventListener('click', function (e) {
+      e.preventDefault();
+      chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
+    });
+  }
 
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
