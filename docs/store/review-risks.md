@@ -55,7 +55,7 @@ policy states the three exact URLs. uBlock-style `$redirect`/script injection fr
 implemented, which helps.
 
 ### 5. Metadata and manifest hygiene — certain if ignored
-- `description` in manifest is 144 chars; limit 132: **upload will fail**. Fix.
+- `description` in manifest is 117 chars (limit 132): fixed.
 - Product name "Ad Shield": I believe a commercial anti-adblock-recovery company uses the same
   or a near name; I could not verify. Search the Web Store, Google and USPTO/EUIPO for "Ad Shield"
   before you commit; a name clash is a classic trademark/impersonation takedown cause.

@@ -43,4 +43,4 @@ Flat colour, no brand logos, no "blocks 100%". Make it in any design tool; expor
 ## Other
 - Zip: `python3 -I tools/package.py` (excludes `_metadata`, tests, docs). Chrome rejects a zip
   with an `_metadata` folder, and `tools/package.py` already skips it; verify with `unzip -l`.
-- Fix the manifest `description` length (144 > 132) first; see `listing.md`.
+- Manifest `description` is 117 characters (limit 132); keep it that way.

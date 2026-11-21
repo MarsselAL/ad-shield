@@ -8,14 +8,9 @@ Copy each block into the dashboard's **Store listing** tab. Same text works for 
 
 ## Summary / short description (max 132 characters)
 ```
-Free, open-source ad, tracker and cookie-banner blocker. No telemetry, no remote config.
+Free, open-source ad, tracker and cookie-banner blocker with Twitch video-ad support. No telemetry, no remote config.
 ```
-(88 characters.)
-
-> **Blocker for upload:** the `description` in `manifest.json` is **144 characters**; Chrome
-> allows at most 132 and will reject the zip. Before packaging, change it to the line above (or
-> similar). Not changed here because this task excludes extension code. The Web Store summary is
-> read from the manifest `description`, so the two are the same field.
+(117 characters; identical to the manifest `description`, which is the Web Store summary.)
 
 ## Detailed description (plain text; paste as is)
 ```
