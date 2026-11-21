@@ -18,13 +18,13 @@ test('main-world.js loads: fetch and Worker hooked, namespace removed, hello sen
   assert.equal(hellos.length, 1);
 });
 
-test('main-world.js (2.0): health.js bundled, recovery.js gone, no autoplay in the default order', function () {
+test('main-world.js (2.0): health.js bundled, recovery.js gone, autoplay only last in the default order', function () {
   var src = readFile('build/main-world.js');
   assert.includes(src, 'createHealth');
   assert.notIncludes(src, 'createRecovery');
   assert.notIncludes(src, 'setSrc(', 'no player reloads');
   assert.notIncludes(src, "backupPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay']");
-  assert.includes(src, "backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout']");
+  assert.includes(src, "backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout', 'autoplay']");
 });
 
 test('main-world.js: a Twitch worker gets a wrapped source that compiles', function () {

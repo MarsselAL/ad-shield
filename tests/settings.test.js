@@ -6,19 +6,23 @@ var S = ns.settings;
 var G = ns.gql;
 
 // ------------------------------------------------------------------ settings
-test('defaults: playerTypes come from config, no autoplay (360p)', function () {
+test('defaults: playerTypes come from config, autoplay (360p bridge) last', function () {
   var d = S.defaults();
-  assert.deepEqual(d.playerTypes, ['embed', 'site', 'mobile_web', 'popout']);
+  assert.deepEqual(d.playerTypes, ['embed', 'site', 'mobile_web', 'popout', 'autoplay']);
+  assert.ok(S.validatePlayerTypes(d.playerTypes).ok, 'the default passes the last-resort rule');
   assert.equal(d.enabled, true);
   assert.equal(d.blockTrackers, false);
   d.playerTypes.push('x');
-  assert.equal(S.defaults().playerTypes.length, 4, 'defaults are a fresh copy');
+  assert.equal(S.defaults().playerTypes.length, 5, 'defaults are a fresh copy');
 });
 test('normalize: the 1.x default order (stored on install) becomes the 2.0 default; own orders are kept', function () {
+  var now = ['embed', 'site', 'mobile_web', 'popout', 'autoplay'];
   var old = S.normalize({ playerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay'] });
-  assert.deepEqual(old.playerTypes, ['embed', 'site', 'mobile_web', 'popout']);
+  assert.deepEqual(old.playerTypes, now);
   var old20 = S.normalize({ playerTypes: ['popout', 'embed', 'site', 'mobile_web'] });
-  assert.deepEqual(old20.playerTypes, ['embed', 'site', 'mobile_web', 'popout'], 'earlier 2.0 default migrated');
+  assert.deepEqual(old20.playerTypes, now, 'earlier 2.0 default migrated');
+  var noAutoplay = S.normalize({ playerTypes: ['embed', 'site', 'mobile_web', 'popout'] });
+  assert.deepEqual(noAutoplay.playerTypes, now, '2.0 default without autoplay migrated');
   var own = S.normalize({ playerTypes: ['site', 'popout', 'autoplay'] });
   assert.deepEqual(own.playerTypes, ['site', 'popout', 'autoplay'], 'a list the viewer chose stays');
 });

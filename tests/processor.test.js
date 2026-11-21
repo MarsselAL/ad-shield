@@ -102,14 +102,14 @@ test('clean media playlist passes through untouched', function () {
   });
 });
 
-test('default backup order is embed, site, mobile_web, popout: no autoplay (360p), popout skipped (page token type)', function () {
-  assert.deepEqual(cfg.backupPlayerTypes, ['embed', 'site', 'mobile_web', 'popout']);
+test('default backup order is embed, site, mobile_web, popout, autoplay (360p bridge, last); popout skipped (page token type)', function () {
+  assert.deepEqual(cfg.backupPlayerTypes, ['embed', 'site', 'mobile_web', 'popout', 'autoplay']);
+  assert.deepEqual(cfg.lastResortPlayerTypes, ['autoplay']);
   assert.equal(cfg.forcedPlayerType, 'popout');
   var w = makeWorld(allTypes(PREROLL));
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
-    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
-    assert.equal(w.tokens.indexOf('autoplay'), -1, 'autoplay never requested');
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web', 'autoplay']);
   });
 });
 
@@ -118,7 +118,7 @@ test('ads in embed, clean in site: site chosen (matching 720p60 variant) and pin
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('site'));
-    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web'], 'all asked at once (embed prewarmed with the master)');
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web', 'autoplay'], 'all asked at once (embed prewarmed with the master)');
     assert.ok(w.fetched.indexOf(backupMedia720('site')) !== -1, 'fetched the 720p60 backup variant');
     assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
     var names = w.names();
@@ -139,17 +139,18 @@ test('backup without the chosen resolution is skipped for this poll (no lockout)
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
     assertSameSegments(out, cleanFor('site'));
-    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web', 'autoplay']);
     assert.equal(w.fetched.filter(function (u) { return u.indexOf('SYNTH-embed-') !== -1 && u.indexOf('usher') === -1; }).length, 0,
       'no other embed variant fetched');
     assert.notOk((w.proc.stateOf('somechannel').lockouts.embed || 0) > w.t, 'embed not locked out');
   });
 });
 
-test('no backup at the chosen resolution: stripped native served, never a lower-quality backup', function () {
+test('no backup at the chosen resolution: stripped native served, never a lower-quality backup (no last-resort type)', function () {
   var masters = {};
   cfg.backupPlayerTypes.forEach(function (t) { masters[t] = masterWithout720(t); });
   var w = makeWorld({}, { masters: masters });
+  w.settings.playerTypes = ['embed', 'site', 'mobile_web', 'popout'];
   // Every type would be clean at other resolutions.
   w.deps.fetchText = (function (inner) {
     return function (url) {
@@ -809,8 +810,8 @@ test('parallel: every candidate type is asked before any answers (popout skipped
   var w = gatedWorld({ embed: cleanFor('embed'), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
   var p = w.proc.onMedia(NATIVE_720, PREROLL3);
   return flush().then(function () {
-    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web']);
-    ['embed', 'site', 'mobile_web'].forEach(function (t) {
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web', 'autoplay']);
+    ['embed', 'site', 'mobile_web', 'autoplay'].forEach(function (t) {
       assert.ok(w.asked.indexOf(backupMedia720(t)) !== -1, t + ' media requested');
     });
     assert.equal(w.asked.filter(function (u) { return u.indexOf('popout') !== -1; }).length, 0);
@@ -877,5 +878,111 @@ test('parallel: at most maxBackupTypesPerPoll types asked', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
     assert.deepEqual(w.tokens, ['embed', 'site']);
+  });
+});
+
+// ------------------------------------------------------------------ last resort: autoplay bridge
+/** An autoplay-like backup master: 360p30 (and audio) only. */
+function master360(type) {
+  return backupMaster(type).split('\n').filter(function (l, i, a) {
+    if (l.indexOf('#EXT-X-STREAM-INF') === 0) return l.indexOf('640x360') !== -1 || l.indexOf('audio_only') !== -1;
+    if (l.indexOf('https://') === 0 && i > 0 && a[i - 1].indexOf('#EXT-X-STREAM-INF') === 0) return a[i - 1].indexOf('640x360') !== -1 || a[i - 1].indexOf('audio_only') !== -1;
+    return true;
+  }).join('\n');
+}
+var AUTOPLAY_360 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-autoplay-360p30.m3u8';
+function bridgeWorld(media) {
+  var w = makeWorld(media, { masters: { autoplay: master360('autoplay') } });
+  var inner = w.deps.fetchText;
+  w.deps.fetchText = function (url) {
+    if (url === AUTOPLAY_360) { w.fetched.push(url); return Promise.resolve({ status: 200, text: cleanFor('autoplay') }); }
+    return inner(url);
+  };
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w;
+}
+
+test('every HD type contaminated: autoplay 360p bridge served (not stripped/original), not pinned, HD types locked', function () {
+  var w = bridgeWorld({ embed: PREROLL, site: PREROLL, mobile_web: PREROLL });
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
+    assertSameSegments(out, cleanFor('autoplay'));
+    assert.ok(w.fetched.indexOf(AUTOPLAY_360) !== -1, 'the 360p autoplay variant');
+    var ev = w.events.filter(function (e) { return e.name === 'ad-blocked-backup'; })[0];
+    assert.equal(ev.data.playerType, 'autoplay');
+    assert.equal(ev.data.resolution, '640x360');
+    var st = w.proc.stateOf('somechannel');
+    assert.equal(st.pinned, null, 'a bridge is never pinned');
+    assert.equal(st.serving, 'backup:autoplay');
+    ['embed', 'site', 'mobile_web'].forEach(function (t) { assert.ok(st.lockouts[t] > w.t, t + ' locked out'); });
+    assert.equal(w.names().indexOf('ad-stripped'), -1);
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
+  });
+});
+
+test('autoplay bridge: an HD type clean again after its lockout replaces it; native clean twice ends the break', function () {
+  var media = { embed: PREROLL, site: PREROLL, mobile_web: PREROLL };
+  var w = bridgeWorld(media);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    w.t += 2000; // HD types still locked: the bridge again
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('autoplay'), 'bridge while HD types are locked');
+    media.embed = cleanFor('embed');
+    w.t += cfg.playerTypeLockoutMs;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    // (segments already handed out keep their URLs: resequence numbers by live sequence)
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:embed');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
+    assert.ok(w.names().indexOf('ad-end') !== -1);
+  });
+});
+
+test('autoplay bridge: native clean for nativeSwitchBackPolls polls leaves the bridge', function () {
+  var w = bridgeWorld({ embed: PREROLL, site: PREROLL, mobile_web: PREROLL });
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    w.t += 1000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:autoplay', 'debounce: one clean poll is not enough');
+    w.t += 1000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
+    assert.ok(w.names().indexOf('ad-end') !== -1);
+  });
+});
+
+test('autoplay is not chosen while a preferred type has not answered, even if it answers clean first', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: PREROLL, mobile_web: PREROLL, autoplay: cleanFor('autoplay') });
+  var resolved = false;
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) { resolved = true; return out; });
+  return flush().then(function () {
+    w.release('autoplay'); w.release('site'); w.release('mobile_web');
+    return flush();
+  }).then(function () {
+    assert.notOk(resolved, 'waits for embed');
+    w.release('embed');
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
+  });
+});
+
+test('a viewer list without autoplay never asks for it', function () {
+  var w = makeWorld(allTypes(PREROLL));
+  w.settings.playerTypes = ['embed', 'site', 'mobile_web'];
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
+    assert.equal(w.tokens.indexOf('autoplay'), -1);
   });
 });

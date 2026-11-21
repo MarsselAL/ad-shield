@@ -21,6 +21,10 @@
  *                              slower preferred types); its type is pinned. Pinned type with its
  *                              master cached: checked alone first (one fetch per poll), the rest
  *                              only if it fails. docs/DESIGN-v2.md "Twitch".
+ *                              Last-resort types (autoplay, 360p): any resolution of the same
+ *                              codec family, chosen only when every other type answered without
+ *                              a clean playlist, never pinned (a bridge until an HD type is clean
+ *                              again or native is clean for nativeSwitchBackPolls polls).
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
  *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
@@ -143,6 +147,11 @@
         c.lockouts[type] = now() + cfg.playerTypeLockoutMs;
       }
 
+      /** autoplay-like bridge type: lower resolution allowed, used only after all others, never pinned. */
+      function isLastResort(type) {
+        return (cfg.lastResortPlayerTypes || []).indexOf(type) !== -1;
+      }
+
       function backupOrder(c) {
         // The page's own token is already this type (gql.rewritePlayerType): its playlist is the
         // native one, ads included, so asking for it again cannot help.
@@ -236,7 +245,8 @@
           if (!entry) { lock(c, type); return null; }
           // Same resolution and codec family as the player's variant, or this type is skipped
           // for this poll (no lockout: the player may pick a resolution it has next poll).
-          var v = M.pickVariant(entry.variants, target, cfg);
+          // A last-resort type (autoplay, 360p) bridges at a lower resolution instead.
+          var v = M.pickVariant(entry.variants, target, cfg, isLastResort(type) ? { anyResolution: true } : null);
           if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
           return deps.fetchText(v.url).then(function (res) {
             if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
@@ -262,17 +272,20 @@
       /**
        * All types at once (Purple d9cafb2). Resolves with the most preferred clean result known
        * when a result arrives (a slower preferred type is not waited for), or null once every
-       * type has answered without a clean one.
+       * type has answered without a clean one. A last-resort type's result counts only once every
+       * other type has answered without a clean one (it is asked at the same time, so the bridge
+       * is ready then).
        */
       function race(c, types, target) {
         return new Promise(function (resolve) {
           var results = [];
           var left = types.length;
+          var preferredLeft = types.filter(function (t) { return !isLastResort(t); }).length;
           var done = false;
           function decide() {
             if (done) return;
             for (var i = 0; i < types.length; i++) {
-              if (results[i]) { done = true; resolve(results[i]); return; }
+              if (results[i] && (!isLastResort(types[i]) || preferredLeft === 0)) { done = true; resolve(results[i]); return; }
             }
             if (left === 0) { done = true; resolve(null); }
           }
@@ -280,6 +293,7 @@
             attempt(c, type, target).then(function (r) {
               results[i] = r || null;
               left--;
+              if (!isLastResort(type)) preferredLeft--;
               // Results that land in the same turn are compared before choosing.
               Promise.resolve().then(decide);
             });
@@ -299,7 +313,7 @@
           found = race(c, order, target);
         }
         return found.then(function (r) {
-          if (r) c.pinned = r.type;
+          if (r && !isLastResort(r.type)) c.pinned = r.type;
           return r;
         });
       }

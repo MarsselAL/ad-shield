@@ -247,6 +247,18 @@ test('pickVariant: no variant of the exact resolution -> null (never a lower or 
   var only360 = v.filter(function (x) { return x.height === 360; });
   assert.equal(M.pickVariant(only360, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg), null);
 });
+test('pickVariant anyResolution (last-resort bridge): highest same-family video not above the target; audio stays exact', function () {
+  var v = M.parseMaster(fixture('master.m3u8'));
+  var only360 = v.filter(function (x) { return x.height === 360; });
+  assert.equal(M.pickVariant(only360, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1.4D401F' }, cfg, { anyResolution: true }).height, 360);
+  var avc = v.filter(function (x) { return x.codecs.indexOf('avc1') === 0; });
+  assert.equal(M.pickVariant(avc, { width: 1600, height: 900, frameRate: 60, codecs: 'avc1' }, cfg, { anyResolution: true }).height, 720, 'highest not above 900');
+  assert.equal(M.pickVariant(avc, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1' }, cfg, { anyResolution: true }).url, M.pickVariant(avc, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1' }, cfg).url, 'exact when available');
+  var hevcOnly = v.filter(function (x) { return x.codecs.indexOf('hev1') === 0 || x.codecs.indexOf('hvc1') === 0; });
+  assert.equal(M.pickVariant(hevcOnly, { width: 1280, height: 720, frameRate: 60, codecs: 'avc1' }, cfg, { anyResolution: true }), null, 'never another codec family');
+  var audio = M.pickVariant(only360, { width: 0, height: 0, codecs: 'mp4a.40.2' }, cfg, { anyResolution: true });
+  assert.equal(audio, null, 'audio-only target: no video variant');
+});
 test('pickVariant: same resolution, other frame rate is still accepted; equal frame rate preferred', function () {
   var vs = [
     { url: 'a', width: 1280, height: 720, frameRate: 30, codecs: 'avc1.4D401F', bandwidth: 9 },

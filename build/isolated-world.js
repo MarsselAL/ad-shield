@@ -83,9 +83,14 @@
     // Source: research-technique.md §2.3.
     liveSegmentTitle: 'live',
 
-    // #EXTINF titles that start with this are ad segments ("Amazon|<id>").
-    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009).
-    adSegmentTitlePrefixes: ['Amazon'],
+    // #EXTINF titles that start with this are ad segments ("Amazon|<id>", "FT|<n>-<n>-<n>").
+    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009);
+    // FT|: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    adSegmentTitlePrefixes: ['Amazon', 'FT|'],
+    // #EXTINF titles matching one of these (RegExp source strings) are ad segments: bare
+    // 10-digit ad ids. Source: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    // These and the prefixes also apply where the not-`live` rule does not (VOD playlists).
+    adSegmentTitlePatterns: ['^[0-9]{10,}$'],
 
     // Segment URL substrings that identify ad media.
     // Source: research-technique.md §2.1 (R l.69).
@@ -109,10 +114,15 @@
       // Public web Client-ID used by twitch.tv itself. Source: research-technique.md §1.1.
       clientId: 'kimne78kx3ncx6brgo4mv6wki5h1ko',
       operationName: 'PlaybackAccessToken',
-      // Persisted query hash for PlaybackAccessToken. Source: research-technique.md §1.1
-      // (identical in pixeltris and ryanbr vaft, checked 2026-11-11). If token requests start
-      // failing with "PersistedQueryNotFound", this is the value to update.
-      persistedQueryHash: 'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9',
+      // Persisted query hashes for PlaybackAccessToken, tried in order: on a
+      // "PersistedQueryNotFound" answer the next one is used (gql.fetchToken), and the page keeps
+      // using the one that answered. 0828119d...: the current hash, honours `platform` (Purple
+      // docs/server/tokens.md B-030, docs/research-2026-11-21-twitch.md §2). ed230aa1...: the
+      // older one (research-technique.md §1.1, pixeltris and ryanbr vaft), ignores `platform`.
+      persistedQueryHashes: [
+        '0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712',
+        'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9'
+      ],
       // playerType that uses platform "android" instead of "web". Source: research-technique.md §1.1/§4.1.
       androidPlatformPlayerTypes: ['autoplay'],
       // Headers copied from the page's own GQL requests. Source: research-technique.md §1.1.
@@ -139,20 +149,25 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
-    // Backup playerType order: embed, site, mobile_web, popout. No autoplay or
-    // picture-by-picture: both are capped at 360p (vaft #450), and a backup is only used at the
-    // resolution the player chose anyway (m3u8.pickVariant). forcedPlayerType (the page's own
-    // token type) is skipped by the processor, so popout is only tried when the rewrite is off.
-    // Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed clean at 1080p.
-    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout'],
-    // Earlier default orders (1.x, then 2.0). A stored list equal to one of these was never
-    // chosen by the viewer (the background stores normalised defaults on install), so
-    // settings.normalize replaces it with the current default.
-    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web']],
+    // Backup playerType order: embed, site, mobile_web, popout, then autoplay as a last resort.
+    // A backup is used at the resolution the player chose (m3u8.pickVariant), except a
+    // lastResortPlayerTypes one: autoplay (platform android) is capped at 360p (vaft #450), so it
+    // is a low-quality bridge (TTV AB "Low Quality Fallback", docs/research-2026-11-21-twitch.md
+    // §3 item 4), used only when every other type has answered without a clean playlist, and
+    // never pinned (the HD types are asked again once their lockout ends). forcedPlayerType (the
+    // page's own token type) is skipped by the processor, so popout is only tried when the
+    // rewrite is off. Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed
+    // clean at 1080p.
+    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout', 'autoplay'],
+    // Earlier default orders (1.x, then 2.0, then 2.0 without autoplay). A stored list equal to
+    // one of these was never chosen by the viewer (the background stores normalised defaults on
+    // install), so settings.normalize replaces it with the current default.
+    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web'], ['embed', 'site', 'mobile_web', 'popout']],
     // playerTypes the options page accepts. The first five are research-technique.md §4.1,
     // frontpage is research-github.md (Purple B-012), picture-by-picture is video-swap-new (§4.1).
     knownPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay', 'frontpage', 'picture-by-picture'],
-    // Must be last in a viewer's own list if present (options page validation).
+    // Must be last in a viewer's own list if present (options page validation). The processor
+    // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
     maxPlayerTypes: 8,

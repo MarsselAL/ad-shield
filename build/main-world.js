@@ -83,9 +83,14 @@
     // Source: research-technique.md §2.3.
     liveSegmentTitle: 'live',
 
-    // #EXTINF titles that start with this are ad segments ("Amazon|<id>").
-    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009).
-    adSegmentTitlePrefixes: ['Amazon'],
+    // #EXTINF titles that start with this are ad segments ("Amazon|<id>", "FT|<n>-<n>-<n>").
+    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009);
+    // FT|: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    adSegmentTitlePrefixes: ['Amazon', 'FT|'],
+    // #EXTINF titles matching one of these (RegExp source strings) are ad segments: bare
+    // 10-digit ad ids. Source: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    // These and the prefixes also apply where the not-`live` rule does not (VOD playlists).
+    adSegmentTitlePatterns: ['^[0-9]{10,}$'],
 
     // Segment URL substrings that identify ad media.
     // Source: research-technique.md §2.1 (R l.69).
@@ -109,10 +114,15 @@
       // Public web Client-ID used by twitch.tv itself. Source: research-technique.md §1.1.
       clientId: 'kimne78kx3ncx6brgo4mv6wki5h1ko',
       operationName: 'PlaybackAccessToken',
-      // Persisted query hash for PlaybackAccessToken. Source: research-technique.md §1.1
-      // (identical in pixeltris and ryanbr vaft, checked 2026-11-11). If token requests start
-      // failing with "PersistedQueryNotFound", this is the value to update.
-      persistedQueryHash: 'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9',
+      // Persisted query hashes for PlaybackAccessToken, tried in order: on a
+      // "PersistedQueryNotFound" answer the next one is used (gql.fetchToken), and the page keeps
+      // using the one that answered. 0828119d...: the current hash, honours `platform` (Purple
+      // docs/server/tokens.md B-030, docs/research-2026-11-21-twitch.md §2). ed230aa1...: the
+      // older one (research-technique.md §1.1, pixeltris and ryanbr vaft), ignores `platform`.
+      persistedQueryHashes: [
+        '0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712',
+        'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9'
+      ],
       // playerType that uses platform "android" instead of "web". Source: research-technique.md §1.1/§4.1.
       androidPlatformPlayerTypes: ['autoplay'],
       // Headers copied from the page's own GQL requests. Source: research-technique.md §1.1.
@@ -139,20 +149,25 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
-    // Backup playerType order: embed, site, mobile_web, popout. No autoplay or
-    // picture-by-picture: both are capped at 360p (vaft #450), and a backup is only used at the
-    // resolution the player chose anyway (m3u8.pickVariant). forcedPlayerType (the page's own
-    // token type) is skipped by the processor, so popout is only tried when the rewrite is off.
-    // Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed clean at 1080p.
-    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout'],
-    // Earlier default orders (1.x, then 2.0). A stored list equal to one of these was never
-    // chosen by the viewer (the background stores normalised defaults on install), so
-    // settings.normalize replaces it with the current default.
-    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web']],
+    // Backup playerType order: embed, site, mobile_web, popout, then autoplay as a last resort.
+    // A backup is used at the resolution the player chose (m3u8.pickVariant), except a
+    // lastResortPlayerTypes one: autoplay (platform android) is capped at 360p (vaft #450), so it
+    // is a low-quality bridge (TTV AB "Low Quality Fallback", docs/research-2026-11-21-twitch.md
+    // §3 item 4), used only when every other type has answered without a clean playlist, and
+    // never pinned (the HD types are asked again once their lockout ends). forcedPlayerType (the
+    // page's own token type) is skipped by the processor, so popout is only tried when the
+    // rewrite is off. Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed
+    // clean at 1080p.
+    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout', 'autoplay'],
+    // Earlier default orders (1.x, then 2.0, then 2.0 without autoplay). A stored list equal to
+    // one of these was never chosen by the viewer (the background stores normalised defaults on
+    // install), so settings.normalize replaces it with the current default.
+    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web'], ['embed', 'site', 'mobile_web', 'popout']],
     // playerTypes the options page accepts. The first five are research-technique.md §4.1,
     // frontpage is research-github.md (Purple B-012), picture-by-picture is video-swap-new (§4.1).
     knownPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay', 'frontpage', 'picture-by-picture'],
-    // Must be last in a viewer's own list if present (options page validation).
+    // Must be last in a viewer's own list if present (options page validation). The processor
+    // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
     maxPlayerTypes: 8,
@@ -517,13 +532,25 @@
       return false;
     }
 
-    /** An #EXTINF line whose title marks an ad: Amazon|..., or (live playlist) not `live`. */
-    function isAdTitle(extinfLine, live, cfg) {
-      var title = extinfTitle(extinfLine);
+    /**
+     * An #EXTINF title that marks an ad: a known ad prefix (Amazon|..., FT|...) or pattern (bare
+     * numeric id), or, in a live playlist, any title that is not `live` (empty included).
+     */
+    function isAdTitleText(title, live, cfg) {
+      var t = String(title || '').trim();
       for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
-        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
+        if (t.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
       }
-      return live && title.indexOf(cfg.liveSegmentTitle) === -1;
+      var pats = cfg.adSegmentTitlePatterns || [];
+      for (var j = 0; j < pats.length; j++) {
+        try { if (new RegExp(pats[j]).test(t)) return true; } catch (e) { /* bad pattern: ignored */ }
+      }
+      return !!live && t.indexOf(cfg.liveSegmentTitle) === -1;
+    }
+
+    /** An #EXTINF line whose title marks an ad (isAdTitleText). */
+    function isAdTitle(extinfLine, live, cfg) {
+      return isAdTitleText(extinfTitle(extinfLine), live, cfg);
     }
 
     /**
@@ -606,13 +633,8 @@
     function isAdSegment(extinfLine, url, inCue, live, cfg) {
       if (inCue) return true;
       if (isAdSegmentUrl(url, cfg)) return true;
-      var title = extinfLine ? extinfTitle(extinfLine) : '';
-      for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
-        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
-      }
       // In a live playlist, real content segments are titled "live".
-      if (live && extinfLine && title.indexOf(cfg.liveSegmentTitle) === -1) return true;
-      return false;
+      return !!extinfLine && isAdTitle(extinfLine, live, cfg);
     }
 
     var SEGMENT_TAGS = ['#EXTINF', '#EXT-X-PROGRAM-DATE-TIME', '#EXT-X-BYTERANGE', '#EXT-X-GAP', '#EXT-X-BITRATE'];
@@ -1044,19 +1066,24 @@
      * to another codec. Among those: equal FRAME-RATE, then the same CODECS string (profile/level
      * and audio codec: no decoder reconfiguration), then the higher bandwidth.
      * A target without CODECS (family unknown) accepts any family.
+     * opts.anyResolution (last-resort bridge, e.g. autoplay at 360p): a video target accepts any
+     * video variant of the same codec family, preferring the highest not above the target's
+     * height; audio-only still matches audio-only only.
      */
-    function pickVariant(variants, target, cfg) {
+    function pickVariant(variants, target, cfg, opts) {
       if (!variants || !variants.length || !target) return null;
       var tw = target.width || 0, th = target.height || 0;
+      var anyRes = !!(opts && opts.anyResolution) && th > 0;
       var tFam = codecFamily(target.codecs, cfg);
       var cands = variants.filter(function (v) {
-        return !!v.url && (v.width || 0) === tw && (v.height || 0) === th &&
-          (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
+        var res = anyRes ? (v.height || 0) > 0 : (v.width || 0) === tw && (v.height || 0) === th;
+        return !!v.url && res && (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
       });
       var tFps = target.frameRate || 0;
       function score(v) {
         var fps = Math.abs((v.frameRate || 0) - tFps);
         var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
+        if (anyRes) return [(v.height || 0) > th ? 1 : 0, -(v.height || 0), fps, codecs, -(v.bandwidth || 0)];
         return [fps, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;
@@ -1221,9 +1248,14 @@
   function tasGqlFactory() {
     'use strict';
 
-    /** Body for a backup token request (persisted query). */
+    /**
+     * Body for a backup token request (persisted query). opts.hashIndex picks the entry of
+     * cfg.gql.persistedQueryHashes (default the first).
+     */
     function buildTokenBody(cfg, channel, playerType, opts) {
       var isVod = !!(opts && opts.isVod);
+      var hashes = cfg.gql.persistedQueryHashes;
+      var hi = opts && opts.hashIndex > 0 ? Math.min(opts.hashIndex, hashes.length - 1) : 0;
       var platform = cfg.gql.androidPlatformPlayerTypes.indexOf(playerType) !== -1 ? 'android' : 'web';
       return {
         operationName: cfg.gql.operationName,
@@ -1236,7 +1268,7 @@
           platform: platform
         },
         extensions: {
-          persistedQuery: { version: 1, sha256Hash: cfg.gql.persistedQueryHash }
+          persistedQuery: { version: 1, sha256Hash: hashes[hi] }
         }
       };
     }
@@ -1299,6 +1331,43 @@
       return null;
     }
 
+    /** True when a GQL response (object or batched array) says the persisted query is unknown. */
+    function isPersistedQueryNotFound(json) {
+      var items = Array.isArray(json) ? json : [json];
+      for (var i = 0; i < items.length; i++) {
+        var errs = items[i] && items[i].errors;
+        if (!Array.isArray(errs)) continue;
+        for (var j = 0; j < errs.length; j++) {
+          if (errs[j] && String(errs[j].message).indexOf('PersistedQueryNotFound') !== -1) return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * Backup token request with hash fallback: post(body) -> Promise<json|null> does the request
+     * (the page script's real fetch with the captured page headers, the same for every try). On
+     * PersistedQueryNotFound the next cfg.gql.persistedQueryHashes entry is tried. state
+     * ({ hashIndex }, shared by the caller across requests) starts at the last hash that was not
+     * rejected, so a stale hash costs one extra request once, not on every token.
+     * Resolves { value, signature } or null.
+     */
+    function fetchToken(cfg, post, channel, playerType, opts, state) {
+      var hashes = cfg.gql.persistedQueryHashes;
+      var st = state || {};
+      function tryAt(i) {
+        if (i >= hashes.length) return Promise.resolve(null);
+        var o = { hashIndex: i, isVod: !!(opts && opts.isVod), vodId: opts && opts.vodId };
+        return Promise.resolve(post(buildTokenBody(cfg, channel, playerType, o))).then(function (json) {
+          if (json && isPersistedQueryNotFound(json)) return tryAt(i + 1);
+          if (json) st.hashIndex = i;
+          return json ? parseTokenResponse(json) : null;
+        });
+      }
+      var start = st.hashIndex > 0 && st.hashIndex < hashes.length ? st.hashIndex : 0;
+      return tryAt(start);
+    }
+
     /**
      * Rewrite variables.playerType of the page's own live PlaybackAccessToken request(s).
      * Only types listed in cfg.forcedPlayerTypeFrom are rewritten. Returns { body, changed }.
@@ -1328,6 +1397,8 @@
       buildTokenHeaders: buildTokenHeaders,
       extractHeaders: extractHeaders,
       parseTokenResponse: parseTokenResponse,
+      isPersistedQueryNotFound: isPersistedQueryNotFound,
+      fetchToken: fetchToken,
       rewritePlayerType: rewritePlayerType,
       randomDeviceId: randomDeviceId
     };
@@ -1363,6 +1434,10 @@
  *                              slower preferred types); its type is pinned. Pinned type with its
  *                              master cached: checked alone first (one fetch per poll), the rest
  *                              only if it fails. docs/DESIGN-v2.md "Twitch".
+ *                              Last-resort types (autoplay, 360p): any resolution of the same
+ *                              codec family, chosen only when every other type answered without
+ *                              a clean playlist, never pinned (a bridge until an HD type is clean
+ *                              again or native is clean for nativeSwitchBackPolls polls).
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
  *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
@@ -1485,6 +1560,11 @@
         c.lockouts[type] = now() + cfg.playerTypeLockoutMs;
       }
 
+      /** autoplay-like bridge type: lower resolution allowed, used only after all others, never pinned. */
+      function isLastResort(type) {
+        return (cfg.lastResortPlayerTypes || []).indexOf(type) !== -1;
+      }
+
       function backupOrder(c) {
         // The page's own token is already this type (gql.rewritePlayerType): its playlist is the
         // native one, ads included, so asking for it again cannot help.
@@ -1578,7 +1658,8 @@
           if (!entry) { lock(c, type); return null; }
           // Same resolution and codec family as the player's variant, or this type is skipped
           // for this poll (no lockout: the player may pick a resolution it has next poll).
-          var v = M.pickVariant(entry.variants, target, cfg);
+          // A last-resort type (autoplay, 360p) bridges at a lower resolution instead.
+          var v = M.pickVariant(entry.variants, target, cfg, isLastResort(type) ? { anyResolution: true } : null);
           if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
           return deps.fetchText(v.url).then(function (res) {
             if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
@@ -1604,17 +1685,20 @@
       /**
        * All types at once (Purple d9cafb2). Resolves with the most preferred clean result known
        * when a result arrives (a slower preferred type is not waited for), or null once every
-       * type has answered without a clean one.
+       * type has answered without a clean one. A last-resort type's result counts only once every
+       * other type has answered without a clean one (it is asked at the same time, so the bridge
+       * is ready then).
        */
       function race(c, types, target) {
         return new Promise(function (resolve) {
           var results = [];
           var left = types.length;
+          var preferredLeft = types.filter(function (t) { return !isLastResort(t); }).length;
           var done = false;
           function decide() {
             if (done) return;
             for (var i = 0; i < types.length; i++) {
-              if (results[i]) { done = true; resolve(results[i]); return; }
+              if (results[i] && (!isLastResort(types[i]) || preferredLeft === 0)) { done = true; resolve(results[i]); return; }
             }
             if (left === 0) { done = true; resolve(null); }
           }
@@ -1622,6 +1706,7 @@
             attempt(c, type, target).then(function (r) {
               results[i] = r || null;
               left--;
+              if (!isLastResort(type)) preferredLeft--;
               // Results that land in the same turn are compared before choosing.
               Promise.resolve().then(decide);
             });
@@ -1641,7 +1726,7 @@
           found = race(c, order, target);
         }
         return found.then(function (r) {
-          if (r) c.pinned = r.type;
+          if (r && !isLastResort(r.type)) c.pinned = r.type;
           return r;
         });
       }
@@ -2484,15 +2569,20 @@
   // ------------------------------------------------------------------ fetch hook
   var realFetch = root.fetch;
 
+  var tokenHashState = { hashIndex: 0 }; // persisted query hash that last answered (gql.fetchToken)
+
   function requestToken(channel, playerType) {
     var ctrl = new AbortController();
     var timer = setTimeout(function () { ctrl.abort(); }, cfg.tokenTimeoutMs);
-    var body = JSON.stringify(G.buildTokenBody(cfg, channel, playerType));
+    // The page's own captured GQL headers (Client-Integrity, Device-ID, Authorization, ...) go
+    // on every try, the hash fallback included (Purple T-401).
     var headers = G.buildTokenHeaders(cfg, captured, fallbackDeviceId);
-    return realFetch.call(root, cfg.gql.url, { method: 'POST', headers: headers, body: body, signal: ctrl.signal })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        var tok = j ? G.parseTokenResponse(j) : null;
+    function post(body) {
+      return realFetch.call(root, cfg.gql.url, { method: 'POST', headers: headers, body: JSON.stringify(body), signal: ctrl.signal })
+        .then(function (r) { return r.ok ? r.json() : null; });
+    }
+    return G.fetchToken(cfg, post, channel, playerType, null, tokenHashState)
+      .then(function (tok) {
         if (!tok) log.debug('no token for', playerType);
         return tok;
       })

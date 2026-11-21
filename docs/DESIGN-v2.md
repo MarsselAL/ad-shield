@@ -24,7 +24,7 @@ ad detection by `stitched` markers and non-`live` `#EXTINF` titles.
 
 | Piece | 1.1.5 | 2.0 |
 |---|---|---|
-| Backup player types | site, popout, mobile_web, embed, **autoplay (360p)** | embed, site, mobile_web (popout skipped: the page token already is popout). No autoplay or picture-by-picture (360p caps; vaft #450). |
+| Backup player types | site, popout, mobile_web, embed, **autoplay (360p)** | embed, site, mobile_web (popout skipped: the page token already is popout), then **autoplay as a last-resort 360p bridge** (2026-11-21): used only when every other type answered with ads, never pinned, left when an HD type is clean again or native is clean for 2 polls (docs/research-2026-11-21-twitch.md §3 item 4). No picture-by-picture. |
 | Variant choice | closest match, may be lower | exact RESOLUTION (height) and codec family, else the type is skipped |
 | No clean backup | strip ads, then **replay the last clean playlist** for up to 6 s, hold 4 s | never an empty playlist: if stripping leaves no segments, wait for the whole backup search; if nothing is clean, pass the original through (the ad plays). Otherwise strip ad segments, keep MEDIA-SEQUENCE continuous with the live sequence numbers (existing `resequence`), DISCONTINUITY at the boundaries. No replay of stale playlists. |
 | Ad segment requested anyway | tiny blank answer | same (cached ad URLs, 120 s) |

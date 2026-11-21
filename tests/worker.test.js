@@ -143,7 +143,7 @@ test('media with ads: token via page message, clean embed backup served, event p
     var msgs = scope.posted.map(function (m) { return m[KEY]; });
     var tokenReqs = msgs.filter(function (m) { return m.type === 'token-request'; }).map(function (m) { return m.playerType; });
     // embed: prewarmed when the master was seen; the media poll with ads asks every type at once.
-    assert.deepEqual(tokenReqs, ['embed', 'site', 'mobile_web'], 'default order: embed first, popout (the page token type) skipped, no autoplay');
+    assert.deepEqual(tokenReqs, ['embed', 'site', 'mobile_web', 'autoplay'], 'default order: embed first, popout (the page token type) skipped, autoplay last');
     var events = msgs.filter(function (m) { return m.type === 'event'; }).map(function (m) { return m.name; });
     assert.ok(events.indexOf('ad-blocked-backup') !== -1);
   });

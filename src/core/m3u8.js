@@ -592,19 +592,24 @@
      * to another codec. Among those: equal FRAME-RATE, then the same CODECS string (profile/level
      * and audio codec: no decoder reconfiguration), then the higher bandwidth.
      * A target without CODECS (family unknown) accepts any family.
+     * opts.anyResolution (last-resort bridge, e.g. autoplay at 360p): a video target accepts any
+     * video variant of the same codec family, preferring the highest not above the target's
+     * height; audio-only still matches audio-only only.
      */
-    function pickVariant(variants, target, cfg) {
+    function pickVariant(variants, target, cfg, opts) {
       if (!variants || !variants.length || !target) return null;
       var tw = target.width || 0, th = target.height || 0;
+      var anyRes = !!(opts && opts.anyResolution) && th > 0;
       var tFam = codecFamily(target.codecs, cfg);
       var cands = variants.filter(function (v) {
-        return !!v.url && (v.width || 0) === tw && (v.height || 0) === th &&
-          (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
+        var res = anyRes ? (v.height || 0) > 0 : (v.width || 0) === tw && (v.height || 0) === th;
+        return !!v.url && res && (tFam === 'unknown' || codecFamily(v.codecs, cfg) === tFam);
       });
       var tFps = target.frameRate || 0;
       function score(v) {
         var fps = Math.abs((v.frameRate || 0) - tFps);
         var codecs = target.codecs && v.codecs === target.codecs ? 0 : 1;
+        if (anyRes) return [(v.height || 0) > th ? 1 : 0, -(v.height || 0), fps, codecs, -(v.bandwidth || 0)];
         return [fps, codecs, -(v.bandwidth || 0)];
       }
       var best = null, bestScore = null;

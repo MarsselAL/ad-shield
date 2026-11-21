@@ -146,20 +146,25 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
-    // Backup playerType order: embed, site, mobile_web, popout. No autoplay or
-    // picture-by-picture: both are capped at 360p (vaft #450), and a backup is only used at the
-    // resolution the player chose anyway (m3u8.pickVariant). forcedPlayerType (the page's own
-    // token type) is skipped by the processor, so popout is only tried when the rewrite is off.
-    // Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed clean at 1080p.
-    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout'],
-    // Earlier default orders (1.x, then 2.0). A stored list equal to one of these was never
-    // chosen by the viewer (the background stores normalised defaults on install), so
-    // settings.normalize replaces it with the current default.
-    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web']],
+    // Backup playerType order: embed, site, mobile_web, popout, then autoplay as a last resort.
+    // A backup is used at the resolution the player chose (m3u8.pickVariant), except a
+    // lastResortPlayerTypes one: autoplay (platform android) is capped at 360p (vaft #450), so it
+    // is a low-quality bridge (TTV AB "Low Quality Fallback", docs/research-2026-11-21-twitch.md
+    // §3 item 4), used only when every other type has answered without a clean playlist, and
+    // never pinned (the HD types are asked again once their lockout ends). forcedPlayerType (the
+    // page's own token type) is skipped by the processor, so popout is only tried when the
+    // rewrite is off. Live 2026-11-19 (kaicenat preroll): site/popout/mobile_web ad-only, embed
+    // clean at 1080p.
+    backupPlayerTypes: ['embed', 'site', 'mobile_web', 'popout', 'autoplay'],
+    // Earlier default orders (1.x, then 2.0, then 2.0 without autoplay). A stored list equal to
+    // one of these was never chosen by the viewer (the background stores normalised defaults on
+    // install), so settings.normalize replaces it with the current default.
+    previousDefaultPlayerTypes: [['site', 'popout', 'mobile_web', 'embed', 'autoplay'], ['popout', 'embed', 'site', 'mobile_web'], ['embed', 'site', 'mobile_web', 'popout']],
     // playerTypes the options page accepts. The first five are research-technique.md §4.1,
     // frontpage is research-github.md (Purple B-012), picture-by-picture is video-swap-new (§4.1).
     knownPlayerTypes: ['site', 'popout', 'mobile_web', 'embed', 'autoplay', 'frontpage', 'picture-by-picture'],
-    // Must be last in a viewer's own list if present (options page validation).
+    // Must be last in a viewer's own list if present (options page validation). The processor
+    // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
     maxPlayerTypes: 8,
