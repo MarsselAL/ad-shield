@@ -284,6 +284,28 @@ test('token error for one type: locked out, next type used', function () {
   });
 });
 
+// Purple T-204 / B-012: a backup that announces its own break is contaminated even while all its
+// segments are still live: locked out (playerTypeLockoutMs), master dropped, next type used.
+function announcing(type, line) {
+  return cleanFor(type).replace('#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z', line + '\n#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z');
+}
+[
+  ['stitched-ad DATERANGE with a future START-DATE', '#EXT-X-DATERANGE:ID="stitched-ad-1762891260-30",CLASS="twitch-stitched-ad",START-DATE="2025-11-11T20:01:00.000Z",DURATION=30.000,X-TV-TWITCH-AD-ROLL-TYPE="MIDROLL",X-TV-TWITCH-AD-POD-LENGTH="1"'],
+  ['EXT-X-CUE-OUT', '#EXT-X-CUE-OUT:30.000'],
+  ['an ad-titled segment', '#EXTINF:2.002,FT|1-2-3\nhttps://video-edge-000000.xyz01.abs.hls.ttvnw.net/v1/segment/SYNTH-embed-ad-1.ts']
+].forEach(function (c) {
+  test('backup announcing its own break (' + c[0] + '): contaminated, locked out, next type used', function () {
+    var w = makeWorld({ embed: announcing('embed', c[1]), site: cleanFor('site'), mobile_web: cleanFor('mobile_web') });
+    assert.ok(M.hasAds(announcing('embed', c[1]), cfg), 'hasAds on the backup');
+    w.proc.onMaster(MASTER_URL, MASTER);
+    return w.proc.onMedia(NATIVE_720, PREROLL).then(function (out) {
+      assertSameSegments(out, cleanFor('site'));
+      assert.ok(w.proc.stateOf('somechannel').lockouts.embed > w.t, 'embed locked out');
+      assert.equal(w.proc.stateOf('somechannel').pinned, 'site');
+    });
+  });
+});
+
 // TTV-AB #98: a client-side ad (twitch-maf-ad) is a separate video beside the stream; the
 // playlist's segments are all live. Nothing to replace: no backup search, no stripping.
 test('client-side ad marker only (twitch-maf-ad), all segments live: untouched, no backup search, no events', function () {
