@@ -80,9 +80,14 @@
     // Source: research-technique.md §2.3.
     liveSegmentTitle: 'live',
 
-    // #EXTINF titles that start with this are ad segments ("Amazon|<id>").
-    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009).
-    adSegmentTitlePrefixes: ['Amazon'],
+    // #EXTINF titles that start with this are ad segments ("Amazon|<id>", "FT|<n>-<n>-<n>").
+    // Source: research-github.md "How current Twitch ads are delivered" item 1 (Purple B-007..B-009);
+    // FT|: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    adSegmentTitlePrefixes: ['Amazon', 'FT|'],
+    // #EXTINF titles matching one of these (RegExp source strings) are ad segments: bare
+    // 10-digit ad ids. Source: docs/research-2026-11-21-twitch.md §2 (Purple T-203).
+    // These and the prefixes also apply where the not-`live` rule does not (VOD playlists).
+    adSegmentTitlePatterns: ['^[0-9]{10,}$'],
 
     // Segment URL substrings that identify ad media.
     // Source: research-technique.md §2.1 (R l.69).

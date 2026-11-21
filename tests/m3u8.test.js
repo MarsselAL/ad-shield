@@ -43,6 +43,34 @@ test('hasAds: ad segment titles alone (no marker) are ads in a live playlist', f
   assert.notOk(M.hasAds('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\na.ts\n#EXTINF:2.000,live\nb.ts\n', cfg), 'all live');
   assert.notOk(M.hasAds('#EXTM3U\n#EXTINF:10.000,\n0.ts\n#EXT-X-ENDLIST\n', cfg), 'VOD untitled');
 });
+test('hasAds/stripAds: FT|n-n-n and bare numeric ad titles (no stitched marker) are ads; live segments kept', function () {
+  var t = fixture('midroll-ft.m3u8');
+  assert.ok(M.hasAds(t, cfg));
+  var r = M.stripAds(t, cfg);
+  assert.equal(r.removed, 3);
+  assert.equal(r.kept, 4);
+  assert.deepEqual(segUrls(r.text).map(function (u) { return u.replace(/.*SYNTH-/, ''); }),
+    ['live-8000.ts', 'live-8001.ts', 'live-8005.ts', 'live-8006.ts']);
+  assert.equal(tagLines(r.text, '#EXT-X-DATERANGE').length, 5, 'stream-source / session DATERANGEs kept');
+  assert.notIncludes(r.text, '#EXT-X-TWITCH-PREFETCH', 'prefetch removed in an ad context');
+});
+test('hasAds: FT| and numeric titles are ads even where the not-live rule does not apply (ENDLIST)', function () {
+  function vod(title) {
+    return '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:2.000,\nhttps://x.invalid/a.ts\n#EXTINF:2.000,' + title + '\nhttps://x.invalid/b.ts\n#EXT-X-ENDLIST\n';
+  }
+  assert.ok(M.hasAds(vod('FT|10-20-30'), cfg));
+  assert.ok(M.hasAds(vod('4012345678'), cfg));
+  assert.notOk(M.hasAds(vod(''), cfg), 'untitled VOD segments are not ads');
+  assert.notOk(M.hasAds(vod('123'), cfg), 'short numbers are not ad ids');
+  assert.equal(M.stripAds(vod('FT|10-20-30'), cfg).removed, 1);
+});
+test('hasAds: normal live segments (with stream-source "live" DATERANGE and maf-ad) are not ads', function () {
+  var t = fixture('maf-ad.m3u8').replace('#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z',
+    '#EXT-X-DATERANGE:ID="source-1",CLASS="twitch-stream-source",START-DATE="2025-11-11T20:00:00.000Z",END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE="live"\n#EXT-X-PROGRAM-DATE-TIME:2025-11-11T20:00:00.000Z');
+  assert.notOk(M.hasAds(t, cfg));
+  assert.notOk(M.hasAds(fixture('clean.m3u8').replace(/,live\n/g, ',live \n'), cfg), 'trailing space in the title');
+  assert.equal(M.stripAds(fixture('clean.m3u8'), cfg).removed, 0);
+});
 test('hasAds: CUE-OUT marker detected', function () {
   assert.ok(M.hasAds('#EXTM3U\n#EXT-X-CUE-OUT:30\n#EXTINF:2.000,live\nseg.ts\n', cfg));
 });

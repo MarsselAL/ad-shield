@@ -58,13 +58,25 @@
       return false;
     }
 
-    /** An #EXTINF line whose title marks an ad: Amazon|..., or (live playlist) not `live`. */
-    function isAdTitle(extinfLine, live, cfg) {
-      var title = extinfTitle(extinfLine);
+    /**
+     * An #EXTINF title that marks an ad: a known ad prefix (Amazon|..., FT|...) or pattern (bare
+     * numeric id), or, in a live playlist, any title that is not `live` (empty included).
+     */
+    function isAdTitleText(title, live, cfg) {
+      var t = String(title || '').trim();
       for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
-        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
+        if (t.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
       }
-      return live && title.indexOf(cfg.liveSegmentTitle) === -1;
+      var pats = cfg.adSegmentTitlePatterns || [];
+      for (var j = 0; j < pats.length; j++) {
+        try { if (new RegExp(pats[j]).test(t)) return true; } catch (e) { /* bad pattern: ignored */ }
+      }
+      return !!live && t.indexOf(cfg.liveSegmentTitle) === -1;
+    }
+
+    /** An #EXTINF line whose title marks an ad (isAdTitleText). */
+    function isAdTitle(extinfLine, live, cfg) {
+      return isAdTitleText(extinfTitle(extinfLine), live, cfg);
     }
 
     /**
@@ -147,13 +159,8 @@
     function isAdSegment(extinfLine, url, inCue, live, cfg) {
       if (inCue) return true;
       if (isAdSegmentUrl(url, cfg)) return true;
-      var title = extinfLine ? extinfTitle(extinfLine) : '';
-      for (var i = 0; i < cfg.adSegmentTitlePrefixes.length; i++) {
-        if (title.indexOf(cfg.adSegmentTitlePrefixes[i]) === 0) return true;
-      }
       // In a live playlist, real content segments are titled "live".
-      if (live && extinfLine && title.indexOf(cfg.liveSegmentTitle) === -1) return true;
-      return false;
+      return !!extinfLine && isAdTitle(extinfLine, live, cfg);
     }
 
     var SEGMENT_TAGS = ['#EXTINF', '#EXT-X-PROGRAM-DATE-TIME', '#EXT-X-BYTERANGE', '#EXT-X-GAP', '#EXT-X-BITRATE'];
