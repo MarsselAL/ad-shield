@@ -19,7 +19,6 @@ See `review-risks.md` risk 1 about "single purpose".)
 | `unlimitedStorage` | The updated EasyList/EasyPrivacy/cookie-list rules and site-specific hiding data stored locally are several megabytes, above the default `storage.local` quota. |
 | `alarms` | One weekly alarm that triggers the filter-list update (and a one-off check shortly after install/start). No alarm exists while "Update filter lists automatically" is off. |
 | Host permission `<all_urls>` | Blocking, hiding and cookie rules must apply on every site the user visits; `modifyHeaders` rules (stripping third-party tracker cookies), content-script CSS registration, cookie-banner handling and `scripting` injection all need host access. The extension does not read, store or transmit page content. |
-| Host permission `*://*.twitch.tv/*` | Twitch video-ad handling (page script and playlist processing run on twitch.tv). Technically already covered by `<all_urls>`; see `review-risks.md` risk 3: consider removing this line to shorten the review story. |
 
 Not requested: `tabs`, `webRequest`, `webNavigation`, `cookies`, `history`, `proxy`, `activeTab`.
 (Note: `chrome.tabs.create/query/reload/sendMessage` are used without the `tabs` permission; they

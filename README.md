@@ -148,7 +148,6 @@ To rebuild with fresh lists: `python3 -I tools/build_rules.py`, then `bash tests
 | `declarativeNetRequest` | Static rulesets in `rules/` and the dynamic allowlist rule. |
 | `declarativeNetRequestFeedback` | Popup counts via `getMatchedRules` and the badge count (see below). |
 | host `<all_urls>` | Needed for `modifyHeaders` (cookie stripping), for CSS on all sites and for autoconsent. |
-| host `*://*.twitch.tv/*` | Twitch scripts (kept explicitly; covered by `<all_urls>`). |
 
 There is no `tabs`, `webRequest`, `webNavigation`, `cookies` or `proxy` permission.
 

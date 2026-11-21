@@ -14,8 +14,7 @@
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "*://*.twitch.tv/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js"

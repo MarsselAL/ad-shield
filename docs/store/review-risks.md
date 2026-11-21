@@ -28,9 +28,8 @@ review docs say slows review (days to weeks; first review often longest). Not a 
 itself. Mitigations: clear justifications (`permissions.md`); open-source link; put test notes in
 the dashboard ("No account needed…"); submit as **Unlisted** first; do not resubmit repeatedly
 (restarts the queue). `declarativeNetRequest` modifyHeaders on all URLs needs host access, so
-`<all_urls>` cannot be narrowed without losing cookie stripping/cosmetics. Remove the redundant
-`*://*.twitch.tv/*` host permission (covered by `<all_urls>`): fewer lines to explain
-(decision for Marsel; code change not made here).
+`<all_urls>` cannot be narrowed without losing cookie stripping/cosmetics. The redundant
+`*://*.twitch.tv/*` host permission was removed (content_scripts matches are separate and unchanged).
 
 ### 3. Circumventing YouTube/Twitch ads → TOS exposure, possible manual flag — medium
 Google owns YouTube; YouTube's ToS forbids circumventing ads, but the Web Store has long hosted
