@@ -106,10 +106,15 @@
       // Public web Client-ID used by twitch.tv itself. Source: research-technique.md §1.1.
       clientId: 'kimne78kx3ncx6brgo4mv6wki5h1ko',
       operationName: 'PlaybackAccessToken',
-      // Persisted query hash for PlaybackAccessToken. Source: research-technique.md §1.1
-      // (identical in pixeltris and ryanbr vaft, checked 2026-11-11). If token requests start
-      // failing with "PersistedQueryNotFound", this is the value to update.
-      persistedQueryHash: 'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9',
+      // Persisted query hashes for PlaybackAccessToken, tried in order: on a
+      // "PersistedQueryNotFound" answer the next one is used (gql.fetchToken), and the page keeps
+      // using the one that answered. 0828119d...: the current hash, honours `platform` (Purple
+      // docs/server/tokens.md B-030, docs/research-2026-11-21-twitch.md §2). ed230aa1...: the
+      // older one (research-technique.md §1.1, pixeltris and ryanbr vaft), ignores `platform`.
+      persistedQueryHashes: [
+        '0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712',
+        'ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9'
+      ],
       // playerType that uses platform "android" instead of "web". Source: research-technique.md §1.1/§4.1.
       androidPlatformPlayerTypes: ['autoplay'],
       // Headers copied from the page's own GQL requests. Source: research-technique.md §1.1.

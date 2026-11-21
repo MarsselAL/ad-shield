@@ -112,15 +112,20 @@
   // ------------------------------------------------------------------ fetch hook
   var realFetch = root.fetch;
 
+  var tokenHashState = { hashIndex: 0 }; // persisted query hash that last answered (gql.fetchToken)
+
   function requestToken(channel, playerType) {
     var ctrl = new AbortController();
     var timer = setTimeout(function () { ctrl.abort(); }, cfg.tokenTimeoutMs);
-    var body = JSON.stringify(G.buildTokenBody(cfg, channel, playerType));
+    // The page's own captured GQL headers (Client-Integrity, Device-ID, Authorization, ...) go
+    // on every try, the hash fallback included (Purple T-401).
     var headers = G.buildTokenHeaders(cfg, captured, fallbackDeviceId);
-    return realFetch.call(root, cfg.gql.url, { method: 'POST', headers: headers, body: body, signal: ctrl.signal })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        var tok = j ? G.parseTokenResponse(j) : null;
+    function post(body) {
+      return realFetch.call(root, cfg.gql.url, { method: 'POST', headers: headers, body: JSON.stringify(body), signal: ctrl.signal })
+        .then(function (r) { return r.ok ? r.json() : null; });
+    }
+    return G.fetchToken(cfg, post, channel, playerType, null, tokenHashState)
+      .then(function (tok) {
         if (!tok) log.debug('no token for', playerType);
         return tok;
       })

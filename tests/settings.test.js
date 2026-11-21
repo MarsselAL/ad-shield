@@ -71,8 +71,55 @@ test('buildTokenBody: persisted query, web platform; autoplay uses android', fun
   assert.equal(b.variables.playerType, 'popout');
   assert.equal(b.variables.platform, 'web');
   assert.equal(b.variables.isLive, true);
-  assert.equal(b.extensions.persistedQuery.sha256Hash, cfg.gql.persistedQueryHash);
+  assert.equal(b.extensions.persistedQuery.sha256Hash, '0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712', 'current hash first');
+  assert.equal(G.buildTokenBody(cfg, 'c', 'site', { hashIndex: 1 }).extensions.persistedQuery.sha256Hash, cfg.gql.persistedQueryHashes[1]);
   assert.equal(G.buildTokenBody(cfg, 'c', 'autoplay').variables.platform, 'android');
+});
+test('persisted query hashes: 64-hex values, current one first, older one kept as fallback', function () {
+  var h = cfg.gql.persistedQueryHashes;
+  assert.ok(h.length >= 2);
+  h.forEach(function (x) { assert.ok(/^[0-9a-f]{64}$/.test(x), x); });
+  assert.equal(h[0].indexOf('0828119d'), 0);
+  assert.equal(h[1].indexOf('ed230aa1'), 0);
+});
+var PQNF = { errors: [{ message: 'PersistedQueryNotFound' }] };
+var TOKEN_JSON = { data: { streamPlaybackAccessToken: { value: 'v', signature: 's' } } };
+test('isPersistedQueryNotFound: object and batched forms; other errors are not', function () {
+  assert.ok(G.isPersistedQueryNotFound(PQNF));
+  assert.ok(G.isPersistedQueryNotFound([PQNF]));
+  assert.notOk(G.isPersistedQueryNotFound({ errors: [{ message: 'service timeout' }] }));
+  assert.notOk(G.isPersistedQueryNotFound(TOKEN_JSON));
+  assert.notOk(G.isPersistedQueryNotFound(null));
+});
+test('fetchToken: PersistedQueryNotFound -> next hash; the answering hash is remembered', function () {
+  var sent = [];
+  var state = { hashIndex: 0 };
+  function post(body) {
+    sent.push(body.extensions.persistedQuery.sha256Hash);
+    return Promise.resolve(body.extensions.persistedQuery.sha256Hash === cfg.gql.persistedQueryHashes[0] ? PQNF : TOKEN_JSON);
+  }
+  return G.fetchToken(cfg, post, 'c', 'embed', null, state).then(function (tok) {
+    assert.deepEqual(tok, { value: 'v', signature: 's' });
+    assert.deepEqual(sent, cfg.gql.persistedQueryHashes.slice(0, 2));
+    assert.equal(state.hashIndex, 1);
+    sent = [];
+    return G.fetchToken(cfg, post, 'c', 'site', null, state);
+  }).then(function (tok) {
+    assert.deepEqual(tok, { value: 'v', signature: 's' });
+    assert.deepEqual(sent, [cfg.gql.persistedQueryHashes[1]], 'stale hash not tried again');
+  });
+});
+test('fetchToken: every hash rejected or no response -> null, no endless retry', function () {
+  var n = 0;
+  return G.fetchToken(cfg, function () { n++; return Promise.resolve(PQNF); }, 'c', 'embed', null, {}).then(function (tok) {
+    assert.equal(tok, null);
+    assert.equal(n, cfg.gql.persistedQueryHashes.length);
+    n = 0;
+    return G.fetchToken(cfg, function () { n++; return Promise.resolve(null); }, 'c', 'embed', null, {});
+  }).then(function (tok) {
+    assert.equal(tok, null);
+    assert.equal(n, 1, 'a failed request is not retried with another hash');
+  });
 });
 test('buildTokenHeaders: captured values used, fallbacks otherwise', function () {
   var h = G.buildTokenHeaders(cfg, { 'client-id': 'cid', 'x-device-id': 'dev', authorization: 'OAuth abc', 'client-integrity': 'ci', 'client-version': 'cv', 'client-session-id': 'cs' }, 'fallback');

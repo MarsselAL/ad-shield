@@ -11,9 +11,14 @@
   function tasGqlFactory() {
     'use strict';
 
-    /** Body for a backup token request (persisted query). */
+    /**
+     * Body for a backup token request (persisted query). opts.hashIndex picks the entry of
+     * cfg.gql.persistedQueryHashes (default the first).
+     */
     function buildTokenBody(cfg, channel, playerType, opts) {
       var isVod = !!(opts && opts.isVod);
+      var hashes = cfg.gql.persistedQueryHashes;
+      var hi = opts && opts.hashIndex > 0 ? Math.min(opts.hashIndex, hashes.length - 1) : 0;
       var platform = cfg.gql.androidPlatformPlayerTypes.indexOf(playerType) !== -1 ? 'android' : 'web';
       return {
         operationName: cfg.gql.operationName,
@@ -26,7 +31,7 @@
           platform: platform
         },
         extensions: {
-          persistedQuery: { version: 1, sha256Hash: cfg.gql.persistedQueryHash }
+          persistedQuery: { version: 1, sha256Hash: hashes[hi] }
         }
       };
     }
@@ -89,6 +94,43 @@
       return null;
     }
 
+    /** True when a GQL response (object or batched array) says the persisted query is unknown. */
+    function isPersistedQueryNotFound(json) {
+      var items = Array.isArray(json) ? json : [json];
+      for (var i = 0; i < items.length; i++) {
+        var errs = items[i] && items[i].errors;
+        if (!Array.isArray(errs)) continue;
+        for (var j = 0; j < errs.length; j++) {
+          if (errs[j] && String(errs[j].message).indexOf('PersistedQueryNotFound') !== -1) return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * Backup token request with hash fallback: post(body) -> Promise<json|null> does the request
+     * (the page script's real fetch with the captured page headers, the same for every try). On
+     * PersistedQueryNotFound the next cfg.gql.persistedQueryHashes entry is tried. state
+     * ({ hashIndex }, shared by the caller across requests) starts at the last hash that was not
+     * rejected, so a stale hash costs one extra request once, not on every token.
+     * Resolves { value, signature } or null.
+     */
+    function fetchToken(cfg, post, channel, playerType, opts, state) {
+      var hashes = cfg.gql.persistedQueryHashes;
+      var st = state || {};
+      function tryAt(i) {
+        if (i >= hashes.length) return Promise.resolve(null);
+        var o = { hashIndex: i, isVod: !!(opts && opts.isVod), vodId: opts && opts.vodId };
+        return Promise.resolve(post(buildTokenBody(cfg, channel, playerType, o))).then(function (json) {
+          if (json && isPersistedQueryNotFound(json)) return tryAt(i + 1);
+          if (json) st.hashIndex = i;
+          return json ? parseTokenResponse(json) : null;
+        });
+      }
+      var start = st.hashIndex > 0 && st.hashIndex < hashes.length ? st.hashIndex : 0;
+      return tryAt(start);
+    }
+
     /**
      * Rewrite variables.playerType of the page's own live PlaybackAccessToken request(s).
      * Only types listed in cfg.forcedPlayerTypeFrom are rewritten. Returns { body, changed }.
@@ -118,6 +160,8 @@
       buildTokenHeaders: buildTokenHeaders,
       extractHeaders: extractHeaders,
       parseTokenResponse: parseTokenResponse,
+      isPersistedQueryNotFound: isPersistedQueryNotFound,
+      fetchToken: fetchToken,
       rewritePlayerType: rewritePlayerType,
       randomDeviceId: randomDeviceId
     };

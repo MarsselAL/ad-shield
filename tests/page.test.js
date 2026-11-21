@@ -153,9 +153,41 @@ test('enabled: concurrent worker token requests each start their own GQL request
     assert.includes(f.init.body, '"playerType":"' + types[i] + '"', 'not rewritten to the page token type');
   });
   var p = Promise.resolve();
-  for (var k = 0; k < 6; k++) p = p.then(function () {});
+  for (var k = 0; k < 12; k++) p = p.then(function () {});
   return p.then(function () {
     var replies = w.posted.map(function (m) { return m[KEY]; }).filter(function (m) { return m.type === 'token-response'; });
     assert.deepEqual(replies.map(function (m) { return m.id; }).sort(), [30, 31, 32]);
+  });
+});
+
+// Persisted query hash fallback (gql.fetchToken): the retry carries the same captured page headers.
+test('enabled: PersistedQueryNotFound -> retried with the next hash, captured page headers on both', function () {
+  env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  return fetch(cfg.gql.url, { method: 'POST', headers: { 'Client-Integrity': 'ci-1', Authorization: 'OAuth zz', 'X-Device-Id': 'dev-1' }, body: '{}' }).then(function () {
+    var hashes = cfg.gql.persistedQueryHashes;
+    env.fetchJson = function (input, init) {
+      var b = JSON.parse(init.body);
+      return b.extensions.persistedQuery.sha256Hash === hashes[0]
+        ? { errors: [{ message: 'PersistedQueryNotFound' }] }
+        : { data: { streamPlaybackAccessToken: { value: 'tv', signature: 'ts' } } };
+    };
+    var w = new Worker(TWITCH_WORKER);
+    var before = env.fetches.length;
+    workerSays(w, { type: 'token-request', id: 51, channel: 'somechannel', playerType: 'embed' });
+    var p = Promise.resolve();
+    for (var k = 0; k < 16; k++) p = p.then(function () {});
+    return p.then(function () {
+      env.fetchJson = null;
+      var sent = env.fetches.slice(before);
+      assert.equal(sent.length, 2, 'one retry');
+      assert.deepEqual(sent.map(function (f) { return JSON.parse(f.init.body).extensions.persistedQuery.sha256Hash; }), hashes.slice(0, 2));
+      sent.forEach(function (f) {
+        assert.equal(f.init.headers['Client-Integrity'], 'ci-1');
+        assert.equal(f.init.headers.Authorization, 'OAuth zz');
+        assert.equal(f.init.headers['X-Device-Id'], 'dev-1');
+      });
+      var reply = w.posted.map(function (m) { return m[KEY]; }).filter(function (m) { return m.type === 'token-response' && m.id === 51; });
+      assert.deepEqual(reply[0].token, { value: 'tv', signature: 'ts' });
+    });
   });
 });

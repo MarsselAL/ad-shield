@@ -104,7 +104,8 @@ function installBrowserStubs(opts) {
 
   g.fetch = function (input, init) {
     env.fetches.push({ input: input, init: init });
-    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({}); } });
+    var json = env.fetchJson ? env.fetchJson(input, init) : {};
+    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(json); } });
   };
 
   g.XMLHttpRequest = function () {
