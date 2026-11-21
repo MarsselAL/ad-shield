@@ -1,8 +1,60 @@
-# Ad Shield
+<p align="center"><img src="icons/icon128.png" width="96" height="96" alt="Ad Shield logo"></p>
 
-A Manifest V3 browser extension (Chrome 120+, also Edge and Brave) that blocks ads, trackers,
-tracking cookies and cookie banners on all sites, and video ads on Twitch live streams. Plain
-JavaScript, no runtime dependencies, no proxies, no telemetry, no remote configuration.
+<h1 align="center">Ad Shield</h1>
+
+<p align="center"><strong>A free, open-source ad, tracker and cookie-banner blocker for Chrome, Edge, Opera and Brave.</strong><br>
+No telemetry. No accounts. No remote configuration.</p>
+
+<p align="center">
+  <img alt="Manifest V3" src="https://img.shields.io/badge/Manifest-V3-2f7d5b">
+  <img alt="Chrome 120+" src="https://img.shields.io/badge/Chrome-120%2B-2f7d5b">
+  <img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-2f7d5b">
+  <img alt="Version 2.0.0" src="https://img.shields.io/badge/version-2.0.0-2f7d5b">
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#privacy">Privacy</a> ·
+  <a href="#support">Support</a> ·
+  <a href="https://marsselal.github.io/ad-shield/store/privacy-policy.html">Privacy policy</a>
+</p>
+
+![Ad Shield popup on a news page: 10 ads, 3 trackers and 1 cookie banner blocked](docs/store/images/shot-1-popup.png)
+
+### Highlights
+
+- **Blocks ads and trackers on every site** with Chrome's built-in rule engine (filter rules from
+  EasyList and EasyPrivacy), before they load.
+- **Hides cookie banners**; optional auto-reject (off by default).
+- **Strips tracking cookies and tracking parameters** (`utm_*`, `fbclid`, `gclid` and others).
+- **Works on video sites too**, including YouTube and Twitch. These sites change often, so this
+  part can stop working until an update, and some ads cannot be removed.
+- **Hide any element** with a point-and-click picker; your own rules are editable in Settings.
+- **One switch per site** for pages that break.
+- **Private by design**: settings stay in your browser; the only downloads are the three public
+  filter lists, once a week ([privacy policy](https://marsselal.github.io/ad-shield/store/privacy-policy.html)).
+
+Ad Shield is not a perfect blocker: Chrome's rule system cannot express everything that
+uBlock Origin can, so some ads get through. Do not run two ad blockers at once.
+
+<table>
+  <tr>
+    <td><img src="docs/store/images/shot-2-settings.png" alt="Settings: every feature is a switch"></td>
+    <td><img src="docs/store/images/shot-3-filters.png" alt="Hide any element, per site"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/store/images/shot-4-privacy.png" alt="No telemetry, open source, filter lists"></td>
+    <td><img src="docs/store/images/shot-5-support.png" alt="Free for everyone; optional tip"></td>
+  </tr>
+</table>
+
+---
+
+A Manifest V3 browser extension (Chrome 120+, also Edge, Opera and Brave) that blocks ads,
+trackers, tracking cookies and cookie banners on all sites, and video ads on Twitch live
+streams. Plain JavaScript, no runtime dependencies, no proxies, no telemetry, no remote
+configuration.
 
 ## What it does
 
@@ -71,7 +123,9 @@ The built files in `build/` are committed. To rebuild them: `python3 tools/build
 
 1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
    `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
-   Tests, tools, docs and test results are left out.
+   Tests, tools, docs and test results are left out. It also makes
+   `dist/ad-shield-<version>-store.zip` (`manifest.json` at the zip root, no `INSTALL.txt`) for
+   uploading to the browser stores.
 2. Send the zip (USB stick, cloud drive, e-mail).
 3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
    `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `ad-shield`
@@ -319,4 +373,6 @@ The popup footer and the settings page show the same links (values in `docs/dona
 Code: MIT, see [LICENSE](LICENSE). Filter data: The EasyList authors (https://easylist.to/),
 used under CC BY-SA 3.0 (cookie list header: CC BY 3.0); autoconsent: DuckDuckGo, MPL-2.0,
 unmodified. Details in [NOTICE.md](NOTICE.md) and [rules/NOTICE.md](rules/NOTICE.md).
-Not affiliated with or endorsed by Twitch, Amazon, EasyList or DuckDuckGo.
+Not affiliated with or endorsed by Google, YouTube, Twitch, Amazon, Microsoft, Opera, EasyList or DuckDuckGo;
+those names belong to their owners. Store images: `docs/store/images/` (made from real
+captures of the extension by `tools/store_shots.py`).

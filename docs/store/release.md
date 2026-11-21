@@ -20,30 +20,42 @@ All must pass. Do not release with a failing test.
 ```bash
 python3 -I tools/package.py
 ```
-Output: `dist/ad-shield-<version>.zip`.
+Output, two zips:
+- `dist/ad-shield-<version>.zip`: one folder `ad-shield/` inside, with `INSTALL.txt` (install
+  steps and the optional support lines). For sharing by hand and for the GitHub release.
+- `dist/ad-shield-<version>-store.zip`: `manifest.json` at the zip root, no `INSTALL.txt`, no
+  `_metadata/`. **This is the one to upload** to Chrome, Edge and Opera.
 
 ## 4. Inspect the zip
 ```bash
-unzip -l dist/ad-shield-<version>.zip
+unzip -l dist/ad-shield-<version>-store.zip | head
+unzip -l dist/ad-shield-<version>.zip | head
 ```
 Check that `_metadata`, `tests`, `docs`, `tools` and `.git` are **absent** (Chrome rejects a
-zip with `_metadata`), and that `manifest.json` is at the top of the `ad-shield/` folder
-(zip the contents, not an extra wrapper, if the dashboard asks for `manifest.json` at the root).
+zip with `_metadata`), that the store zip has `manifest.json` at its root, and that the sharing
+zip has it under `ad-shield/`. `tests/test_package.py` checks all of this too.
 Confirm `manifest.json` `description` is at most 132 characters.
 
 ## 5. Smoke test the zip
 Unzip to a fresh folder, load unpacked in a clean browser profile, open a news site, check the
 popup counts and the options page.
 
+## 5b. Store images (when the UI changed)
+```bash
+python3 -I tools/store_shots.py        # real captures -> docs/store/images/*.png
+```
+Open each PNG and look at it before uploading.
+
 ## 6. Tag
 `git tag v<version>` on the release commit (push only when you decide to publish).
 
 ## 7. Upload (each dashboard separately)
-- Chrome Web Store: new item or "Package" tab, upload the zip, update the listing text from
+Click-by-click: `SUBMIT-NOW.md`. Images: `images/` (slots in `assets-checklist.md`).
+- Chrome Web Store: new item or "Package" tab, upload the **-store.zip**, update the listing text from
   `listing.md`, permission justifications from `permissions.md`, privacy answers and policy URL.
   First time: submit as **Unlisted**; later, use **staged rollout** (start at a low percentage,
   raise it after a few days with no bad reviews or crash reports).
-- Edge Add-ons and Opera add-ons: see `edge-opera.md`. Same zip.
+- Edge Add-ons and Opera add-ons: see `edge-opera.md`. Same -store.zip.
 - Do not resubmit repeatedly while in review: it restarts the queue.
 
 ## 8. After release

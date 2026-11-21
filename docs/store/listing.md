@@ -62,9 +62,9 @@ English (single language). Set the manifest `default_locale` only if you add `_l
 | Field | Value |
 |---|---|
 | Official URL | none (or the GitHub repo once public) |
-| Homepage URL | https://github.com/MarsselAL/ad-shield (once public) |
+| Homepage URL | https://github.com/MarsselAL/ad-shield (once public); or the Pages site https://marsselal.github.io/ad-shield/ |
 | Support URL | https://github.com/MarsselAL/ad-shield/issues (enable Issues first) |
-| Privacy policy URL | GitHub Pages URL of `privacy-policy.html` (see `privacy-policy.md`) |
+| Privacy policy URL | https://marsselal.github.io/ad-shield/store/privacy-policy.html (live once the repo is public and Pages is on: `SUBMIT-NOW.md` step G) |
 | Mature content | No |
 | Pricing | Free; no in-app purchases |
 | Visibility | Public (suggest starting with **Unlisted** for a first review, then switching to Public) |

@@ -55,4 +55,5 @@ Then tick all three certifications:
 - [x] I do not use or transfer user data for purposes that are unrelated to my item's single purpose
 - [x] I do not use or transfer user data to determine creditworthiness or for lending purposes
 
-Privacy policy URL: the GitHub Pages address of `privacy-policy.html`.
+Privacy policy URL: https://marsselal.github.io/ad-shield/store/privacy-policy.html
+(GitHub Pages from `/docs` on `main`; source `privacy-policy.md`, HTML made by `tools/privacy_html.py`).

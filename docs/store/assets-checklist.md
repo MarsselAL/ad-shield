@@ -3,42 +3,38 @@
 Sizes per [Chrome: supplying images](https://developer.chrome.com/docs/webstore/images). Check the dashboard on the day: it
 shows what it marks as required.
 
-| Asset | Spec | Status | Notes |
-|---|---|---|---|
-| Store icon | 128x128 PNG (art about 96x96 with transparent padding) | **Have** `icons/icon128.png` (128x128 RGBA) | Dashboard asks for the icon upload too; use the same file. Look at it once on white and dark backgrounds. |
-| Screenshots | 1-5, **1280x800** (or 640x400), PNG/JPEG, square corners, no transparency | **Missing: to take** | At least one is mandatory. Plan below. |
-| Small promo tile | **440x280** PNG/JPEG | **Missing** | Marked required by some docs, optional by others: make it. Not localisable. |
-| Marquee promo tile | 1400x560 | Optional, skip | Only for featured carousel. |
-| Promo video | YouTube URL | Optional, skip | Do not upload a video demonstrating YouTube ad removal (invites attention). |
+## Files ready (docs/store/images/, made 21 Nov 2026)
 
-Edge Add-ons: logo 128x128+ (use `icon128.png`), screenshots 1280x800 or 640x480, small
-promo tile 440x280 optional-but-advisable. Opera: icon 64x64 and 128x128 on its own, screenshots
-(see `edge-opera.md`). Make 64x64 from `icon128.png` if Opera asks.
+All screenshots are compositions of **real captures** of Ad Shield 2.0.0 (popup and settings
+page), taken by `python3 -I tools/store_shots.py` in headless Chrome with the unpacked extension.
+The popup numbers are what it really counted on a news front page (edition.cnn.com) that run.
+In the store variant of the settings page the rows that name YouTube/Twitch and the USDC/BTC
+addresses are hidden (`review-risks.md` risk 6), and "My filters" holds three example rules saved
+through the page's own Save button. No other edits. Re-run the tool to refresh them;
+`docs/store/images/src/make_pages.py` holds the headlines and layout, `raw/` the captures.
 
-## Screenshot plan (real captures only; no mock-ups)
-Take with the real extension loaded, 1280x800 browser viewport, on a clean profile. Use
-`mcp__Claude_Browser` or a normal Chrome window resized to 1280x800 and save as PNG. Do not
-include your bookmarks, other extensions, personal tabs or account names. Do not show logos of
-YouTube/Twitch; if a page is shown, use a neutral news/test page.
+| Store slot | File | Size |
+|---|---|---|
+| Chrome: Store icon | `store-icon-128.png` (same as `icons/icon128.png`) | 128x128 |
+| Chrome: Screenshot 1 | `shot-1-popup.png` "Blocks ads, trackers and cookie banners" | 1280x800 |
+| Chrome: Screenshot 2 | `shot-2-settings.png` "Every feature is a switch" | 1280x800 |
+| Chrome: Screenshot 3 | `shot-3-filters.png` "Hide anything, per site" | 1280x800 |
+| Chrome: Screenshot 4 | `shot-4-privacy.png` "No telemetry. Open source." | 1280x800 |
+| Chrome: Screenshot 5 | `shot-5-support.png` "Free for everyone" | 1280x800 |
+| Chrome: Small promo tile | `promo-small.png` | 440x280 |
+| Chrome: Marquee promo tile | `promo-marquee.png` | 1400x560 |
+| Edge: Extension logo | `store-icon-300.png` (same drawing, `tools/make_icons.py` at 300 px) | 300x300 |
+| Edge: Screenshots (up to 10) | `shot-1` … `shot-5` | 1280x800 |
+| Edge: Small promotional tile | `promo-small.png` | 440x280 |
+| Edge: Large promotional tile (optional) | `promo-marquee.png` | 1400x560 |
+| Opera: Icon 64x64 | `store-icon-64.png` | 64x64 |
+| Opera: Icon 128x128 | `store-icon-128.png` | 128x128 |
+| Opera: Screenshots | `shot-1` … `shot-5` | 1280x800 |
+| GitHub README / Pages | `shot-1-popup.png` (+ the others in a grid) | 1280x800 |
 
-1. **Popup on a busy page**: the popup open on a news site: master switch, per-site switch, counts
-   (ads, trackers, cookies, banners). Caption: "See what was blocked on this page."
-2. **Settings page, top**: the feature switches (Ads, Trackers, Cookie banners, tracking
-   parameters, filter-list updates). Caption: "Everything is optional and local."
-3. **Settings page, Support section + licence**: the "Tip via Revolut" button (shows it is free
-   and optional). Take it with only the Revolut part in view if you prefer to keep crypto
-   addresses off the store page (see `review-risks.md` risk 6).
-4. **Element picker**: a page with the picker highlighting an element, plus "My filters".
-   Caption: "Hide any element, per site."
-5. *(Optional)* **Before/after** of the same page with and without Ad Shield (two real captures
-   side by side, composed by you). Keep it honest: a real page, no edited ads.
-
-Do NOT make screenshots of YouTube or Twitch with the logos prominent; avoid anything suggesting
-endorsement.
-
-## Small promo tile (440x280)
-Simple: the shield icon, the text "Ad Shield" and one line "Free. Open source. No telemetry."
-Flat colour, no brand logos, no "blocks 100%". Make it in any design tool; export PNG.
+All PNG, no transparency in screenshots and tiles (checked: `hasAlpha: no`), square corners.
+No YouTube or Twitch logos or names appear in any image. Icons checked at 16, 48 and 128 px:
+clean edges, readable check mark; left unchanged.
 
 ## Other
 - Zip: `python3 -I tools/package.py` (excludes `_metadata`, tests, docs). Chrome rejects a zip

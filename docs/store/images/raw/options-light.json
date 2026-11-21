@@ -1,0 +1,66 @@
+{
+ "header": {
+  "x": 40,
+  "y": 24,
+  "width": 680,
+  "height": 28
+ },
+ "General": {
+  "x": 40,
+  "y": 66,
+  "width": 680,
+  "height": 158.3125
+ },
+ "All sites": {
+  "x": 40,
+  "y": 238.3125,
+  "width": 680,
+  "height": 504.046875
+ },
+ "Sites where blocking is off": {
+  "x": 40,
+  "y": 756.359375,
+  "width": 680,
+  "height": 306.0625
+ },
+ "My filters": {
+  "x": 40,
+  "y": 1076.421875,
+  "width": 680,
+  "height": 343.75
+ },
+ "Twitch": {
+  "x": 40,
+  "y": 1434.171875,
+  "width": 680,
+  "height": 341.40625
+ },
+ "Twitch backup stream order": {
+  "x": 40,
+  "y": 1789.578125,
+  "width": 680,
+  "height": 306.0625
+ },
+ "Statistics": {
+  "x": 40,
+  "y": 2109.640625,
+  "width": 680,
+  "height": 79.6875
+ },
+ "Filter lists": {
+  "x": 40,
+  "y": 2203.328125,
+  "width": 680,
+  "height": 393.1875
+ },
+ "Support Ad Shield": {
+  "x": 40,
+  "y": 2610.515625,
+  "width": 680,
+  "height": 296
+ },
+ "_page": {
+  "width": 760,
+  "height": 2931
+ }
+}
