@@ -100,7 +100,7 @@ def main():
         return report()
 
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
-    check(m.get("version") == "2.0.0", "version must be 2.0.0")
+    check(m.get("version") == "2.0.1", "version must be 2.0.1")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
     check(m.get("name") == "Ad Shield", "name must be Ad Shield")
     check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")

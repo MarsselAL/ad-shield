@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '2.0.0',
+    version: '2.0.1',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -170,6 +170,17 @@
     // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
+    // Low-quality bridge types for the "twitchAdQuality: 'low'" setting (the default since
+    // 2026-11-21, 1.x behaviour): during a stitched ad break they are asked together with the HD
+    // types and the first clean answer of any type is served at once (an HD one when both land
+    // in the same turn); a clean HD type found later replaces the bridge, at most once per break.
+    // Taken from here, never from the viewer's playerTypes list. Used at any resolution of the
+    // player's codec family (m3u8.pickVariant anyResolution) and never pinned.
+    // autoplay: 360p, platform android (gql.androidPlatformPlayerTypes; vaft #450).
+    // picture-by-picture: the mini-player type (research-technique.md §4.1, video-swap-new). Our
+    // own backup requests use the worker's unhooked fetch, so usherIgnoreSubstrings (meant for
+    // the page's mini player masters) does not touch them.
+    bridgePlayerTypes: ['autoplay', 'picture-by-picture'],
     maxPlayerTypes: 8,
 
     // Codec prefixes. Source: research-technique.md §4.3 (avc*/av0* vs hev*/hvc*; AV1 is av01).
@@ -295,6 +306,10 @@
   var cfg = ns.config;
 
   var STORAGE_KEY = 'settings';
+  // twitchAdQuality: what plays during a Twitch stitched ad break. 'low' (default): the first
+  // ad-free stream of any type, a low-quality bridge included, then native quality when the
+  // break ends. 'full': same-resolution backups first, the 360p bridge only as a last resort.
+  var AD_QUALITY_VALUES = ['low', 'full'];
 
   function defaults() {
     return {
@@ -304,6 +319,7 @@
       hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
       playerTypes: cfg.backupPlayerTypes.slice(),
+      twitchAdQuality: 'low',     // 'low' | 'full' (AD_QUALITY_VALUES)
       noticeOnAd: true,           // small toast in the player when an ad is handled
       debug: false                // verbose [TAS] logging
     };
@@ -360,6 +376,8 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
         out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
+      } else if (k === 'twitchAdQuality') {
+        out[k] = AD_QUALITY_VALUES.indexOf(s[k]) !== -1 ? s[k] : d[k];
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {
@@ -378,6 +396,10 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(candidate.playerTypes);
         errors = errors.concat(v.errors);
+      } else if (k === 'twitchAdQuality') {
+        if (candidate[k] !== undefined && AD_QUALITY_VALUES.indexOf(candidate[k]) === -1) {
+          errors.push('"twitchAdQuality" must be one of: ' + AD_QUALITY_VALUES.join(', ') + '.');
+        }
       } else if (typeof d[k] === 'boolean' && candidate[k] !== undefined && typeof candidate[k] !== 'boolean') {
         errors.push('"' + k + '" must be true or false.');
       }
@@ -387,6 +409,7 @@
 
   ns.settings = {
     STORAGE_KEY: STORAGE_KEY,
+    AD_QUALITY_VALUES: AD_QUALITY_VALUES,
     defaults: defaults,
     normalize: normalize,
     validate: validate,
@@ -1438,6 +1461,14 @@
  *                              codec family, chosen only when every other type answered without
  *                              a clean playlist, never pinned (a bridge until an HD type is clean
  *                              again or native is clean for nativeSwitchBackPolls polls).
+ *                              twitchAdQuality 'low' (default, 1.x behaviour): the HD types (the
+ *                              viewer's list minus cfg.bridgePlayerTypes) and the bridge types
+ *                              (autoplay, picture-by-picture; any resolution, never pinned) are
+ *                              asked at once and the first clean answer of any type is served
+ *                              (HD if both land in the same turn). On a bridge: the same bridge
+ *                              each poll while the HD types are checked in the background; a clean
+ *                              one replaces the bridge on the next poll, at most once per break.
+ *                              Prewarm: the first HD and the first bridge type. 'full': as above.
  *                              No clean backup (or the poll deadline passed): the native playlist
  *                              with ad segments and prefetch removed, renumbered continuously
  *                              (m3u8.resequence, DISCONTINUITY at the boundaries). The type the
@@ -1477,7 +1508,12 @@
 
       function settings() {
         var s = deps.getSettings ? deps.getSettings() : null;
-        return s || { playerTypes: cfg.backupPlayerTypes, preferAvc: true };
+        return s || { playerTypes: cfg.backupPlayerTypes, preferAvc: true, twitchAdQuality: 'low' };
+      }
+
+      /** twitchAdQuality 'low' (the default; anything but 'full'): bridge types race the HD ones. */
+      function lowMode() {
+        return settings().twitchAdQuality !== 'full';
       }
 
       function bound(map, max) {
@@ -1490,7 +1526,8 @@
           c = {
             key: key, kind: kind, id: id, masterUrl: null,
             pinned: null, inBreak: false, midroll: false, serving: 'native',
-            lockouts: {}, backupMasters: {}, masterReqs: {}, attempts: {}, flags: {}
+            lockouts: {}, backupMasters: {}, masterReqs: {}, attempts: {}, flags: {},
+            low: {}      // low mode, per break: { bridge, hdFound, upgraded, hdCheck }
           };
           channels.set(key, c);
           bound(channels, 50);
@@ -1565,6 +1602,25 @@
         return (cfg.lastResortPlayerTypes || []).indexOf(type) !== -1;
       }
 
+      /** Low-mode bridge type (cfg.bridgePlayerTypes): any resolution, first clean answer, never pinned. */
+      function isBridge(type) {
+        return (cfg.bridgePlayerTypes || []).indexOf(type) !== -1;
+      }
+
+      /** Used at a lower resolution than the player's and never pinned. */
+      function isLowRes(type, low) {
+        return isLastResort(type) || (low && isBridge(type));
+      }
+
+      /** Low mode: the viewer's types minus the bridge types and the page token type, pinned first. */
+      function hdOrder(c) {
+        return backupOrder(c).filter(function (t) { return !isBridge(t); });
+      }
+
+      function bridgeOrder() {
+        return (cfg.bridgePlayerTypes || []).filter(function (t) { return !cfg.forcedPlayerType || t !== cfg.forcedPlayerType; });
+      }
+
       function backupOrder(c) {
         // The page's own token is already this type (gql.rewritePlayerType): its playlist is the
         // native one, ads included, so asking for it again cannot help.
@@ -1636,13 +1692,19 @@
         if (!canSwap(c)) return;
         var t = now();
         if (c.prewarmAt && t - c.prewarmAt < cfg.backupMasterTtlMs) return;
-        var type = backupOrder(c).filter(notLocked(c))[0];
-        if (!type) return;
+        var ready = notLocked(c);
+        // Low mode: the first HD type and the first bridge type, so a preroll's first poll is one
+        // media fetch for each.
+        var types = lowMode() ? [hdOrder(c).filter(ready)[0], bridgeOrder().filter(ready)[0]] : [backupOrder(c).filter(ready)[0]];
+        types = types.filter(Boolean);
+        if (!types.length) return;
         c.prewarmAt = t;
-        backupMaster(c, type).then(function (e) {
-          log.debug('prewarm', type, e ? 'ready' : 'unavailable');
-        }, function (e) {
-          log.debug('prewarm', type, 'failed', e && e.message);
+        types.forEach(function (type) {
+          backupMaster(c, type).then(function (e) {
+            log.debug('prewarm', type, e ? 'ready' : 'unavailable');
+          }, function (e) {
+            log.debug('prewarm', type, 'failed', e && e.message);
+          });
         });
       }
 
@@ -1652,14 +1714,16 @@
        * for the same type and target still in flight is joined, not repeated.
        */
       function attempt(c, type, target) {
-        var key = type + '|' + target.url;
+        var lowRes = isLowRes(type, lowMode());
+        var key = type + '|' + target.url + (lowRes ? '|low' : '');
         if (c.attempts[key]) return c.attempts[key];
         var p = backupMaster(c, type).then(function (entry) {
           if (!entry) { lock(c, type); return null; }
           // Same resolution and codec family as the player's variant, or this type is skipped
           // for this poll (no lockout: the player may pick a resolution it has next poll).
-          // A last-resort type (autoplay, 360p) bridges at a lower resolution instead.
-          var v = M.pickVariant(entry.variants, target, cfg, isLastResort(type) ? { anyResolution: true } : null);
+          // A last-resort or bridge type (autoplay 360p, picture-by-picture) bridges at a lower
+          // resolution instead.
+          var v = M.pickVariant(entry.variants, target, cfg, lowRes ? { anyResolution: true } : null);
           if (!v) { log.debug('backup', type, 'has no', target.resolution || 'audio', 'variant'); return null; }
           return deps.fetchText(v.url).then(function (res) {
             if (!res || res.status !== 200) { delete c.backupMasters[type]; lock(c, type); return null; }
@@ -1670,7 +1734,9 @@
               log.debug('backup', type, 'also has ads');
               return null;
             }
-            return { type: type, text: res.text, variant: v };
+            var r = { type: type, text: res.text, variant: v };
+            if (lowRes) r.bridge = true;
+            return r;
           });
         }).then(null, function (e) {
           log.debug('backup', type, 'error', e && e.message);
@@ -1689,7 +1755,7 @@
        * other type has answered without a clean one (it is asked at the same time, so the bridge
        * is ready then).
        */
-      function race(c, types, target) {
+      function race(c, types, target, firstAnswer) {
         return new Promise(function (resolve) {
           var results = [];
           var left = types.length;
@@ -1698,7 +1764,9 @@
           function decide() {
             if (done) return;
             for (var i = 0; i < types.length; i++) {
-              if (results[i] && (!isLastResort(types[i]) || preferredLeft === 0)) { done = true; resolve(results[i]); return; }
+              // firstAnswer (low mode): any clean answer counts, the earlier types in the list
+              // (HD before bridge) win only when they land in the same turn.
+              if (results[i] && (firstAnswer || !isLastResort(types[i]) || preferredLeft === 0)) { done = true; resolve(results[i]); return; }
             }
             if (left === 0) { done = true; resolve(null); }
           }
@@ -1715,6 +1783,7 @@
       }
 
       function tryBackups(c, target) {
+        if (lowMode()) return tryBackupsLow(c, target);
         var order = backupOrder(c).filter(notLocked(c)).slice(0, cfg.maxBackupTypesPerPoll);
         if (!order.length) return Promise.resolve(null);
         var found;
@@ -1729,6 +1798,75 @@
           if (r && !isLastResort(r.type)) c.pinned = r.type;
           return r;
         });
+      }
+
+      /** Low mode, per break: an HD type found clean while a bridge is served (switched to next poll). */
+      function noteHd(c, type) {
+        if (c.low.bridge && !c.low.upgraded && !c.low.hdFound) c.low.hdFound = type;
+      }
+
+      /** Low mode, while on a bridge: ask the HD types in the background (never waited for). */
+      function checkHd(c, target) {
+        if (c.low.upgraded || c.low.hdFound || c.low.hdCheck) return;
+        var hd = hdOrder(c).filter(notLocked(c));
+        if (!hd.length) return;
+        var low = c.low;
+        var p = Promise.all(hd.map(function (t) {
+          return attempt(c, t, target).then(function (r) { if (r && c.low === low) noteHd(c, r.type); });
+        }));
+        low.hdCheck = p;
+        p.then(function () { if (low.hdCheck === p) low.hdCheck = null; });
+      }
+
+      /**
+       * twitchAdQuality 'low' (1.x behaviour): the HD types and the bridge types all at once; the
+       * first clean answer of any type is served (HD when both land in the same turn). On a bridge:
+       * that bridge again (one fetch per poll) while the HD types are checked in the background;
+       * a clean one replaces the bridge on the next poll, at most once per break.
+       */
+      function tryBackupsLow(c, target) {
+        var ready = notLocked(c);
+        var low = c.low;
+        var bridges = bridgeOrder().filter(ready);
+        var hd = hdOrder(c).filter(ready).slice(0, Math.max(0, cfg.maxBackupTypesPerPoll - bridges.length));
+        function chosen(r) {
+          if (!r) return null;
+          if (isBridge(r.type)) {
+            low.bridge = r.type;
+            checkHd(c, target);
+          } else {
+            if (low.bridge) low.upgraded = true;
+            low.bridge = null;
+            low.hdFound = null;
+            c.pinned = r.type;
+          }
+          return r;
+        }
+        function all(except) {
+          var types = hd.concat(bridges).filter(function (t) { return t !== except; });
+          return types.length ? race(c, types, target, true) : Promise.resolve(null);
+        }
+        var found;
+        var bt = low.bridge;
+        if (bt) {
+          checkHd(c, target);
+          var up = !low.upgraded && low.hdFound && ready(low.hdFound) ? low.hdFound : null;
+          var bridgeP = ready(bt) ? attempt(c, bt, target) : Promise.resolve(null);
+          var stay = function () { return bridgeP.then(function (r) { return r || all(bt); }); };
+          if (up) {
+            low.hdFound = null;
+            found = attempt(c, up, target).then(function (r) { return r || stay(); });
+          } else {
+            found = stay();
+          }
+        } else if (c.pinned && c.serving === 'backup:' + c.pinned && ready(c.pinned) && cachedMaster(c, c.pinned)) {
+          // Steady state on an HD type: checked alone (one fetch per poll); the rest only if it fails.
+          var pin = c.pinned;
+          found = attempt(c, pin, target).then(function (r) { return r || all(pin); });
+        } else {
+          found = all(null);
+        }
+        return found.then(function (r) { return c.low === low ? chosen(r) : r; });
       }
 
       /** One backup search per channel at a time; later polls join the one in flight. */
@@ -1773,6 +1911,7 @@
         });
         c.inBreak = false;
         c.flags = {};
+        c.low = {};
       }
 
       function isBackup(serving) { return String(serving).indexOf('backup:') === 0; }
@@ -1838,6 +1977,7 @@
           c.inBreak = true;
           c.midroll = M.isMidroll(text, cfg);
           c.flags = {};
+          c.low = {};
           emit('ad-detected', { channel: c.id, midroll: c.midroll, classes: M.classifyDateranges(text, cfg).ad });
         }
         var stripped = M.stripAds(text, cfg);
@@ -1887,7 +2027,9 @@
           var b = pl.b;
           if (c.inBreak && !c.flags.backup) {
             c.flags.backup = true;
-            emit('ad-blocked-backup', { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution });
+            var ev = { channel: c.id, midroll: c.midroll, playerType: b.type, resolution: b.variant.resolution };
+            if (b.bridge) ev.bridge = true; // a low-quality bridge (autoplay / picture-by-picture)
+            emit('ad-blocked-backup', ev);
           }
           setServing(c, 'backup:' + b.type);
           var key = 'backup:' + b.type + ':' + (b.variant.resolution || 'audio') + ':' + (b.variant.frameRate || 0) + ':' + (b.variant.codecs || '');
