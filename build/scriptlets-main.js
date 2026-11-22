@@ -834,21 +834,193 @@ var asScriptlets = (function () {
     }, ['class']);
   }
 
+  // ------------------------------------------------------------------ anti-bypass
+  /**
+   * prevent-dom-bypass(method, props): after the DOM method at the dotted path `method` (e.g.
+   * Node.prototype.appendChild) inserts a node, every same-origin iframe in what was inserted gets
+   * this window's current value of each of `props` (space-separated, e.g. "fetch Request"), so
+   * the page cannot take a clean fetch / Request from a freshly appended frame, however it then
+   * reaches the frame's window (contentWindow, window.frames[i], window[i]). The values are read
+   * at call time, so they are whatever our other scriptlets made of them. Fragments are searched
+   * before the call (they are empty afterwards), elements after it (an iframe has a window only
+   * once it is connected). Cross-origin frames throw and are skipped. (uBO's
+   * trusted-prevent-dom-bypass, uAssets quick-fixes.txt.)
+   */
+  function preventDomBypass(win, args, log) {
+    var parts = splitPath(args[0]);
+    var props = names(args[1], /^[A-Za-z_$][\w$]*$/);
+    if (!parts || parts.length < 2 || !props.length) return;
+    var owner = win;
+    try {
+      for (var i = 0; i < parts.length - 1 && isTrappable(owner); i++) owner = owner[parts[i]];
+    } catch (e) { return; }
+    var key = parts[parts.length - 1];
+
+    function framesIn(node, before) {
+      if (!isObj(node)) return null;
+      if (node.nodeName === 'IFRAME') return before ? null : [node];
+      if (node.nodeType === 11) {         // DocumentFragment: its children move out on insertion
+        return before && typeof node.querySelectorAll === 'function' ? node.querySelectorAll('iframe') : null;
+      }
+      if (node.nodeType !== 1 || before || typeof node.getElementsByTagName !== 'function') return null;
+      return node.getElementsByTagName('iframe');
+    }
+
+    function patch(list) {
+      for (var i = 0; list && i < list.length; i++) {
+        var w;
+        try { w = list[i].contentWindow; } catch (e) { continue; }
+        if (!w || w === win) continue;
+        for (var j = 0; j < props.length; j++) {
+          try {
+            var v = win[props[j]];
+            if (v !== undefined && w[props[j]] !== v) { w[props[j]] = v; log('prevent-dom-bypass', props[j]); }
+          } catch (e) { /* cross-origin frame */ }
+        }
+      }
+    }
+
+    wrap(win, owner, key, function (t, self, a) {
+      var early = null;
+      try { early = framesIn(a[0], true); } catch (e) { early = null; }
+      var r = reflectApply(t, self, a);
+      try { patch(early || framesIn(a[0], false)); } catch (e) { /* leave the frame alone */ }
+      return r;
+    });
+  }
+
+  /**
+   * remove-node-text(nodeName, needle): elements named nodeName (e.g. script) whose text matches
+   * needle (substring or /regex/) are emptied and removed as the parser adds them, before an
+   * inline script runs (the parser empties the microtask queue, and so delivers our
+   * MutationObserver records, before it runs a script; a removed script does not run). Also
+   * catches script text that arrives after its element (text node records). Watches the
+   * document until DOMContentLoaded only: every parser-inserted element is in by then, and a
+   * script added later by script code runs synchronously, out of an observer's reach.
+   * (uBO's rmnt / remove-node-text, uAssets quick-fixes.txt: rmnt, script, 'window,"fetch"'.)
+   */
+  function removeNodeText(win, args, log) {
+    var tag = String(args[0] || '').toUpperCase();
+    if (!/^[A-Z][A-Z0-9-]*$/.test(tag) || !args[1]) return;
+    var match = makeMatcher(args[1]);
+    var doc = win.document;
+    if (!doc || typeof win.MutationObserver !== 'function' || typeof doc.addEventListener !== 'function') return;
+    if (doc.readyState && doc.readyState !== 'loading') return; // too late: the parser is done
+
+    function check(el) {
+      try {
+        if (!el || el.nodeName !== tag || !match(el.textContent)) return;
+        el.textContent = '';
+        if (el.parentNode) el.parentNode.removeChild(el);
+        log('remove-node-text', tag.toLowerCase());
+      } catch (e) { /* leave it */ }
+    }
+
+    function onRecords(muts) {
+      for (var i = 0; muts && i < muts.length; i++) {
+        var added = muts[i].addedNodes;
+        for (var j = 0; added && j < added.length; j++) {
+          var n = added[j];
+          if (n.nodeType === 1) check(n);
+          else if (n.nodeType === 3) check(n.parentNode);
+        }
+      }
+    }
+    var mo = new win.MutationObserver(onRecords);
+    mo.observe(doc, { childList: true, subtree: true });
+    doc.addEventListener('DOMContentLoaded', function () {
+      try { if (typeof mo.takeRecords === 'function') onRecords(mo.takeRecords()); } catch (e) { /* none */ }
+      mo.disconnect();
+    }, { once: true });
+  }
+
+  // ------------------------------------------------------------------ YouTube player events
+  /**
+   * youtube-drop-player-event(events): the YouTube player's own events named in `events`
+   * (space-separated, e.g. onAbnormalityDetected) never reach the page's listeners.
+   * How the player does it (base.js and ytmainappweb kevlar_base, read 2026-11-22): the player
+   * keeps its API in an object of arrow functions and copies it onto its element (div
+   * #movie_player) with plain assignments (element[name] = fn), getApiInterface and
+   * addEventListener among them; the main app subscribes with
+   * player.addEventListener('onAbnormalityDetected', cb), directly or through its PlayerProxy,
+   * which calls the element's addEventListener. The player publishes onAbnormalityDetected
+   * when it thinks it is being tampered with (an ad context in the SABR stream for a response
+   * without a pre-roll, an untrusted click on Skip, an ad that finished too fast), and the
+   * callback stops the video and shows the enforcement message (playabilityStatus ERROR with an
+   * enforcementMessageViewModel, or the LOCKED_MODAL popup).
+   * Here: an accessor for getApiInterface on HTMLElement.prototype (a name no standard element
+   * has) notices that copy, stores the value as the element's own property, and gives that one
+   * element an addEventListener accessor that wraps whatever the player assigns: subscriptions
+   * to the named events are dropped, everything else goes through. Other elements are not
+   * touched; no Promise.prototype.then hook (uBO neuters then() callbacks whose source mentions
+   * onAbnormalityDetected instead).
+   */
+  var PLAYER_API_MARKER = 'getApiInterface';
+
+  function youtubeDropPlayerEvent(win, args, log) {
+    var events = names(args[0], /^[A-Za-z][\w-]*$/);
+    var HP = win.HTMLElement && win.HTMLElement.prototype;
+    if (!events.length || !isObj(HP) || getOwnDesc(HP, PLAYER_API_MARKER)) return;
+
+    function guard(fn) {
+      if (typeof fn !== 'function') return fn;
+      var p = new Proxy(fn, {
+        apply: function (t, self, a) {
+          try {
+            if (events.indexOf(String(a[0])) !== -1) { log('youtube-drop-player-event', String(a[0])); return undefined; }
+          } catch (e) { /* subscribe as asked */ }
+          return reflectApply(t, self, a);
+        }
+      });
+      lookNative(p, fn);
+      return p;
+    }
+
+    function guardPlayer(el) {
+      var d = getOwnDesc(el, 'addEventListener');
+      if (d && (d.get || d.set || !d.configurable)) return; // ours already, or not ours to change
+      var stored = d ? guard(d.value) : undefined;
+      var getter = function () {
+        if (stored !== undefined) return stored;
+        var proto = Object.getPrototypeOf(el);
+        return proto ? proto.addEventListener : undefined; // the DOM method until the player copies its own
+      };
+      defineProperty(el, 'addEventListener', {
+        get: getter,
+        set: function (v) { stored = guard(v); },
+        enumerable: true,
+        configurable: true
+      });
+    }
+
+    defineProperty(HP, PLAYER_API_MARKER, {
+      get: function () { return undefined; },
+      set: function (v) {
+        try {
+          defineProperty(this, PLAYER_API_MARKER, { value: v, writable: true, enumerable: true, configurable: true });
+          if (this !== HP && isObj(this)) { guardPlayer(this); log('youtube-drop-player-event', 'player found'); }
+        } catch (e) { /* leave the element alone */ }
+      },
+      enumerable: false,
+      configurable: true
+    });
+  }
+
   // ------------------------------------------------------------------ YouTube in-stream fallback
   /**
    * youtube-ad-skip: when a player (.html5-video-player, e.g. #movie_player) gets the class
-   * ad-showing, mute its video, jump to the end of the ad and click the skip button if present;
-   * unmute afterwards if we muted. Event-driven: one capture listener for loadedmetadata/playing
+   * ad-showing, mute its video and jump to the end of the ad; unmute afterwards if we muted.
+   * The Skip button is never clicked: the player checks event.isTrusted on a Skip click and, for
+   * a script's click, does not skip but publishes onAbnormalityDetected (the enforcement
+   * trigger) and reports a detection (base.js, read 2026-11-22; up to 2.0 this clicked it). Event-driven: one capture listener for loadedmetadata/playing
    * on the document finds each player once and puts one MutationObserver on its class attribute.
    * The observer runs on every class change (ytp-autohide on each mouse move, ...), so the seek
    * happens at most once per ad (per video src + duration; forgotten when ad-showing clears):
    * repeated seeks into an MSE stream stall the player. No seek when the ad is longer than
-   * MAX_SEEK_AD s (almost always a stitched stream whose end is the end of the real video;
-   * skippable long ads get the Skip click) or part of the content stream (SSAP: same video src as
+   * MAX_SEEK_AD s (almost always a stitched stream whose end is the end of the real video) or part of the content stream (SSAP: same video src as
    * the content, or the player's debug info says SSAP; getStatsForNerds is asked only right
    * before a seek, once per ad), because the stream's end is the end of the video.
    */
-  var SKIP_BUTTONS = '.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button';
   var MAX_SEEK_AD = 90; // s; longer "ads" are stitched streams, never seeked
 
   function youtubeAdSkip(win, args, log) {
@@ -891,8 +1063,6 @@ var asScriptlets = (function () {
               }
             }
           }
-          var b = player.querySelector(SKIP_BUTTONS);
-          if (b && typeof b.click === 'function') { b.click(); log('youtube-ad-skip', 'skip button'); }
         } catch (e) { /* leave the player alone */ }
       };
       checks.set(player, c);
@@ -1130,6 +1300,9 @@ var asScriptlets = (function () {
       'prevent-promise-then-callback': preventPromiseThen,
       'remove-attr': removeAttr,
       'remove-class': removeClass,
+      'prevent-dom-bypass': preventDomBypass,
+      'remove-node-text': removeNodeText,
+      'youtube-drop-player-event': youtubeDropPlayerEvent,
       'youtube-ad-skip': youtubeAdSkip,
       'youtube-enforcement-dismiss': youtubeEnforcementDismiss
     },
@@ -1225,6 +1398,6 @@ var asScriptletRunner = (function () {
 
 
 try {
-  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
+  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prevent-dom-bypass","Node.prototype.appendChild","fetch Request"],["remove-node-text","script","window,\"fetch\""],["youtube-drop-player-event","onAbnormalityDetected"],["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
 } catch (e) { /* never break the page */ }
 })();

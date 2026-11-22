@@ -146,6 +146,18 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
+    // Client-side ad requests (CSAI): the page or its video worker asks Twitch's ad server for
+    // an ad. Answered locally with "no ad" (settings.blockClientAds) on VOD playback only; live
+    // requests always go out (TTV-AB does the same; a failed ad request on a live stream is the
+    // likely trigger of Twitch's "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md).
+    // Until 2.0 a DNR ruleset (client_ads) blocked edge.ads.twitch.tv and apstag.js on every page.
+    // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
+    clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
+    clientAdPaths: ['/ads', '/ads/format', '/2018-01-01/3p/ads'],
+    // VOD pages: www.twitch.tv/videos/<id>; the embedded player with ?video=<id>.
+    vodPagePathPattern: '^/videos/\\d+',
+    vodPageQueryParam: 'video',
+
     // Backup playerType order: embed, site, mobile_web, popout, then autoplay as a last resort.
     // A backup is used at the resolution the player chose (m3u8.pickVariant), except a
     // lastResortPlayerTypes one: autoplay (platform android) is capped at 360p (vaft #450), so it
@@ -260,6 +272,19 @@
       //    player. When the ad video it backs is hidden/paused, Twitch never removes it and it
       //    covers the playing stream (sound, black picture). Seen on Windows Chrome, 2026-11-17.
       overlaySelectors: ['.video-player__overlay > div:empty:not([class])[style]'],
+      // Display ads beside / below the player (stream display ads, banners). Hidden with
+      // display:none and any <video> inside is muted and paused, but never a container that is,
+      // or holds, the stream's player (playerAreaSelector): .stream-display-ad can be a class
+      // of the wrapper around the player (TTV-AB only resets that one). Source: TTV-AB
+      // src/modules/hooks.ts _POST_AD_*_SELECTORS (docs/research-2026-11-22-twitch-wall.md §2).
+      displayAdSelectors: [
+        '[data-test-selector="display-ad"]',
+        '[data-test-selector="ad-banner"]',
+        '[data-a-target="ads-banner"]',
+        'iframe[title="Stream Display Ad"]',
+        '.stream-display-ad'
+      ],
+      playerAreaSelector: '.video-player, [data-a-target="video-player"]',
       throttleMs: 300
     },
 

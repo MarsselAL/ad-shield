@@ -9,6 +9,9 @@
  *   - ad segment URLs we have seen  -> tiny valid blank response, no network request
  *   - usher master playlists        -> parsed, variants remembered (processor.onMaster)
  *   - known media playlists         -> processor.onMedia (backup / strip)
+ *   - client-side ad requests (m3u8.isClientAdUrl, GET) while this worker plays a VOD (last usher
+ *     master was a VOD one) and settings.blockClientAds is on -> empty 204, no network request;
+ *     on live streams they always go out (see cfg.clientAdOrigins)
  *   - anything else                 -> original fetch, untouched
  * Any internal exception returns the original response untouched.
  * settings.enabled === false (sent by the page when the user switches the extension off):
@@ -150,6 +153,13 @@
       });
     }
 
+    var playbackKind = null; // 'live' | 'vod': kind of the last usher master playlist
+
+    function isGet(input, init) {
+      var m = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
+      return String(m).toUpperCase() === 'GET';
+    }
+
     scope.fetch = function (input, init) {
       var url;
       try {
@@ -157,8 +167,12 @@
         if (off()) return realFetch(input, init);
         url = typeof input === 'string' ? input : (input && input.url) || String(input);
         if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url));
+        if (playbackKind === 'vod' && settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
+          log.debug('client-side VOD ad request answered locally (worker)');
+          return Promise.resolve(new Response(null, { status: 204, statusText: 'No Content' }));
+        }
         var u = M.matchUsher(url, cfg);
-        if (u) return handleMaster(input, init, url, u);
+        if (u) { playbackKind = u.kind; return handleMaster(input, init, url, u); }
         if (M.isM3u8Url(url) && proc.knowsMedia(url)) return handleMedia(input, init, url);
       } catch (e) {
         log.warn('fetch hook failed, passing through', e && e.message);

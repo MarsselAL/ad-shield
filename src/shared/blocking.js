@@ -228,7 +228,6 @@
       if (r.ruleId >= ALLOW_ID_BASE) return;
       var id = r.rulesetId;
       if (id === 'youtube' && YOUTUBE_UNCOUNTED_RULE_IDS.indexOf(r.ruleId) !== -1) return;
-      if (id === 'client_ads') { c.ads++; return; }
       if (id === 'trackers') { c.trackers++; return; }
       var f = rulesetFeature(id);
       if (f === 'ads') c.ads++;

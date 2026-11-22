@@ -108,12 +108,13 @@ function installBrowserStubs(opts) {
     return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(json); } });
   };
 
+  // open on the prototype (as in browsers), so page.js can hook XMLHttpRequest.prototype.open.
   g.XMLHttpRequest = function () {
     var self = this;
-    this.open = function (m, u) { self.url = u; env.xhrUrls.push(u); };
     this.overrideMimeType = function () {};
     this.send = function () { self.status = 200; self.responseText = env.workerSource; };
   };
+  g.XMLHttpRequest.prototype.open = function (m, u) { this.method = m; this.url = u; env.xhrUrls.push(u); };
 
   g.Worker = class Worker {
     constructor(url, o) {

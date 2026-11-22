@@ -9,7 +9,9 @@ Checks:
   - the content scripts are the build/ bundles; the service worker no longer registers scripts
   - permissions / host permissions are limited to the allowed list
   - rule ids are unique within each ruleset, rules have the required shape
-  - the Twitch rulesets (client_ads, trackers) keep their narrow twitch.tv-only shape; every rule
+  - the Twitch rulesets keep their narrow twitch.tv-only shape (client_ads: allow rules only,
+    above every list rule, so Twitch's own ad requests never fail on live streams; trackers:
+    block rules only); every rule
     of the generated general rulesets passes tests/dnr_schema.py; the curated rulesets
     (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
     third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
@@ -306,7 +308,17 @@ def main():
         check(len(rule_ids) == len(set(rule_ids)), "%s: duplicate rule ids %s" % (r.get("path"), rule_ids))
         for x in rules:
             check(isinstance(x.get("id"), int) and x["id"] >= 1, "%s: bad rule id %r" % (r.get("path"), x.get("id")))
-            check(x.get("action", {}).get("type") == "block", "%s rule %s: only block rules expected" % (r.get("path"), x.get("id")))
+            if r.get("id") == "client_ads":
+                # Since 2.0: let Twitch's client-side ad requests through (EasyList blocks
+                # edge.ads.twitch.tv); a failed one on a live stream brings up Twitch's ad-block
+                # notice. VOD requests are answered in the page (src/page/page.js).
+                check(r.get("enabled") is True, "client_ads ruleset must be enabled by default")
+                check(x.get("action") == {"type": "allow"}, "%s rule %s: only allow rules expected" % (r.get("path"), x.get("id")))
+                check(x["id"] >= 500000, "%s rule %s: allow rules use the allow id range" % (r.get("path"), x.get("id")))
+                check(isinstance(x.get("priority"), int) and 4 < x["priority"] < 100,
+                      "%s rule %s: priority must be above the list rules (1-4) and below the site allowlist (100)" % (r.get("path"), x.get("id")))
+            else:
+                check(x.get("action", {}).get("type") == "block", "%s rule %s: only block rules expected" % (r.get("path"), x.get("id")))
             cond = x.get("condition", {})
             check(bool(cond.get("urlFilter") or cond.get("regexFilter")), "%s rule %s: no filter" % (r.get("path"), x.get("id")))
             check(cond.get("initiatorDomains") == ["twitch.tv"], "%s rule %s: must be limited to twitch.tv initiators" % (r.get("path"), x.get("id")))

@@ -730,6 +730,31 @@
       return /\.m3u8$/i.test(splitUrl(url).base);
     }
 
+    /** True for a client-side ad request: an origin of cfg.clientAdOrigins with a path of
+     * cfg.clientAdPaths (query and hash ignored). */
+    function isClientAdUrl(url, cfg) {
+      var base = splitUrl(String(url || '')).base;
+      for (var i = 0; i < cfg.clientAdOrigins.length; i++) {
+        var o = cfg.clientAdOrigins[i];
+        if (base.length > o.length && base.indexOf(o) === 0 && base.charAt(o.length) === '/') {
+          return cfg.clientAdPaths.indexOf(base.slice(o.length)) !== -1;
+        }
+      }
+      return false;
+    }
+
+    /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
+     * embedded player with ?video=<id>. */
+    function isVodPage(pathname, search, cfg) {
+      if (new RegExp(cfg.vodPagePathPattern).test(String(pathname || ''))) return true;
+      var q = String(search || '').replace(/^\?/, '');
+      if (!q) return false;
+      return q.split('&').some(function (kv) {
+        var i = kv.indexOf('=');
+        return i > 0 && kv.slice(0, i) === cfg.vodPageQueryParam && i < kv.length - 1;
+      });
+    }
+
     return {
       parseAttributes: parseAttributes,
       hasAds: hasAds,
@@ -750,6 +775,8 @@
       removeQueryParams: removeQueryParams,
       matchUsher: matchUsher,
       isM3u8Url: isM3u8Url,
+      isClientAdUrl: isClientAdUrl,
+      isVodPage: isVodPage,
       splitUrl: splitUrl
     };
   }

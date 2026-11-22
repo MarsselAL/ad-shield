@@ -326,3 +326,38 @@ test('switched off while a master request is in flight: original master served',
     assert.equal(t, MASTER, 'HEVC variants kept');
   });
 });
+
+test('client-side ad requests: answered with 204 only while a VOD plays and blockClientAds is on', function () {
+  var VOD_MASTER = 'https://usher.ttvnw.net/vod/2345678901.m3u8?sig=S&token=T';
+  var AD = 'https://edge.ads.twitch.tv/ads?bp=midroll';
+  var routes = {};
+  routes[VOD_MASTER] = MASTER;
+  routes[AD] = '<VAST/>';
+  routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
+  var scope = makeScope(routes);
+  runInWorker(scope);
+  return scope.fetch(AD).then(function (r) {
+    assert.equal(r.status, 200, 'before any playlist: sent');
+    return scope.fetch(MASTER_URL);
+  }).then(function () {
+    return scope.fetch(AD);
+  }).then(function (r) {
+    assert.equal(r.status, 200, 'live stream: sent');
+    return scope.fetch(VOD_MASTER);
+  }).then(function () {
+    var calls = scope.realCalls.length;
+    return scope.fetch(AD).then(function (r) {
+      assert.equal(r.status, 204, 'VOD: answered locally');
+      assert.equal(scope.realCalls.length, calls, 'no network request');
+      return scope.fetch(AD, { method: 'POST' });
+    });
+  }).then(function (r) {
+    assert.equal(r.status, 200, 'VOD: POST sent');
+    var off = {};
+    off[KEY] = { type: 'settings', settings: { blockClientAds: false, playerTypes: cfg.backupPlayerTypes.slice() } };
+    scope.dispatch(off);
+    return scope.fetch(AD);
+  }).then(function (r) {
+    assert.equal(r.status, 200, 'blockClientAds off: sent');
+  });
+});

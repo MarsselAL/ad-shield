@@ -1,8 +1,8 @@
 [
   {
-    "id": 1,
-    "priority": 1,
-    "action": { "type": "block" },
+    "id": 500001,
+    "priority": 5,
+    "action": { "type": "allow" },
     "condition": {
       "urlFilter": "||edge.ads.twitch.tv^",
       "initiatorDomains": ["twitch.tv"],
@@ -10,13 +10,13 @@
     }
   },
   {
-    "id": 2,
-    "priority": 1,
-    "action": { "type": "block" },
+    "id": 500002,
+    "priority": 5,
+    "action": { "type": "allow" },
     "condition": {
-      "urlFilter": "||amazon-adsystem.com/aax2/apstag.js",
+      "urlFilter": "||vaes.amazon-adsystem.com/2018-01-01/3p/ads",
       "initiatorDomains": ["twitch.tv"],
-      "resourceTypes": ["script"]
+      "resourceTypes": ["xmlhttprequest", "other"]
     }
   }
 ]

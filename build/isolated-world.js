@@ -149,6 +149,18 @@
     // Source: research-technique.md §3 item 4(c).
     usherIgnoreSubstrings: ['picture-by-picture'],
 
+    // Client-side ad requests (CSAI): the page or its video worker asks Twitch's ad server for
+    // an ad. Answered locally with "no ad" (settings.blockClientAds) on VOD playback only; live
+    // requests always go out (TTV-AB does the same; a failed ad request on a live stream is the
+    // likely trigger of Twitch's "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md).
+    // Until 2.0 a DNR ruleset (client_ads) blocked edge.ads.twitch.tv and apstag.js on every page.
+    // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
+    clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
+    clientAdPaths: ['/ads', '/ads/format', '/2018-01-01/3p/ads'],
+    // VOD pages: www.twitch.tv/videos/<id>; the embedded player with ?video=<id>.
+    vodPagePathPattern: '^/videos/\\d+',
+    vodPageQueryParam: 'video',
+
     // Backup playerType order: embed, site, mobile_web, popout, then autoplay as a last resort.
     // A backup is used at the resolution the player chose (m3u8.pickVariant), except a
     // lastResortPlayerTypes one: autoplay (platform android) is capped at 360p (vaft #450), so it
@@ -263,6 +275,19 @@
       //    player. When the ad video it backs is hidden/paused, Twitch never removes it and it
       //    covers the playing stream (sound, black picture). Seen on Windows Chrome, 2026-11-17.
       overlaySelectors: ['.video-player__overlay > div:empty:not([class])[style]'],
+      // Display ads beside / below the player (stream display ads, banners). Hidden with
+      // display:none and any <video> inside is muted and paused, but never a container that is,
+      // or holds, the stream's player (playerAreaSelector): .stream-display-ad can be a class
+      // of the wrapper around the player (TTV-AB only resets that one). Source: TTV-AB
+      // src/modules/hooks.ts _POST_AD_*_SELECTORS (docs/research-2026-11-22-twitch-wall.md §2).
+      displayAdSelectors: [
+        '[data-test-selector="display-ad"]',
+        '[data-test-selector="ad-banner"]',
+        '[data-a-target="ads-banner"]',
+        'iframe[title="Stream Display Ad"]',
+        '.stream-display-ad'
+      ],
+      playerAreaSelector: '.video-player, [data-a-target="video-player"]',
       throttleMs: 300
     },
 
@@ -299,9 +324,9 @@
   function defaults() {
     return {
       enabled: true,              // master switch: off = hooks pass everything through, rulesets disabled
-      blockClientAds: true,       // DNR ruleset "client_ads"
+      blockClientAds: true,       // VOD pages only: Twitch's client-side ad requests answered with "no ad" (page + worker hooks)
       blockTrackers: false,       // DNR ruleset "trackers" (off by default)
-      hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements
+      hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements and display ads beside the player
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
       playerTypes: cfg.backupPlayerTypes.slice(),
       noticeOnAd: true,           // small toast in the player when an ad is handled
@@ -628,7 +653,6 @@
       if (r.ruleId >= ALLOW_ID_BASE) return;
       var id = r.rulesetId;
       if (id === 'youtube' && YOUTUBE_UNCOUNTED_RULE_IDS.indexOf(r.ruleId) !== -1) return;
-      if (id === 'client_ads') { c.ads++; return; }
       if (id === 'trackers') { c.trackers++; return; }
       var f = rulesetFeature(id);
       if (f === 'ads') c.ads++;
@@ -1041,8 +1065,13 @@
  *  - a capture-phase 'play' listener catches any ad video that starts playing (mute + pause);
  *  - a MutationObserver only schedules a scan when an added node is or contains a <video>, or
  *    a <video>'s src changes; scans are throttled (cfg.cosmetic.throttleMs).
- * It only ever touches <video> elements whose source is an ad host (and configured overlay
- * selectors): never chat, channel points or navigation.
+ * Display ads beside / below the player (cc.displayAdSelectors: stream display ads, banners)
+ * are hidden by CSS as well, and any <video> inside them (also in a same-origin ad iframe) is
+ * muted and paused; a container that is, or holds, the stream's player (cc.playerAreaSelector)
+ * is never hidden and its videos are never touched.
+ * It only ever touches <video> elements whose source is an ad host or that sit in such a
+ * display-ad container (and configured overlay selectors): never chat, channel points or
+ * navigation.
  * setEnabled(false) removes the CSS rule, the listeners and the observer, and gives hidden
  * videos their previous inline display back (they stay muted and paused).
  */
@@ -1073,6 +1102,36 @@
       if (srcIsAdHost(sources[i].getAttribute('src'))) return true;
     }
     return false;
+  }
+
+  var DISPLAY_AD = cc.displayAdSelectors.join(', ');
+
+  /** A display-ad container that is not (and does not hold) the stream's player. */
+  function isDisplayAdBox(el) {
+    try {
+      return !!el && typeof el.matches === 'function' && !el.matches(cc.playerAreaSelector) &&
+        !el.querySelector(cc.playerAreaSelector);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** True for a <video> inside a display-ad container (see isDisplayAdBox). */
+  function inDisplayAd(v) {
+    try {
+      var box = v && typeof v.closest === 'function' ? v.closest(DISPLAY_AD) : null;
+      return !!box && !v.closest(cc.playerAreaSelector) && isDisplayAdBox(box);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** CSS text for the display-ad selectors: one rule each (one bad selector drops only itself). */
+  function displayAdCss() {
+    var notPlayer = cc.playerAreaSelector.split(/\s*,\s*/).map(function (p) { return ':not(' + p + ')'; }).join('');
+    return cc.displayAdSelectors.map(function (sel) {
+      return sel + notPlayer + ':not(:has(' + cc.playerAreaSelector + ')) { display: none !important; }';
+    }).join('\n');
   }
 
   function createCosmetic(opts) {
@@ -1109,12 +1168,29 @@
       }
     }
 
+    function scanBoxes() {
+      if (typeof doc.querySelectorAll !== 'function') return;
+      var boxes = doc.querySelectorAll(DISPLAY_AD);
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        if (!isDisplayAdBox(box)) continue;
+        var root = box;
+        if (box.nodeName === 'IFRAME') {
+          try { root = box.contentDocument; } catch (e) { root = null; } // cross-origin: hidden only
+          if (!root) continue;
+        }
+        var vids = root.getElementsByTagName('video');
+        for (var j = 0; j < vids.length; j++) neutralize(vids[j]);
+      }
+    }
+
     function scan() {
       scheduled = null;
       if (!enabled) return;
       try {
         var vids = doc.getElementsByTagName('video');
         for (var i = 0; i < vids.length; i++) if (isAdVideo(vids[i])) neutralize(vids[i]);
+        scanBoxes();
       } catch (e) {
         log.debug('cosmetic scan failed', e && e.message);
       }
@@ -1127,7 +1203,7 @@
 
     function nodeHasVideo(n) {
       if (n.nodeType !== 1) return false;
-      if (n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE') return true;
+      if (n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE' || n.nodeName === 'IFRAME') return true;
       return n.getElementsByTagName ? n.getElementsByTagName('video').length > 0 : false;
     }
 
@@ -1147,12 +1223,13 @@
     }
 
     function onPlay(e) {
-      if (enabled && isAdVideo(e.target)) neutralize(e.target);
+      if (enabled && (isAdVideo(e.target) || inDisplayAd(e.target))) neutralize(e.target);
     }
 
     function css() {
       var sels = cc.adVideoSelectors.concat(cc.overlaySelectors);
-      return sels.length ? sels.join(',\n') + ' { display: none !important; }' : '';
+      var base = sels.length ? sels.join(',\n') + ' { display: none !important; }' : '';
+      return base + '\n' + displayAdCss();
     }
 
     function setEnabled(on) {
@@ -1193,7 +1270,10 @@
     return { setEnabled: setEnabled, scan: scan };
   }
 
-  ns.cosmetic = { createCosmetic: createCosmetic, srcIsAdHost: srcIsAdHost, isAdVideo: isAdVideo };
+  ns.cosmetic = {
+    createCosmetic: createCosmetic, srcIsAdHost: srcIsAdHost, isAdVideo: isAdVideo,
+    inDisplayAd: inDisplayAd, isDisplayAdBox: isDisplayAdBox, displayAdCss: displayAdCss
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 
 ;

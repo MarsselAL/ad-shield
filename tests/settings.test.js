@@ -26,6 +26,14 @@ test('normalize: the 1.x default order (stored on install) becomes the 2.0 defau
   var own = S.normalize({ playerTypes: ['site', 'popout', 'autoplay'] });
   assert.deepEqual(own.playerTypes, ['site', 'popout', 'autoplay'], 'a list the viewer chose stays');
 });
+test('normalize: blockClientAds keeps its stored value (same key, now VOD-only), default on', function () {
+  assert.equal(S.defaults().blockClientAds, true);
+  assert.equal(S.normalize({}).blockClientAds, true, 'missing: default');
+  assert.equal(S.normalize({ blockClientAds: false }).blockClientAds, false, 'a viewer who turned it off keeps it off');
+  assert.equal(S.normalize({ blockClientAds: 'yes' }).blockClientAds, true, 'corrupt: default');
+  var stored = S.normalize({ enabled: true, blockClientAds: false, blockTrackers: true, hideStandaloneAds: false });
+  assert.deepEqual([stored.blockClientAds, stored.blockTrackers, stored.hideStandaloneAds], [false, true, false]);
+});
 test('config is frozen', function () {
   assert.ok(Object.isFrozen(cfg));
   assert.ok(Object.isFrozen(cfg.backupPlayerTypes));

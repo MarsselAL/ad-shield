@@ -312,6 +312,26 @@ test('matchUsher: live v1/v2, VOD, picture-by-picture ignored, other URLs', func
   assert.equal(M.matchUsher('https://usher.ttvnw.net/api/channel/hls/a.m3u8?x=picture-by-picture', cfg), null);
   assert.equal(M.matchUsher('https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/a.m3u8', cfg), null);
 });
+test('isClientAdUrl: Twitch / Amazon client-side ad request URLs only (origin + exact path)', function () {
+  ['https://edge.ads.twitch.tv/ads?bp=preroll&sid=1', 'https://edge.ads.twitch.tv/ads/format', 'https://edge.ads.twitch.tv/ads#x',
+    'https://vaes.amazon-adsystem.com/2018-01-01/3p/ads?a=1'].forEach(function (u) { assert.ok(M.isClientAdUrl(u, cfg), u); });
+  ['https://edge.ads.twitch.tv/', 'https://edge.ads.twitch.tv/adsx', 'https://edge.ads.twitch.tv/ads/other',
+    'https://edge.ads.twitch.tv.evil.net/ads', 'http://edge.ads.twitch.tv/ads', 'https://gql.twitch.tv/gql',
+    'https://evil.net/x?u=https://edge.ads.twitch.tv/ads', '', null].forEach(function (u) { assert.notOk(M.isClientAdUrl(u, cfg), String(u)); });
+});
+test('isVodPage: /videos/<id> and the embedded player with ?video=; channels, clips, other params are not', function () {
+  assert.ok(M.isVodPage('/videos/2345678901', '', cfg));
+  assert.ok(M.isVodPage('/videos/2345678901', '?t=1h2m', cfg));
+  assert.ok(M.isVodPage('/', '?video=v2345678901&parent=example.com', cfg));
+  assert.ok(M.isVodPage('/', 'parent=example.com&video=123', cfg));
+  assert.notOk(M.isVodPage('/somechannel', '', cfg));
+  assert.notOk(M.isVodPage('/somechannel/videos', '', cfg), 'a channel\'s video list is not playback');
+  assert.notOk(M.isVodPage('/videos/', '', cfg));
+  assert.notOk(M.isVodPage('/', '?channel=somechannel&parent=example.com', cfg));
+  assert.notOk(M.isVodPage('/', '?video=', cfg));
+  assert.notOk(M.isVodPage('/', '?xvideo=1', cfg));
+  assert.notOk(M.isVodPage(undefined, undefined, cfg));
+});
 test('removeQueryParams and isM3u8Url', function () {
   assert.equal(M.removeQueryParams('https://a.invalid/x.m3u8?a=1&parent_domains=z&b=2', ['parent_domains']), 'https://a.invalid/x.m3u8?a=1&b=2');
   assert.ok(M.isM3u8Url('https://a.invalid/x.m3u8?a=1'));

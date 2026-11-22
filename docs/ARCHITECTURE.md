@@ -136,12 +136,15 @@ The YouTube rules (research-v2 B recipe 1-7 and 11):
 | `json-prune` (player keys) | every `JSON.parse` / `Response.json`: top-level, `playerResponse.` and `[].playerResponse.` ad keys, after the needle check |
 | `json-prune-fetch-response`, `json-prune-xhr-response` | player keys plus `..entries.[-].command.reelWatchEndpoint.adClientParams.isAd` (Shorts), for `/youtubei/v1/(player\|get_watch\|playlist\|(navigation/)?resolve_url\|reel/reel_watch_sequence\|reel/reel_item_watch)` (uBO's URL set) |
 | `adjust-setTimeout [native code] 17000 0.001` | the 17 s "fake buffering" wait of flagged accounts (research-v2 B section 1): a `setTimeout` with delay exactly 17000 and a native-code callback (e.g. a bound function) runs after 17 ms. Generic arguments: needle (source substring or `/regex/`), delay (`''` = any), factor (clamped to 0.001-50, default 0.05). Not re-applied to child frames |
-| `youtube-ad-skip` (youtube.com) | `.html5-video-player.ad-showing`: mute, seek the ad to its end, click Skip; unmute after. At most one seek per ad (per video `src` + duration, forgotten when `ad-showing` clears): the class observer also fires on `ytp-autohide` etc., and repeated seeks into the MSE stream stalled playback (1.1.5). No seek when the ad is longer than 90 s (a stitched stream whose end is the end of the video; Skip is still clicked) or in the content stream (same `src` as the content, or `getStatsForNerds().debug_info` starts with `SSAP`, asked only right before a seek): seeking there would skip the video |
+| `prevent-dom-bypass Node.prototype.appendChild "fetch Request"` | after `appendChild` inserts an iframe (or a node / fragment holding one), the frame's `fetch` and `Request` become this window's (wrapped) ones, so a clean pair taken from a fresh frame still passes through pruning and body edits, however the frame's window is reached (uBO `trusted-prevent-dom-bypass`). Same-origin frames only |
+| `remove-node-text script 'window,"fetch"'` | inline scripts containing `window,"fetch"` are emptied and removed by a MutationObserver before they run (uBO `rmnt`); the observer stops at DOMContentLoaded |
+| `youtube-drop-player-event onAbnormalityDetected` | the player's `onAbnormalityDetected` event (published on an ad context in the SABR stream for a response without a pre-roll, an untrusted Skip click, an ad finished too fast; the main app's listener stops the video and shows the enforcement message) never reaches a listener: the player copies its API onto its element (`element[name] = fn`), an accessor for `getApiInterface` on `HTMLElement.prototype` notices that and wraps that element's `addEventListener`, dropping subscriptions to the event. No `Promise.prototype.then` hook (uBO uses one) |
+| `youtube-ad-skip` (youtube.com) | `.html5-video-player.ad-showing`: mute, seek the ad to its end; unmute after. Skip is not clicked (since 2.0): the player answers a script's (untrusted) click with `onAbnormalityDetected` instead of skipping. At most one seek per ad (per video `src` + duration, forgotten when `ad-showing` clears): the class observer also fires on `ytp-autohide` etc., and repeated seeks into the MSE stream stalled playback (1.1.5). No seek when the ad is longer than 90 s (a stitched stream whose end is the end of the video) or in the content stream (same `src` as the content, or `getStatsForNerds().debug_info` starts with `SSAP`, asked only right before a seek): seeking there would skip the video |
 | `youtube-enforcement-dismiss` (youtube.com) | The anti-adblock dialog (`ytd-enforcement-message-view-model` in a modal `tp-yt-paper-dialog`, research-v2 B.3) is closed, not hidden: hiding it with CSS (up to 1.1.0) left its scroll lock, backdrop and forced pauses in place. Detected by `animationstart` of a 1 ms animation `as-yt-enf` that `youtube.css` gives the element, or on a player `pause`. Calls the dialog's `close()` (else removes it), closes an opened `tp-yt-iron-overlay-backdrop`, clears `overflow:hidden` on html / body and `no-scroll` on html / body / `ytd-app`. While the dialog is open, or within 3 s after it was last found open (and closed), a player video that pauses without user activation (`navigator.userActivation.isActive` false; no resume if the API is missing), not ended, not `seeking`, with `readyState` >= 3 and no ad showing, is resumed with `play()`, at most 3 times per 10 s. Other pauses are the player's own (source / quality switches, ad -> content, seeks): up to 1.1.4 they were resumed for the rest of the page once a dialog had been seen, which put audio and video out of sync. Not resumed within 1.5 s of a `navigator.mediaSession` action handler call (`pause`, `play`, `stop`, `seekto`, `previoustrack`, `nexttrack`: media keys, headphones, picture-in-picture), so those pauses stay the viewer's; `setActionHandler` is wrapped on the `MediaSession` prototype and keeps its native look |
 
-Removed in 2.0 (docs/DESIGN-v2.md; uBO commented both out): `prevent-promise-then-callback
+Removed in 2.0 (docs/DESIGN-v2.md): `prevent-promise-then-callback
 onAbnormalityDetected` (a Proxy on every `Promise.prototype.then`; the scriptlet stays in the
-library, unused), `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false`, and the
+library, unused; `youtube-drop-player-event` replaces it), `set-constant ytcfg.data_.EXPERIMENT_FLAGS.web_streaming_watch false`, and the
 `JSON.parse` feed `json-prune` (`responseContext`) that walked every large API response.
 
 Not done (research-v2 B): client-variant rotation against "fake buffering" (phase 3), text
@@ -261,7 +264,7 @@ patches window-level APIs that a child frame could hand out.
 
 The popup calls `declarativeNetRequest.getMatchedRules({tabId, minTimeStamp: page start})`
 (needs `declarativeNetRequestFeedback`; 20 calls per 10 min, so once per popup open, at most
-every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_N`/`ads_curated`/`client_ads` -> ads,
+every 5 s) and `blocking.countMatches` groups by ruleset id: `ads_N`/`ads_curated` -> ads,
 `privacy_N`/`privacy_curated`/`trackers` -> trackers, `cookie_strip` -> cookies stripped, `cookies_*` -> banners;
 rule ids >= 500000 (allow rules) are ignored. Matches of updated lists (`rulesetId: '_dynamic'`)
 are grouped by id range (1,000,001+ ads, 2,000,001+ trackers, 3,000,001+ banners; the allow halves
@@ -295,10 +298,10 @@ almost untouched.
 | `src/page/health.js` | MAIN | Playback metrics while the video plays (debug-only `health` events) and the one gated pause/play nudge after a playlist switch (2.0; replaced `recovery.js`). |
 | `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
-| `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements. |
+| `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements; hides display-ad containers beside the player and mutes/pauses videos in them. |
 | `src/background/service-worker.js` | service worker | Settings defaults, script registration, DNR rulesets, stats, badge. |
 | `src/popup/*`, `src/options/*`, `src/ui/common.css` | extension pages | UI. Light/dark via `prefers-color-scheme`, no external resources. |
-| `rules/client_ads.json`, `rules/trackers.json` | DNR | Static block rules, toggled with `updateEnabledRulesets`. |
+| `rules/client_ads.json`, `rules/trackers.json` | DNR | Static rules, toggled with `updateEnabledRulesets`. `client_ads` (on with the master switch): allow rules, priority 5, so Twitch's client-side ad requests (`edge.ads.twitch.tv`, Amazon `vaes` ad path) from twitch.tv pages never fail on live streams although EasyList blocks them; VOD ad requests are answered in the page / worker (`settings.blockClientAds`). `trackers`: block rules, off by default. |
 
 ### Inlining into the worker
 

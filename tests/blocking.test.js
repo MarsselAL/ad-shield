@@ -124,10 +124,25 @@ test('allowlistRules: one allowAllRequests rule above all static priorities', fu
 test('countMatches: by ruleset, allow-rule ids and the dynamic allowlist rule ignored', function () {
   var m = function (rulesetId, ruleId) { return { rule: { rulesetId: rulesetId, ruleId: ruleId }, tabId: 1 }; };
   var c = B.countMatches([
-    m('ads_1', 3), m('ads_1', 500001), m('client_ads', 1), m('privacy_1', 9), m('trackers', 2),
+    m('ads_1', 3), m('ads_1', 500001), m('client_ads', 500001), m('client_ads', 500002), m('privacy_1', 9), m('trackers', 2),
     m('cookie_strip', 1), m('cookie_strip', 2), m('cookies_1', 4), m('_dynamic', 1), {}, null
   ]);
-  assert.deepEqual(c, { ads: 2, trackers: 2, cookies: 2, banners: 1 });
+  assert.deepEqual(c, { ads: 1, trackers: 2, cookies: 2, banners: 1 }, 'client_ads holds allow rules only: never counted');
+});
+
+test('rules/client_ads.json: only allow rules for Twitch client-side ad requests, above every list rule', function () {
+  var rules = JSON.parse(readFile('rules/client_ads.json'));
+  assert.ok(rules.length >= 1);
+  rules.forEach(function (r) {
+    assert.equal(r.action.type, 'allow', 'no block rule: live ad requests must not fail (Twitch ad-block notice)');
+    assert.ok(r.id >= B.ALLOW_ID_BASE, 'allow id range');
+    assert.ok(r.priority > 4, 'above every static / dynamic list rule');
+    assert.ok(r.priority < B.allowlistRules(true, ['a.com'])[0].priority, 'below the site allowlist');
+    assert.deepEqual(r.condition.initiatorDomains, ['twitch.tv']);
+  });
+  var filters = rules.map(function (r) { return r.condition.urlFilter; });
+  assert.ok(filters.indexOf('||edge.ads.twitch.tv^') !== -1, 'edge.ads.twitch.tv let through');
+  assert.equal(B.rulesetFeature('client_ads'), null, 'not part of the general Ads switch');
 });
 
 test('hostPatterns and contentScriptPlan', function () {

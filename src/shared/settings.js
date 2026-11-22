@@ -14,9 +14,9 @@
   function defaults() {
     return {
       enabled: true,              // master switch: off = hooks pass everything through, rulesets disabled
-      blockClientAds: true,       // DNR ruleset "client_ads"
+      blockClientAds: true,       // VOD pages only: Twitch's client-side ad requests answered with "no ad" (page + worker hooks)
       blockTrackers: false,       // DNR ruleset "trackers" (off by default)
-      hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements
+      hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements and display ads beside the player
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
       playerTypes: cfg.backupPlayerTypes.slice(),
       noticeOnAd: true,           // small toast in the player when an ad is handled

@@ -54,6 +54,61 @@ test('cosmetic: enabled hides ad videos; disabled removes CSS and restores their
   assert.equal(plain.style.props.display, 'none', 'hidden again after re-enabling');
 });
 
+test('cosmetic: display ads beside the player hidden by CSS, their videos muted; the player wrapper never touched', function () {
+  var cc = cfg.cosmetic;
+  var DISPLAY = cc.displayAdSelectors.join(', ');
+  function plainVideo(name) {
+    var v = adVideo();
+    v.currentSrc = 'blob:https://www.twitch.tv/' + name;
+    return v;
+  }
+  function box(tag, videos, holdsPlayer) {
+    var b = env.el(tag);
+    b.matches = function (sel) { return sel !== cc.playerAreaSelector; };
+    b.querySelector = function (sel) { return sel === cc.playerAreaSelector && holdsPlayer ? env.el('div') : null; };
+    b.getElementsByTagName = function (t) { return t === 'video' ? videos : []; };
+    return b;
+  }
+  var adV = plainVideo('display-ad');
+  var mainV = plainVideo('stream');
+  var frameV = plainVideo('frame-ad');
+  var banner = box('div', [adV], false);
+  var wrapper = box('div', [mainV], true);            // .stream-display-ad around the player
+  var frame = box('iframe', [], false);
+  frame.contentDocument = { getElementsByTagName: function (t) { return t === 'video' ? [frameV] : []; } };
+  var xo = box('iframe', [], false);
+  Object.defineProperty(xo, 'contentDocument', { get: function () { throw new Error('SecurityError'); } });
+  var doc = makeDoc([]);
+  doc.querySelectorAll = function (sel) { return sel === DISPLAY ? [banner, wrapper, frame, xo] : []; };
+  var hidden = 0;
+  var c = ns.cosmetic.createCosmetic({ doc: doc, log: quietLog, onHidden: function () { hidden++; } });
+  c.setEnabled(true);
+  var css = doc.head.children[0].textContent;
+  cc.displayAdSelectors.forEach(function (sel) {
+    assert.includes(css, sel + ':not(.video-player):not([data-a-target="video-player"]):not(:has(' + cc.playerAreaSelector + ')) { display: none !important; }');
+  });
+  ['[data-test-selector="display-ad"]', '[data-test-selector="ad-banner"]', '[data-a-target="ads-banner"]',
+    'iframe[title="Stream Display Ad"]', '.stream-display-ad'].forEach(function (sel) { assert.ok(cc.displayAdSelectors.indexOf(sel) !== -1, sel); });
+  c.scan();
+  assert.ok(adV.muted && adV.paused, 'video in a display ad muted and paused');
+  assert.ok(frameV.muted && frameV.paused, 'video in a same-origin ad iframe muted and paused');
+  assert.notOk(mainV.muted || mainV.paused, 'the stream inside a .stream-display-ad wrapper is never touched');
+  assert.equal(mainV.style.props.display, undefined);
+  assert.equal(hidden, 2);
+  // inDisplayAd: what the play listener uses for a video that starts later
+  var lateV = plainVideo('late');
+  lateV.closest = function (sel) { return sel === DISPLAY ? banner : null; };
+  assert.ok(ns.cosmetic.inDisplayAd(lateV), 'inside a display ad');
+  var streamV = plainVideo('stream2');
+  streamV.closest = function (sel) { return sel === DISPLAY ? wrapper : null; };
+  assert.notOk(ns.cosmetic.inDisplayAd(streamV), 'inside the player wrapper: not an ad');
+  var inPlayer = plainVideo('stream3');
+  inPlayer.closest = function (sel) { return sel === DISPLAY ? banner : (sel === cc.playerAreaSelector ? env.el('div') : null); };
+  assert.notOk(ns.cosmetic.inDisplayAd(inPlayer), 'inside the player area: not an ad');
+  c.setEnabled(false);
+  assert.equal(adV.style.props.display, undefined, 'display restored when switched off');
+});
+
 test('bridge: settings go to the page only once storage answered; off = no toast, no events', function () {
   var stored = S.defaults();
   env.stored[S.STORAGE_KEY] = stored;

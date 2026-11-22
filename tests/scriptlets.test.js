@@ -608,6 +608,224 @@ test('runner: frame scriptlets reach a same-origin about:blank child through con
   assert.ok(Object.create(IFP2).contentWindow === crossOrigin, 'cross-origin frame: getter still works');
 });
 
+// ------------------------------------------------------------------ anti-bypass (fetch / Request from a fresh frame)
+/** A page with Node.prototype.appendChild and same-origin child windows. */
+function bypassPage() {
+  var win = fakeWin('www.youtube.com');
+  win.Request = function Request(u) { this.url = u; };
+  var appended = [];
+  function Node() {}
+  Node.prototype.appendChild = function appendChild(n) { appended.push(n); if (n && n.nodeType === 11) n.kids = []; return n; };
+  win.Node = Node;
+  var page = { win: win, appended: appended, parent: new Node() };
+  page.frame = function (opts) {
+    opts = opts || {};
+    var child = { fetch: function cleanFetch() { return 'clean'; }, Request: function CleanRequest() {} };
+    var f = { nodeName: 'IFRAME', nodeType: 1 };
+    Object.defineProperty(f, 'contentWindow', { get: function () {
+      if (opts.crossOrigin) return { set fetch(v) { throw new Error('SecurityError'); }, get fetch() { throw new Error('SecurityError'); } };
+      return opts.detached ? null : child;
+    } });
+    f.child = child;
+    return f;
+  };
+  page.box = function (frames) { return { nodeName: 'DIV', nodeType: 1, getElementsByTagName: function (t) { return t === 'iframe' ? frames : []; } }; };
+  page.fragment = function (frames) {
+    var fr = { nodeName: '#document-fragment', nodeType: 11, kids: frames.slice() };
+    fr.querySelectorAll = function (sel) { return sel === 'iframe' ? fr.kids.slice() : []; };
+    return fr;
+  };
+  return page;
+}
+
+test('prevent-dom-bypass: an appended iframe gets the wrapped fetch / Request (element, subtree, fragment)', function () {
+  var p = bypassPage();
+  var win = p.win;
+  run(win, 'json-prune-fetch-response', ['adPlacements adSlots playerAds', '/youtubei/v1/player']);
+  var orig = win.Node.prototype.appendChild;
+  run(win, 'prevent-dom-bypass', ['Node.prototype.appendChild', 'fetch Request']);
+  assert.ok(win.Node.prototype.appendChild !== orig, 'wrapped');
+  var f1 = p.frame();
+  assert.ok(p.parent.appendChild(f1) === f1, 'return value kept');
+  assert.ok(f1.child.fetch === win.fetch, 'iframe: fetch is the wrapped one');
+  assert.ok(f1.child.Request === win.Request, 'iframe: Request is ours');
+  var f2 = p.frame();
+  p.parent.appendChild(p.box([f2]));
+  assert.ok(f2.child.fetch === win.fetch, 'iframe inside an appended element');
+  var f3 = p.frame();
+  p.parent.appendChild(p.fragment([f3]));
+  assert.ok(f3.child.fetch === win.fetch, 'iframe inside a fragment (searched before the call)');
+  // not connected (no window yet), cross-origin, plain nodes and odd arguments: no throw
+  p.parent.appendChild(p.frame({ detached: true }));
+  p.parent.appendChild(p.frame({ crossOrigin: true }));
+  p.parent.appendChild({ nodeName: 'DIV', nodeType: 1 });
+  p.parent.appendChild({ nodeType: 3 });
+  p.parent.appendChild(null);
+  assert.equal(p.appended.length, 8, 'native appendChild ran every time');
+  assert.equal(String(win.Node.prototype.appendChild), String(orig), 'looks like the original');
+  assert.equal(win.Node.prototype.appendChild.name, 'appendChild');
+  // the frame's fetch prunes like the top one
+  var bodies = { '/youtubei/v1/player?x=1': PLAYER };
+  var w2 = fakeWin('www.youtube.com', { bodies: bodies });
+  w2.Node = function () {}; w2.Node.prototype.appendChild = function (n) { return n; };
+  run(w2, 'json-prune-fetch-response', ['adPlacements adSlots playerAds', '/youtubei/v1/player']);
+  run(w2, 'prevent-dom-bypass', ['Node.prototype.appendChild', 'fetch']);
+  var f4 = p.frame();
+  w2.Node.prototype.appendChild.call({}, f4);
+  return f4.child.fetch('/youtubei/v1/player?x=1').then(function (r) { return r.text(); }).then(function (t) {
+    assertPlayerClean(JSON.parse(t), 'fetch taken from the new frame');
+  });
+});
+
+test('prevent-dom-bypass: bad arguments install nothing', function () {
+  [[], ['Node.prototype.appendChild'], ['appendChild', 'fetch'], ['Node.prototype.appendChild', '!!'], ['No.such.path', 'fetch']].forEach(function (args) {
+    var p = bypassPage();
+    var orig = p.win.Node.prototype.appendChild;
+    run(p.win, 'prevent-dom-bypass', args);
+    assert.ok(p.win.Node.prototype.appendChild === orig, JSON.stringify(args));
+  });
+});
+
+/** A document still being parsed, with one MutationObserver slot. */
+function parsingDoc(readyState) {
+  var page = { listeners: {}, observers: [] };
+  page.doc = {
+    readyState: readyState || 'loading',
+    addEventListener: function (type, fn) { page.listeners[type] = fn; }
+  };
+  page.win = fakeWin('www.youtube.com', { document: page.doc });
+  page.win.MutationObserver = fakeObserverClass(page.observers);
+  page.script = function (text) {
+    var parent = { removed: [], removeChild: function (n) { this.removed.push(n); n.parentNode = null; } };
+    return { nodeType: 1, nodeName: 'SCRIPT', textContent: text, parentNode: parent };
+  };
+  return page;
+}
+
+test('remove-node-text: inline scripts with window,"fetch" emptied and removed before they run; others kept', function () {
+  var p = parsingDoc();
+  var rule = R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'remove-node-text'; })[0];
+  assert.deepEqual(rule, ['remove-node-text', 'script', 'window,"fetch"'], 'the uBO rmnt line');
+  run(p.win, rule[0], rule.slice(1));
+  assert.equal(p.observers.length, 1);
+  assert.ok(p.observers[0].target === p.doc && p.observers[0].opts.childList && p.observers[0].opts.subtree);
+  var bad = p.script('(function(){var f=Object.getOwnPropertyDescriptor(window,"fetch");})()');
+  var good = p.script('var ytcfg = {fetch: 1};');
+  var late = p.script('');
+  var lateParent = late.parentNode;
+  var div = { nodeType: 1, nodeName: 'DIV', textContent: 'window,"fetch"', parentNode: { removeChild: function () { throw new Error('div removed'); } } };
+  p.observers[0].cb([{ addedNodes: [bad, good, late, div] }]);
+  assert.equal(bad.textContent, '', 'emptied');
+  assert.ok(bad.parentNode === null, 'removed');
+  assert.equal(good.textContent, 'var ytcfg = {fetch: 1};', 'other scripts kept');
+  assert.ok(late.parentNode === lateParent, 'empty script kept for now');
+  // its text arrives later (a text node record)
+  late.textContent = 'x(window,"fetch")';
+  p.observers[0].cb([{ addedNodes: [{ nodeType: 3, parentNode: late }] }]);
+  assert.ok(late.parentNode === null, 'removed once its text matched');
+  assert.equal(div.textContent, 'window,"fetch"', 'only the named element type');
+  p.listeners.DOMContentLoaded();
+  assert.equal(p.observers[0].connected, false, 'observer gone at DOMContentLoaded');
+});
+
+test('remove-node-text: bad arguments, or a parsed document, install nothing', function () {
+  [[], ['script'], ['', 'x'], ['scr ipt', 'x']].forEach(function (args) {
+    var p = parsingDoc();
+    run(p.win, 'remove-node-text', args);
+    assert.equal(p.observers.length, 0, JSON.stringify(args));
+  });
+  var done = parsingDoc('interactive');
+  run(done.win, 'remove-node-text', ['script', 'x']);
+  assert.equal(done.observers.length, 0, 'too late once parsing is over');
+});
+
+// ------------------------------------------------------------------ YouTube player event drop
+/** A realm with EventTarget-like DOM addEventListener under HTMLElement.prototype. */
+function playerRealm() {
+  var realm = { dom: [] };
+  var ET = { addEventListener: function addEventListener(type) { realm.dom.push(type); } };
+  function HTMLElement() {}
+  HTMLElement.prototype = Object.create(ET);
+  realm.win = fakeWin('www.youtube.com');
+  realm.win.HTMLElement = HTMLElement;
+  realm.el = function () { return Object.create(HTMLElement.prototype); };
+  /** The player's API copy: element[name] = fn for each name, in this order. */
+  realm.player = function (el, order) {
+    var subs = [];
+    var api = {
+      getApiInterface: function () { return ['addEventListener', 'getApiInterface']; },
+      addEventListener: function (name, fn) { subs.push([name, fn]); },
+      playVideo: function () {}
+    };
+    (order || ['getApiInterface', 'addEventListener', 'playVideo']).forEach(function (k) { el[k] = api[k]; });
+    return { subs: subs, api: api };
+  };
+  return realm;
+}
+
+test('youtube-drop-player-event: onAbnormalityDetected subscriptions on the player element are dropped, others kept', function () {
+  var r = playerRealm();
+  var rule = R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'youtube-drop-player-event'; })[0];
+  assert.deepEqual(rule, ['youtube-drop-player-event', 'onAbnormalityDetected']);
+  run(r.win, rule[0], rule.slice(1));
+  var el = r.el();
+  el.addEventListener('click', function () {});
+  assert.deepEqual(r.dom, ['click'], 'DOM addEventListener before the player API arrives');
+  var p = r.player(el);
+  assert.equal(typeof el.getApiInterface, 'function', 'API copy kept');
+  assert.deepEqual(el.getApiInterface(), ['addEventListener', 'getApiInterface']);
+  var cb = function () {};
+  el.addEventListener('onAbnormalityDetected', cb);
+  el.addEventListener('onStateChange', cb);
+  assert.deepEqual(p.subs.map(function (x) { return x[0]; }), ['onStateChange'], 'abnormality dropped, other player events kept');
+  // main app's PlayerProxy: k = G.addEventListener once, then k.apply(G, [name, fn])
+  var k = el.addEventListener;
+  k.apply(el, ['onAbnormalityDetected', cb]);
+  k.apply(el, ['onVideoProgress', cb]);
+  assert.deepEqual(p.subs.map(function (x) { return x[0]; }), ['onStateChange', 'onVideoProgress']);
+  assert.equal(String(el.addEventListener), String(p.api.addEventListener), 'looks like the player function');
+  assert.deepEqual(r.dom, ['click'], 'player events never reach the DOM method');
+  // the player re-copies (new API) and finally clears it on dispose
+  var p2 = r.player(el);
+  el.addEventListener('onAbnormalityDetected', cb);
+  assert.equal(p2.subs.length, 0, 'a re-copied addEventListener is guarded too');
+  el.addEventListener = null;
+  assert.equal(el.addEventListener, null, 'dispose (element[name] = null) kept');
+  // other elements: untouched DOM method, no own properties
+  var other = r.el();
+  other.addEventListener('onAbnormalityDetected', cb);
+  assert.deepEqual(r.dom, ['click', 'onAbnormalityDetected'], 'a non-player element keeps the DOM method as it is');
+  assert.equal(other.getApiInterface, undefined);
+  assert.notOk(Object.prototype.hasOwnProperty.call(other, 'addEventListener'));
+});
+
+test('youtube-drop-player-event: API copied with addEventListener before getApiInterface; bad args install nothing', function () {
+  var r = playerRealm();
+  run(r.win, 'youtube-drop-player-event', ['onAbnormalityDetected']);
+  var el = r.el();
+  var p = r.player(el, ['addEventListener', 'playVideo', 'getApiInterface']);
+  el.addEventListener('onAbnormalityDetected', function () {});
+  el.addEventListener('onReady', function () {});
+  assert.deepEqual(p.subs.map(function (x) { return x[0]; }), ['onReady']);
+  [[], [''], ['!!']].forEach(function (args) {
+    var q = playerRealm();
+    run(q.win, 'youtube-drop-player-event', args);
+    assert.equal(Object.getOwnPropertyDescriptor(q.win.HTMLElement.prototype, 'getApiInterface'), undefined, JSON.stringify(args));
+  });
+  var none = fakeWin('www.youtube.com');
+  run(none, 'youtube-drop-player-event', ['onAbnormalityDetected']); // no HTMLElement: nothing to do
+});
+
+test('YouTube rules: anti-bypass and abnormality drop are on every YouTube host, not on m.youtube-only or other sites', function () {
+  ['www.youtube.com', 'm.youtube.com', 'www.youtube-nocookie.com', 'www.youtubekids.com'].forEach(function (h) {
+    var names = R.pick(RULES, h).map(function (s) { return s[0]; });
+    ['prevent-dom-bypass', 'remove-node-text', 'youtube-drop-player-event'].forEach(function (n) { assert.ok(names.indexOf(n) !== -1, h + ' ' + n); });
+  });
+  var dom = R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'prevent-dom-bypass'; })[0];
+  assert.deepEqual(dom, ['prevent-dom-bypass', 'Node.prototype.appendChild', 'fetch Request']);
+  assert.deepEqual(R.pick(RULES, 'example.com'), []);
+});
+
 // ------------------------------------------------------------------ runner host matching
 test('runner: host and parent domains match; look-alikes do not', function () {
   var table = { rules: [{ hosts: ['youtube.com'], scriptlets: [['set-constant', 'x', 'true']] }, { hosts: ['other.org'], scriptlets: [['set-constant', 'y', 'true']] }] };
@@ -635,7 +853,7 @@ test('rules/scriptlets.json: every scriptlet exists, hosts are plain domains', f
   });
 });
 
-test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts; no ytcfg flag, no abnormality hook', function () {
+test('YouTube rules end to end: initial globals, JSON.parse, fetch, XHR, Shorts; no ytcfg flag, then() untouched', function () {
   var bodies = {
     '/youtubei/v1/player?prettyPrint=false': PLAYER,
     '/youtubei/v1/browse?prettyPrint=false': JSON.stringify(feed()),
@@ -690,10 +908,11 @@ test('YouTube rules: no Promise.prototype.then and no Function.prototype.toStrin
   assert.ok(Function.prototype.toString === nativeTs && Promise.prototype.then === nativeThen, 'globals untouched');
   var names = R.pick(RULES, 'www.youtube.com').map(function (s) { return s.join(' '); });
   names.forEach(function (n) {
-    assert.notIncludes(n, 'onAbnormalityDetected');
+    if (n.indexOf('youtube-drop-player-event ') !== 0) assert.notIncludes(n, 'onAbnormalityDetected');
     assert.notIncludes(n, 'web_streaming_watch');
     assert.notIncludes(n, 'responseContext');
   });
+  assert.ok(names.indexOf('youtube-drop-player-event onAbnormalityDetected') !== -1, 'abnormality event dropped at the player, not via then()');
   assert.equal(R.pick(RULES, 'www.youtube.com').filter(function (s) { return s[0] === 'json-prune'; }).length, 1, 'only the player-keys json-prune');
 });
 
@@ -903,7 +1122,7 @@ test('remove-attr / remove-class: run at once when loaded, throttled re-runs, ob
   assert.equal(observers.length, 2, 'invalid names: nothing set up');
 });
 
-test('youtube-ad-skip: ad-showing mutes, seeks to the end, clicks Skip; restores sound; leaves SSAP alone', function () {
+test('youtube-ad-skip: ad-showing mutes, seeks to the end, never clicks Skip; restores sound; leaves SSAP alone', function () {
   var listeners = {};
   var observers = [];
   var doc = { addEventListener: function (type, fn, capture) { assert.equal(capture, true); listeners[type] = fn; } };
@@ -924,7 +1143,7 @@ test('youtube-ad-skip: ad-showing mutes, seeks to the end, clicks Skip; restores
   observers[0].cb([]);
   assert.equal(video.muted, true);
   assert.equal(video.currentTime, 15);
-  assert.equal(clicks, 1);
+  assert.equal(clicks, 0, 'Skip never clicked: the player answers an untrusted click with onAbnormalityDetected');
   playerEl.classList.remove('ad-showing');
   video.src = 'blob:content'; video.duration = 600; video.currentTime = 0;
   observers[0].cb([]);
@@ -997,7 +1216,7 @@ test('youtube-ad-skip: one seek per ad however many class changes; SSAP check on
   p.mutate();
   assert.equal(p.video.seeks, 1, 'no repeated seeks into the same ad');
   assert.equal(p.stats, 1, 'no getStatsForNerds per class change');
-  assert.equal(p.clicks, 4, 'Skip still clicked on every check');
+  assert.equal(p.clicks, 0, 'Skip never clicked');
   // a second ad in the same break (new src / duration): seeked once too
   p.player.classList.add('ad-showing');
   p.video.src = 'blob:ad-2'; p.video.duration = 6; p.setTime(0); p.mutate(); p.mutate();
@@ -1015,13 +1234,13 @@ test('youtube-ad-skip: one seek per ad however many class changes; SSAP check on
   assert.equal(p.stats, before + 1, 'SSAP verdict remembered for this ad');
 });
 
-test('youtube-ad-skip: no seek in an "ad" longer than 90 s (a stitched stream); mute and Skip still work', function () {
+test('youtube-ad-skip: no seek in an "ad" longer than 90 s (a stitched stream); mute still works', function () {
   var p = adSkipPage();
   p.ad('blob:long', 91);
   assert.equal(p.video.seeks, 0, 'no seek');
   assert.equal(p.stats, 0, 'nothing to ask the player');
   assert.equal(p.video.muted, true, 'muted');
-  assert.equal(p.clicks, 1, 'Skip clicked');
+  assert.equal(p.clicks, 0, 'Skip not clicked');
   p.adEnds();
   assert.equal(p.video.muted, false);
   p.ad('blob:short', 90);

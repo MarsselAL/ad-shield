@@ -8,8 +8,13 @@
  *  - a capture-phase 'play' listener catches any ad video that starts playing (mute + pause);
  *  - a MutationObserver only schedules a scan when an added node is or contains a <video>, or
  *    a <video>'s src changes; scans are throttled (cfg.cosmetic.throttleMs).
- * It only ever touches <video> elements whose source is an ad host (and configured overlay
- * selectors): never chat, channel points or navigation.
+ * Display ads beside / below the player (cc.displayAdSelectors: stream display ads, banners)
+ * are hidden by CSS as well, and any <video> inside them (also in a same-origin ad iframe) is
+ * muted and paused; a container that is, or holds, the stream's player (cc.playerAreaSelector)
+ * is never hidden and its videos are never touched.
+ * It only ever touches <video> elements whose source is an ad host or that sit in such a
+ * display-ad container (and configured overlay selectors): never chat, channel points or
+ * navigation.
  * setEnabled(false) removes the CSS rule, the listeners and the observer, and gives hidden
  * videos their previous inline display back (they stay muted and paused).
  */
@@ -40,6 +45,36 @@
       if (srcIsAdHost(sources[i].getAttribute('src'))) return true;
     }
     return false;
+  }
+
+  var DISPLAY_AD = cc.displayAdSelectors.join(', ');
+
+  /** A display-ad container that is not (and does not hold) the stream's player. */
+  function isDisplayAdBox(el) {
+    try {
+      return !!el && typeof el.matches === 'function' && !el.matches(cc.playerAreaSelector) &&
+        !el.querySelector(cc.playerAreaSelector);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** True for a <video> inside a display-ad container (see isDisplayAdBox). */
+  function inDisplayAd(v) {
+    try {
+      var box = v && typeof v.closest === 'function' ? v.closest(DISPLAY_AD) : null;
+      return !!box && !v.closest(cc.playerAreaSelector) && isDisplayAdBox(box);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** CSS text for the display-ad selectors: one rule each (one bad selector drops only itself). */
+  function displayAdCss() {
+    var notPlayer = cc.playerAreaSelector.split(/\s*,\s*/).map(function (p) { return ':not(' + p + ')'; }).join('');
+    return cc.displayAdSelectors.map(function (sel) {
+      return sel + notPlayer + ':not(:has(' + cc.playerAreaSelector + ')) { display: none !important; }';
+    }).join('\n');
   }
 
   function createCosmetic(opts) {
@@ -76,12 +111,29 @@
       }
     }
 
+    function scanBoxes() {
+      if (typeof doc.querySelectorAll !== 'function') return;
+      var boxes = doc.querySelectorAll(DISPLAY_AD);
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        if (!isDisplayAdBox(box)) continue;
+        var root = box;
+        if (box.nodeName === 'IFRAME') {
+          try { root = box.contentDocument; } catch (e) { root = null; } // cross-origin: hidden only
+          if (!root) continue;
+        }
+        var vids = root.getElementsByTagName('video');
+        for (var j = 0; j < vids.length; j++) neutralize(vids[j]);
+      }
+    }
+
     function scan() {
       scheduled = null;
       if (!enabled) return;
       try {
         var vids = doc.getElementsByTagName('video');
         for (var i = 0; i < vids.length; i++) if (isAdVideo(vids[i])) neutralize(vids[i]);
+        scanBoxes();
       } catch (e) {
         log.debug('cosmetic scan failed', e && e.message);
       }
@@ -94,7 +146,7 @@
 
     function nodeHasVideo(n) {
       if (n.nodeType !== 1) return false;
-      if (n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE') return true;
+      if (n.nodeName === 'VIDEO' || n.nodeName === 'SOURCE' || n.nodeName === 'IFRAME') return true;
       return n.getElementsByTagName ? n.getElementsByTagName('video').length > 0 : false;
     }
 
@@ -114,12 +166,13 @@
     }
 
     function onPlay(e) {
-      if (enabled && isAdVideo(e.target)) neutralize(e.target);
+      if (enabled && (isAdVideo(e.target) || inDisplayAd(e.target))) neutralize(e.target);
     }
 
     function css() {
       var sels = cc.adVideoSelectors.concat(cc.overlaySelectors);
-      return sels.length ? sels.join(',\n') + ' { display: none !important; }' : '';
+      var base = sels.length ? sels.join(',\n') + ' { display: none !important; }' : '';
+      return base + '\n' + displayAdCss();
     }
 
     function setEnabled(on) {
@@ -160,5 +213,8 @@
     return { setEnabled: setEnabled, scan: scan };
   }
 
-  ns.cosmetic = { createCosmetic: createCosmetic, srcIsAdHost: srcIsAdHost, isAdVideo: isAdVideo };
+  ns.cosmetic = {
+    createCosmetic: createCosmetic, srcIsAdHost: srcIsAdHost, isAdVideo: isAdVideo,
+    inDisplayAd: inDisplayAd, isDisplayAdBox: isDisplayAdBox, displayAdCss: displayAdCss
+  };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

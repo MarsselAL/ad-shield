@@ -191,3 +191,60 @@ test('enabled: PersistedQueryNotFound -> retried with the next hash, captured pa
     });
   });
 });
+
+test('client-side ad requests: answered locally on VOD pages only (fetch 204, XHR empty VAST); live, POST, off: sent', function () {
+  env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  globalThis.Response = function (body, init) { this.body = body; this.status = init.status; this.statusText = init.statusText; };
+  var AD = 'https://edge.ads.twitch.tv/ads?bp=preroll&sid=abc';
+  var VAES = 'https://vaes.amazon-adsystem.com/2018-01-01/3p/ads?x=1';
+  var loc = globalThis.location;
+  var saved = { pathname: loc.pathname, search: loc.search };
+  function sent(url, init) {
+    var before = env.fetches.length;
+    return fetch(url, init).then(function (r) { return { sent: env.fetches.length - before, status: r.status }; });
+  }
+  function xhrUrl(method, url) { var x = new XMLHttpRequest(); x.open(method, url, true); return x.url; }
+  // live channel page
+  loc.pathname = '/somechannel'; loc.search = '';
+  return sent(AD).then(function (r) {
+    assert.deepEqual(r, { sent: 1, status: 200 }, 'live: ad request goes out');
+    assert.equal(xhrUrl('GET', AD), AD, 'live: XHR untouched');
+    loc.pathname = '/videos/2345678901';
+    return sent(AD);
+  }).then(function (r) {
+    assert.deepEqual(r, { sent: 0, status: 204 }, 'VOD: answered locally with 204');
+    assert.equal(xhrUrl('GET', VAES), 'data:application/xml,%3CVAST%20version%3D%223.0%22%3E%3C%2FVAST%3E', 'VOD: XHR gets an empty VAST');
+    assert.equal(xhrUrl('POST', AD), AD, 'VOD: POST XHR untouched');
+    return sent({ url: VAES, method: 'GET' });
+  }).then(function (r) {
+    assert.deepEqual(r, { sent: 0, status: 204 }, 'VOD: Request object');
+    return sent(AD, { method: 'POST' });
+  }).then(function (r) {
+    assert.equal(r.sent, 1, 'VOD: POST goes out');
+    return sent('https://edge.ads.twitch.tv/other');
+  }).then(function (r) {
+    assert.equal(r.sent, 1, 'VOD: other edge.ads paths go out');
+    // the embedded player: player.twitch.tv/?video=v123
+    loc.pathname = '/'; loc.search = '?video=v2345678901&parent=example.com';
+    return sent(AD);
+  }).then(function (r) {
+    assert.equal(r.sent, 0, 'embedded VOD player');
+    loc.search = '?channel=somechannel&parent=example.com';
+    return sent(AD);
+  }).then(function (r) {
+    assert.equal(r.sent, 1, 'embedded live player: sent');
+    loc.pathname = '/videos/2345678901'; loc.search = '';
+    var s = settingsWith(true); s.blockClientAds = false;
+    env.toPage(cfg, { type: 'settings', settings: s });
+    return sent(AD);
+  }).then(function (r) {
+    assert.equal(r.sent, 1, 'blockClientAds off: sent');
+    assert.equal(xhrUrl('GET', AD), AD);
+    env.toPage(cfg, { type: 'settings', settings: settingsWith(false) });
+    return sent(AD);
+  }).then(function (r) {
+    assert.equal(r.sent, 1, 'switched off: sent');
+    env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+    loc.pathname = saved.pathname; loc.search = saved.search;
+  });
+});

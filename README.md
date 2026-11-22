@@ -71,8 +71,10 @@ configuration.
 - **YouTube ads and anti-adblock walls** (on with Ads; option "Fix YouTube ads and anti-adblock
   walls (page scripts)"): our own small page scripts ("scriptlets", `rules/scriptlets.json`)
   remove the ad entries (`adPlacements`, `playerAds`, `adSlots`, feed and Shorts ad items) from
-  YouTube's player and feed data before the page uses it, defuse the player's anti-adblock
-  report, and, if an ad still plays, mute it, jump to its end and press Skip. Plus YouTube-only
+  YouTube's player and feed data before the page uses it, keep that pruning in place when the
+  page takes a fresh `fetch` from a new frame, drop the player's anti-adblock report
+  (`onAbnormalityDetected`) before it reaches the page, and, if an ad still plays, mute it and
+  jump to its end (Skip is not clicked: YouTube treats a script's click as tampering). Plus YouTube-only
   hiding CSS and two network rules (`/pagead/`, `/youtubei/v1/player/ad_break`). They run on
   youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
@@ -190,7 +192,7 @@ Twitch:
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
-| `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours) |
+| `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours; `client_ads` = 2 allow rules) |
 
 Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
 Plain `||domain^` filters with the same options are merged into one rule with `requestDomains`
@@ -268,9 +270,9 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
 | My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever Ad Shield is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
-| Block client-side ad requests | on | DNR ruleset `client_ads`: `edge.ads.twitch.tv` and Amazon's `apstag.js`, only for requests from twitch.tv pages. |
+| Block client-side ad requests on videos (VODs) | on | On `twitch.tv/videos/…` (and the embedded player with `?video=`) only, the page and its video worker answer Twitch's client-side ad requests (`edge.ads.twitch.tv`, `vaes.amazon-adsystem.com` ad paths, GET) locally with "no ad". Live streams are never touched: a failed ad request there is the likely trigger of Twitch's "you're running ad block" notice, so the always-on ruleset `client_ads` holds two allow rules (priority 5) that let these requests from twitch.tv pages through although EasyList blocks `edge.ads.twitch.tv`. Up to 2.0 `client_ads` blocked them on every page. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
-| Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host. |
+| Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host, and hides the display ads beside / below the player (`[data-test-selector="display-ad"]`, `[data-test-selector="ad-banner"]`, `[data-a-target="ads-banner"]`, `iframe[title="Stream Display Ad"]`, `.stream-display-ad`), muting and pausing any `<video>` in them; never a container that holds the stream's player. |
 | Prefer AVC (H.264) streams | on | Removes HEVC/AV1 variants when H.264 exists (avoids player errors when switching during ads; turns off 1440p/4K "enhanced" quality). |
 | Backup stream order | popout, embed, site, mobile_web | Validated: known types only, no duplicates, `autoplay` (360p) last if listed. A backup is used only at the resolution and codec family the player chose. |
 | Show a notice when an ad is blocked | on | Small "Ad blocked – using backup stream" note in the player. |
