@@ -1247,6 +1247,243 @@ var asScriptlets = (function () {
     }, true);
   }
 
+  // ------------------------------------------------------------------ YouTube blocked-playback screen
+  /**
+   * youtube-playability-recover: when the player response in use says playback is blocked for an
+   * ad blocker (playabilityStatus.status ERROR or UNPLAYABLE together with
+   * playabilityStatus.errorScreen.enforcementMessageViewModel or
+   * auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel: YouTube's "Ad blockers violate
+   * YouTube's Terms of Service" screen in place of the player), ask the player for the video
+   * again with #movie_player.loadVideoById(v, t) (uBO reloads on UNPLAYABLE the same way). A fresh
+   * /youtubei/v1/player request in the same session was answered OK, and loadVideoById by hand on
+   * the error screen played the video, measured 2026-11-22.
+   * The response is read with the player's getPlayerResponse(), which is whatever the player
+   * uses: the page-embedded ytInitialPlayerResponse on a direct load, the get_watch / player
+   * response after in-page navigation or after our reload. Polled every TICK ms from document
+   * start on a /watch?v= page (and again from yt-navigate-finish / yt-player-updated /
+   * DOMContentLoaded, which may not fire on the error screen), for at most MAX_TICKS ticks after
+   * the start or the last reload. The player is only asked once it is ready: getPlayerState() is
+   * 5 (cued) or -1 (unstarted) and the enforced response has been seen on SETTLE_TICKS
+   * consecutive ticks (a call while the player is still initialising is swallowed). Start time:
+   * the URL's t= (90, 90s, 1m30s, 1h2m3s) or 0. A reload that leaves the same response object in
+   * place for RETRY_TICKS ticks while the player is still cued / unstarted counts as a failed
+   * try; a reload answered with the enforcement again is retried too; at most MAX_TRIES reloads
+   * per video for the life of the page, then we give up and leave the screen.
+   * Only after a reload whose new response for this video is OK: the stale
+   * yt-playability-error-supported-renderers are hidden (display:none !important),
+   * ytd-watch-flexy loses its player-unavailable attribute (YouTube leaves both in place after a
+   * successful loadVideoById, measured 2026-11-22) and the player (#movie_player, its ytd-player)
+   * loses a hidden attribute / inline display:none; repeated RECHECKS ms later in case YouTube
+   * re-renders them. The hiding and the attribute are given back on yt-navigate-start, so YouTube
+   * shows the next page's own errors. Other playability errors (private, age gate, region,
+   * LOGIN_REQUIRED) are never touched.
+   */
+  var RECOVER_MAX_TRIES = 3;
+  var RECOVER_TICK = 500;
+  var RECOVER_MAX_TICKS = 40;   // 20 s
+  var RECOVER_SETTLE_TICKS = 4; // 2 s of a loaded page and ready player with the enforced response
+  var RECOVER_RETRY_TICKS = 6;  // 3 s without a new response after a reload
+  var RECOVER_RECHECKS = [1000, 3000];
+  var ERROR_RENDERERS = 'yt-playability-error-supported-renderers';
+
+  function playabilityOf(resp) {
+    var ps = isObj(resp) ? resp.playabilityStatus : null;
+    return isObj(ps) ? ps : null;
+  }
+
+  function isEnforced(resp) {
+    var ps = playabilityOf(resp);
+    if (!ps || (ps.status !== 'ERROR' && ps.status !== 'UNPLAYABLE')) return false;
+    if (isObj(ps.errorScreen) && isObj(ps.errorScreen.enforcementMessageViewModel)) return true;
+    var aux = isObj(resp.auxiliaryUi) ? resp.auxiliaryUi.messageRenderers : null;
+    return isObj(aux) && isObj(aux.bkaEnforcementMessageViewModel);
+  }
+
+  function urlParam(search, name) {
+    try {
+      var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(String(search || ''));
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** YouTube's t= value in seconds: 90, 90s, 1m30s, 1h2m3s; anything else 0. */
+  function startSeconds(t) {
+    if (/^\d+$/.test(t)) return Number(t);
+    var m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(t);
+    if (!m || !(m[1] || m[2] || m[3])) return 0;
+    return (Number(m[1]) || 0) * 3600 + (Number(m[2]) || 0) * 60 + (Number(m[3]) || 0);
+  }
+
+  function youtubePlayabilityRecover(win, args, log) {
+    var doc = win.document;
+    if (!doc || typeof doc.addEventListener !== 'function' || typeof win.setTimeout !== 'function') return;
+    var NAME = 'youtube-playability-recover';
+    var tries = {};     // videoId -> loadVideoById calls so far
+    var job = null;     // the watch page being looked after
+    var undo = [];      // functions that give back what clean-up changed
+
+    function currentVideo() {
+      var loc = win.location;
+      if (!loc || loc.pathname !== '/watch') return '';
+      var v = urlParam(loc.search, 'v');
+      return /^[\w-]{11}$/.test(v) ? v : '';
+    }
+
+    function responseOf(player) {
+      try {
+        return player && typeof player.getPlayerResponse === 'function' ? player.getPlayerResponse() : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /** Cued (5) or unstarted (-1): the player shows the error screen and takes a loadVideoById. */
+    function ready(player) {
+      try {
+        if (!player || typeof player.loadVideoById !== 'function' || typeof player.getPlayerState !== 'function') return false;
+        var s = player.getPlayerState();
+        return s === 5 || s === -1;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function show(el) {
+      try {
+        if (!el) return;
+        if (typeof el.hasAttribute === 'function' && el.hasAttribute('hidden')) el.removeAttribute('hidden');
+        if (el.style && el.style.display === 'none') el.style.display = '';
+      } catch (e) { /* leave it */ }
+    }
+
+    function cleanup(player) {
+      try {
+        var list = doc.querySelectorAll(ERROR_RENDERERS);
+        for (var i = 0; list && i < list.length; i++) {
+          var s = list[i].style;
+          if (!s || typeof s.setProperty !== 'function') continue;
+          if (s.getPropertyValue('display') === 'none' && s.getPropertyPriority('display') === 'important') continue;
+          (function (st, val, prio) {
+            undo.push(function () {
+              if (val) st.setProperty('display', val, prio); else st.removeProperty('display');
+            });
+          })(s, s.getPropertyValue('display'), s.getPropertyPriority('display'));
+          s.setProperty('display', 'none', 'important');
+        }
+        var flexy = doc.querySelector('ytd-watch-flexy');
+        if (flexy && typeof flexy.hasAttribute === 'function' && flexy.hasAttribute('player-unavailable')) {
+          var was = typeof flexy.getAttribute === 'function' ? flexy.getAttribute('player-unavailable') : '';
+          flexy.removeAttribute('player-unavailable');
+          undo.push(function () { flexy.setAttribute('player-unavailable', was || ''); });
+        }
+        show(player);
+        show(player && typeof player.closest === 'function' ? player.closest('ytd-player') : null);
+      } catch (e) { /* leave the page alone */ }
+    }
+
+    function recovered(j, player) {
+      cleanup(player);
+      log(NAME, 'recovered');
+      RECOVER_RECHECKS.forEach(function (ms) {
+        win.setTimeout(function () {
+          try {
+            if (job === null && currentVideo() === j.vid && undo.length) cleanup(doc.querySelector('#movie_player'));
+          } catch (e) { /* leave it */ }
+        }, ms);
+      });
+    }
+
+    function giveBack() {
+      var list = undo;
+      undo = [];
+      list.forEach(function (fn) { try { fn(); } catch (e) { /* gone */ } });
+    }
+
+    function schedule(j) {
+      if (j.timer || job !== j) return;
+      if (j.ticks - j.since >= RECOVER_MAX_TICKS || j.ticks >= RECOVER_MAX_TICKS * 3) { job = null; return; }
+      j.timer = true;
+      win.setTimeout(function () {
+        j.timer = false;
+        if (job === j) step(j);
+      }, RECOVER_TICK);
+    }
+
+    function reload(j, player, resp) {
+      tries[j.vid] = (tries[j.vid] || 0) + 1;
+      j.blocked = resp;
+      j.recovering = true;
+      j.seen = 0;
+      j.since = j.ticks;
+      log(NAME, 'reload');
+      player.loadVideoById(j.vid, j.start);
+    }
+
+    function step(j) {
+      try {
+        if (currentVideo() !== j.vid) { job = null; return; }
+        j.ticks++;
+        var player = doc.querySelector('#movie_player');
+        var resp = responseOf(player);
+        var details = isObj(resp) && isObj(resp.videoDetails) ? resp.videoDetails : null;
+        var forThis = isObj(resp) && (!details || !details.videoId || details.videoId === j.vid);
+        if (forThis && resp === j.blocked) {
+          // Our reload has not replaced the response. Still cued / unstarted after RETRY_TICKS:
+          // the call was swallowed, a failed try. Loading (3) or playing (1): wait for it.
+          if (j.ticks - j.since < RECOVER_RETRY_TICKS || !ready(player)) { schedule(j); return; }
+          j.blocked = null;
+          log(NAME, 'reload had no effect');
+        }
+        if (forThis && playabilityOf(resp)) {
+          if (isEnforced(resp)) {
+            if ((tries[j.vid] || 0) >= RECOVER_MAX_TRIES) { job = null; log(NAME, 'gave up'); return; }
+            // A reload while the page is still loading is swallowed by the player (measured in
+            // Chrome 2026-11-22): wait for the load event, then a settled, ready player.
+            if (doc.readyState !== 'complete' || !ready(player)) { j.seen = 0; j.since = j.ticks; schedule(j); return; }
+            if (++j.seen >= RECOVER_SETTLE_TICKS) reload(j, player, resp);
+            schedule(j);
+            return;
+          }
+          job = null;
+          var ps = playabilityOf(resp);
+          if (j.recovering && ps.status === 'OK') recovered(j, player);
+          return; // OK without our reload, or a playability error of another kind: not ours
+        }
+        schedule(j);
+      } catch (e) {
+        if (job === j) job = null;
+      }
+    }
+
+    function check() {
+      try {
+        var vid = currentVideo();
+        if (!vid) { job = null; return; }
+        if (!job || job.vid !== vid) {
+          job = {
+            vid: vid, start: startSeconds(urlParam(win.location.search, 't')),
+            ticks: 0, since: 0, seen: 0, blocked: null, recovering: false, timer: false
+          };
+        }
+        schedule(job);
+      } catch (e) { /* leave the page alone */ }
+    }
+
+    ['DOMContentLoaded', 'yt-navigate-finish', 'yt-player-updated'].forEach(function (type) {
+      doc.addEventListener(type, check, true);
+    });
+    // yt-navigate-start also fires during a direct load, and yt-navigate-finish may not follow on
+    // the error screen: start checking again on our own shortly after.
+    doc.addEventListener('yt-navigate-start', function () {
+      job = null;
+      giveBack();
+      win.setTimeout(check, RECOVER_TICK * 2);
+    }, true);
+    check(); // a direct load: from document start, the events may never come
+  }
+
   // ------------------------------------------------------------------ child frames
   /**
    * Call onFrame(childWindow) once per document of every same-origin iframe the page reaches via
@@ -1304,7 +1541,8 @@ var asScriptlets = (function () {
       'remove-node-text': removeNodeText,
       'youtube-drop-player-event': youtubeDropPlayerEvent,
       'youtube-ad-skip': youtubeAdSkip,
-      'youtube-enforcement-dismiss': youtubeEnforcementDismiss
+      'youtube-enforcement-dismiss': youtubeEnforcementDismiss,
+      'youtube-playability-recover': youtubePlayabilityRecover
     },
     protectFrames: protectFrames,
     makePruner: makePruner,
@@ -1398,6 +1636,6 @@ var asScriptletRunner = (function () {
 
 
 try {
-  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prevent-dom-bypass","Node.prototype.appendChild","fetch Request"],["remove-node-text","script","window,\"fetch\""],["youtube-drop-player-event","onAbnormalityDetected"],["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
+  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prevent-dom-bypass","Node.prototype.appendChild","fetch Request"],["remove-node-text","script","window,\"fetch\""],["youtube-drop-player-event","onAbnormalityDetected"],["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"],["youtube-playability-recover"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
 } catch (e) { /* never break the page */ }
 })();
