@@ -745,6 +745,16 @@
 
     /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
      * embedded player with ?video=<id>. */
+    var EMPTY_VAST = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
+
+    /** Local "no ad" answer for a client-side ad request: an empty VAST (no fill) with status
+     * 200, or an empty 204 for /ads/format (not a VAST endpoint). */
+    function noAdResponse(url) {
+      var path = String(url || '').split(/[?#]/)[0];
+      if (/\/ads\/format$/.test(path)) return new Response(null, { status: 204, statusText: 'No Content' });
+      return new Response(EMPTY_VAST, { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/xml' } });
+    }
+
     function isVodPage(pathname, search, cfg) {
       if (new RegExp(cfg.vodPagePathPattern).test(String(pathname || ''))) return true;
       var q = String(search || '').replace(/^\?/, '');
@@ -777,6 +787,7 @@
       isM3u8Url: isM3u8Url,
       isClientAdUrl: isClientAdUrl,
       isVodPage: isVodPage,
+      noAdResponse: noAdResponse,
       splitUrl: splitUrl
     };
   }

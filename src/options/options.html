@@ -109,8 +109,8 @@
     <section class="card">
       <h2>Twitch</h2>
       <div class="opt row">
-        <div><strong>Block client-side ad requests on videos (VODs)</strong><p class="muted">Answers Twitch's own ad requests with "no ad" on past broadcasts (twitch.tv/videos/…). Live streams are left alone: a failed ad request there can bring up Twitch's "you're running ad block" notice.</p></div>
-        <label class="switch"><input type="checkbox" data-key="blockClientAds" aria-label="Block client-side ad requests on videos"><span class="track"></span></label>
+        <div><strong>Block client-side ad requests</strong><p class="muted">Answers Twitch's own ad requests (live and past broadcasts) with an empty "no ad" reply, so the request succeeds but nothing plays.</p></div>
+        <label class="switch"><input type="checkbox" data-key="blockClientAds" aria-label="Block client-side ad requests"><span class="track"></span></label>
       </div>
       <div class="opt row">
         <div><strong>Block ad tracking paths</strong><p class="muted">Blocks twitch.tv/r/s/ and /r/c/ requests. Off by default; untested on live Twitch.</p></div>

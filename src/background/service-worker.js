@@ -70,7 +70,7 @@ importScripts('/src/shared/blocking.js', '/src/shared/userfilters.js', '/src/sha
   function syncRulesets(s) {
     var enable = [], disable = [];
     // client_ads holds allow rules only (since 2.0): Twitch's ad requests must not fail on live
-    // streams, whatever EasyList says; blockClientAds now acts in the page (VOD only).
+    // streams, whatever EasyList says; blockClientAds now acts in the page (no-fill answer, live and VOD).
     (s.enabled ? enable : disable).push(RULESETS.clientAds);
     (s.enabled && s.blockTrackers ? enable : disable).push(RULESETS.trackers);
     return chrome.declarativeNetRequest.updateEnabledRulesets({ enableRulesetIds: enable, disableRulesetIds: disable });

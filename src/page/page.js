@@ -12,10 +12,11 @@
  *  3. answers token requests from workers using the page's real fetch and captured headers;
  *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to health.js
  *     (playback metrics and the one gated nudge after a playlist switch);
- *  5. on VOD pages only (m3u8.isVodPage) and with settings.blockClientAds, answers Twitch's
- *     client-side ad requests (m3u8.isClientAdUrl, GET) locally with "no ad": fetch gets an
- *     empty 204, XMLHttpRequest an empty VAST document (as TTV-AB). Live pages are never
- *     touched: a failed ad request there is the likely trigger of Twitch's ad-block notice.
+ *  5. with settings.blockClientAds, answers Twitch's client-side ad requests (m3u8.isClientAdUrl,
+ *     GET) locally with a successful "no ad" (no fill): an empty VAST document with status 200
+ *     (m3u8.noAdResponse; /ads/format gets an empty 204), on live and VOD. The request succeeds
+ *     from the page's point of view, so nothing plays and nothing fails (a *failed* ad request
+ *     is the likely trigger of Twitch's ad-block notice; cf. TTV-AB "ad spoofing").
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -140,15 +141,13 @@
       .then(function (tok) { clearTimeout(timer); return tok; });
   }
 
-  // ------------------------------------------------------------------ client-side ads (VOD only)
+  // ------------------------------------------------------------------ client-side ads (live and VOD)
   var EMPTY_VAST_URL = 'data:application/xml,%3CVAST%20version%3D%223.0%22%3E%3C%2FVAST%3E';
 
   /** True when this request is a client-side ad request to answer locally. */
   function blocksClientAd(url, method) {
     if (!isEnabled() || settings.blockClientAds === false) return false;
-    if (String(method || 'GET').toUpperCase() !== 'GET' || !M.isClientAdUrl(url, cfg)) return false;
-    var loc = root.location;
-    return M.isVodPage(loc.pathname, loc.search, cfg);
+    return String(method || 'GET').toUpperCase() === 'GET' && M.isClientAdUrl(url, cfg);
   }
 
   function noAdResponse(input, init) {
@@ -156,7 +155,8 @@
     if (signal && signal.aborted) {
       return Promise.reject(signal.reason !== undefined ? signal.reason : new DOMException('The operation was aborted.', 'AbortError'));
     }
-    return Promise.resolve(new Response(null, { status: 204, statusText: 'No Content' }));
+    var url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    return Promise.resolve(M.noAdResponse(url));
   }
 
   var XP = root.XMLHttpRequest && root.XMLHttpRequest.prototype;
@@ -165,7 +165,7 @@
     XP.open = function (method, url) {
       try {
         if (blocksClientAd(String(url), method)) {
-          log.debug('client-side VOD ad request answered locally (xhr)');
+          log.debug('client-side ad request answered locally (xhr)');
           var a = Array.prototype.slice.call(arguments);
           a[1] = EMPTY_VAST_URL;
           return realXhrOpen.apply(this, a);
@@ -181,7 +181,7 @@
         var url = typeof input === 'string' ? input : (input && input.url) || String(input);
         var method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
         if (blocksClientAd(url, method)) {
-          log.debug('client-side VOD ad request answered locally (fetch)');
+          log.debug('client-side ad request answered locally (fetch)');
           return noAdResponse(input, init);
         }
         if (url.indexOf(cfg.gql.url) === 0) {

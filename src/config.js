@@ -147,9 +147,10 @@
     usherIgnoreSubstrings: ['picture-by-picture'],
 
     // Client-side ad requests (CSAI): the page or its video worker asks Twitch's ad server for
-    // an ad. Answered locally with "no ad" (settings.blockClientAds) on VOD playback only; live
-    // requests always go out (TTV-AB does the same; a failed ad request on a live stream is the
-    // likely trigger of Twitch's "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md).
+    // an ad. Answered locally with a successful "no ad" (empty VAST, 200; settings.blockClientAds) on
+    // live and VOD. 2.0.0 let live requests go out (a *failed* request is the likely trigger of the
+    // "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md), but then the ad
+    // played (2026-11-22: page fetch edge.ads.twitch.tv/ads -> olv-ad-player -> Amazon mp4).
     // Until 2.0 a DNR ruleset (client_ads) blocked edge.ads.twitch.tv and apstag.js on every page.
     // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
     clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],

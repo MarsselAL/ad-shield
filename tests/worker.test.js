@@ -327,37 +327,31 @@ test('switched off while a master request is in flight: original master served',
   });
 });
 
-test('client-side ad requests: answered with 204 only while a VOD plays and blockClientAds is on', function () {
-  var VOD_MASTER = 'https://usher.ttvnw.net/vod/2345678901.m3u8?sig=S&token=T';
+test('client-side ad requests: answered locally with an empty VAST (live and VOD) while blockClientAds is on', function () {
   var AD = 'https://edge.ads.twitch.tv/ads?bp=midroll';
   var routes = {};
-  routes[VOD_MASTER] = MASTER;
   routes[AD] = '<VAST/>';
   routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
   var scope = makeScope(routes);
   runInWorker(scope);
-  return scope.fetch(AD).then(function (r) {
-    assert.equal(r.status, 200, 'before any playlist: sent');
-    return scope.fetch(MASTER_URL);
-  }).then(function () {
+  var calls;
+  return scope.fetch(MASTER_URL).then(function () {
+    calls = scope.realCalls.length;
     return scope.fetch(AD);
   }).then(function (r) {
-    assert.equal(r.status, 200, 'live stream: sent');
-    return scope.fetch(VOD_MASTER);
+    assert.equal(r.status, 200, 'live: answered');
+    assert.equal(scope.realCalls.length, calls, 'live: no network request');
+    return r.text();
+  }).then(function (body) {
+    assert.ok(/<VAST version="3.0"><\/VAST>/.test(body), 'empty VAST body');
+    return scope.fetch(AD, { method: 'POST' });
   }).then(function () {
-    var calls = scope.realCalls.length;
-    return scope.fetch(AD).then(function (r) {
-      assert.equal(r.status, 204, 'VOD: answered locally');
-      assert.equal(scope.realCalls.length, calls, 'no network request');
-      return scope.fetch(AD, { method: 'POST' });
-    });
-  }).then(function (r) {
-    assert.equal(r.status, 200, 'VOD: POST sent');
+    assert.equal(scope.realCalls.length, calls + 1, 'POST sent');
     var off = {};
     off[KEY] = { type: 'settings', settings: { blockClientAds: false, playerTypes: cfg.backupPlayerTypes.slice() } };
     scope.dispatch(off);
     return scope.fetch(AD);
-  }).then(function (r) {
-    assert.equal(r.status, 200, 'blockClientAds off: sent');
+  }).then(function () {
+    assert.equal(scope.realCalls.length, calls + 2, 'blockClientAds off: sent');
   });
 });

@@ -9,9 +9,8 @@
  *   - ad segment URLs we have seen  -> tiny valid blank response, no network request
  *   - usher master playlists        -> parsed, variants remembered (processor.onMaster)
  *   - known media playlists         -> processor.onMedia (backup / strip)
- *   - client-side ad requests (m3u8.isClientAdUrl, GET) while this worker plays a VOD (last usher
- *     master was a VOD one) and settings.blockClientAds is on -> empty 204, no network request;
- *     on live streams they always go out (see cfg.clientAdOrigins)
+ *   - client-side ad requests (m3u8.isClientAdUrl, GET) with settings.blockClientAds on, live or
+ *     VOD -> m3u8.noAdResponse (empty VAST, 200), no network request
  *   - anything else                 -> original fetch, untouched
  * Any internal exception returns the original response untouched.
  * settings.enabled === false (sent by the page when the user switches the extension off):
@@ -167,9 +166,9 @@
         if (off()) return realFetch(input, init);
         url = typeof input === 'string' ? input : (input && input.url) || String(input);
         if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url));
-        if (playbackKind === 'vod' && settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
-          log.debug('client-side VOD ad request answered locally (worker)');
-          return Promise.resolve(new Response(null, { status: 204, statusText: 'No Content' }));
+        if (settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
+          log.debug('client-side ad request answered locally (worker)');
+          return Promise.resolve(M.noAdResponse(url));
         }
         var u = M.matchUsher(url, cfg);
         if (u) { playbackKind = u.kind; return handleMaster(input, init, url, u); }
