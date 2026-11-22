@@ -1272,10 +1272,20 @@ var asScriptlets = (function () {
    *    guard is applied to what its getter returns, the object the page and the player read.
    *    Measured: 3 test videos played 2.5 s, 6.1 s and 6.2 s after navigation start with no block
    *    screen (before: block screen shown, playing at about 8.7 s).
+   *    The main app runs the same check on the player responses of in-page navigation (fetch
+   *    /youtubei/v1/get_watch, an array whose items carry playerResponse; /youtubei/v1/player;
+   *    seen live 2026-11-22: "Something went wrong ... 282054944"), so the same guard is applied
+   *    to every object a JSON.parse (only when the text contains "playabilityStatus") or a
+   *    Response.prototype.json returns: the object, its array items, their .playerResponse and
+   *    endpoint.watchEndpoint.unserializedPrefetchData.playerResponse (resolve_url prefetch); a
+   *    few key lookups, no deep walk. Installed after json-prune / json-prune-fetch-response
+   *    (rule order), so it wraps them and guards the pruned object. Covers fetch bodies read with
+   *    json() or text() + JSON.parse and XHR responseText + JSON.parse; not XHR responseType json.
    * 2. Reload (the fallback, when the response the player uses is still enforced, isEnforced:
-   *    playabilityStatus.status ERROR or UNPLAYABLE together with
-   *    playabilityStatus.errorScreen.enforcementMessageViewModel or
-   *    auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel): ask the player for the video
+   *    playabilityStatus.status ERROR or UNPLAYABLE together with the error screen of the swap
+   *    above (isEnforcementSwap: errorScreen.enforcementMessageViewModel, or
+   *    playerErrorMessageRenderer with subreason 282054944, the common case since we prune
+   *    bkaEnforcementMessageViewModel) or auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel): ask the player for the video
    *    again with #movie_player.loadVideoById(v, t) (uBO reloads on UNPLAYABLE the same way); a
    *    fresh /youtubei/v1/player request in the same session was answered OK, and loadVideoById
    *    by hand on the error screen played the video, measured 2026-11-22.
@@ -1326,7 +1336,7 @@ var asScriptlets = (function () {
   function isEnforced(resp) {
     var ps = playabilityOf(resp);
     if (!ps || (ps.status !== 'ERROR' && ps.status !== 'UNPLAYABLE')) return false;
-    if (isObj(ps.errorScreen) && isObj(ps.errorScreen.enforcementMessageViewModel)) return true;
+    if (isEnforcementSwap(ps)) return true;
     var aux = isObj(resp.auxiliaryUi) ? resp.auxiliaryUi.messageRenderers : null;
     return isObj(aux) && isObj(aux.bkaEnforcementMessageViewModel);
   }
@@ -1399,6 +1409,27 @@ var asScriptlets = (function () {
     // 1. The embedded response.
     trapPath(win, ['ytInitialPlayerResponse'], guardLeaf);
     trapPath(win, ['ytplayer', 'bootstrapPlayerResponse'], guardLeaf);
+
+    // ... and fetched ones (after json-prune*, which wrap first): o, o[i], .playerResponse and the
+    // resolve_url prefetch playerResponse. JSON.parse only walks a text with the needle.
+    function guardAll(o) {
+      try {
+        [].concat(o).forEach(function (x) {
+          if (!isObj(x)) return;
+          var e = x.endpoint, u = isObj(e) && isObj(e.watchEndpoint) && e.watchEndpoint.unserializedPrefetchData;
+          [x, x.playerResponse, isObj(u) && u.playerResponse].forEach(guardResponse);
+        });
+      } catch (e) { /* leave it */ }
+    }
+    wrap(win, win.JSON, 'parse', function (t, self, a) {
+      var r = reflectApply(t, self, a);
+      if (typeof a[0] === 'string' && a[0].indexOf('"playabilityStatus"') !== -1) guardAll(r);
+      return r;
+    });
+    wrap(win, typeof win.Response === 'function' ? win.Response.prototype : null, 'json', function (t, self, a) {
+      var p = reflectApply(t, self, a);
+      try { return p.then(function (o) { guardAll(o); return o; }); } catch (e) { return p; }
+    });
 
     // 2. The reload fallback.
     var doc = win.document;

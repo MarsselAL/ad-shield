@@ -1924,6 +1924,93 @@ test('youtube-playability-recover: ytplayer.bootstrapPlayerResponse (ytplayer cr
   assert.equal(r3.videoDetails.videoId, VID);
 });
 
+function guarded(r) { var d = Object.getOwnPropertyDescriptor(r, 'playabilityStatus'); return !!(d && d.get); }
+function assertSwapIgnored(r, msg) {
+  var vd = r.videoDetails;
+  khzSwap(r);
+  assert.equal(r.playabilityStatus.status, 'OK', msg + ': kHz swap ignored');
+  assert.ok(r.videoDetails === vd && vd !== undefined, msg + ': videoDetails kept');
+}
+
+test('youtube-playability-recover: fetched get_watch (array with playerResponse), /player and resolve_url prefetch responses are guarded (Response.json, text + JSON.parse, XHR)', function () {
+  var watch = JSON.stringify([{ playerResponse: withAds(okResponse()) }, { response: { contents: {} } }]);
+  var prefetch = JSON.stringify({ endpoint: { watchEndpoint: { unserializedPrefetchData: { playerResponse: okResponse() } } } });
+  var bodies = {
+    '/youtubei/v1/get_watch?prettyPrint=false': watch,
+    '/youtubei/v1/player?prettyPrint=false': JSON.stringify(withAds(okResponse())),
+    '/youtubei/v1/navigation/resolve_url?prettyPrint=false': prefetch
+  };
+  var win = fakeWin('www.youtube.com', { bodies: bodies });
+  R.run(win, L, RULES, log);
+  var x = new win.XMLHttpRequest();
+  x.open('POST', '/youtubei/v1/player?prettyPrint=false');
+  x.send();
+  var xr = win.JSON.parse(x.responseText);
+  assert.equal(xr.adPlacements, undefined, 'XHR /player pruned');
+  assertSwapIgnored(xr, 'XHR /player + JSON.parse');
+  function get(ep, how) {
+    return win.fetch('/youtubei/v1/' + ep + '?prettyPrint=false').then(function (r) {
+      return how === 'json' ? r.json() : r.text().then(function (t) { return win.JSON.parse(t); });
+    });
+  }
+  return get('get_watch', 'json').then(function (o) {
+    assert.equal(o[0].playerResponse.adPlacements, undefined, 'get_watch pruned');
+    assertSwapIgnored(o[0].playerResponse, 'get_watch Response.json');
+    assert.notOk(guarded(o[1]), 'get_watch next item: no playabilityStatus, untouched');
+    return get('get_watch', 'text');
+  }).then(function (o) {
+    assertSwapIgnored(o[0].playerResponse, 'get_watch text + JSON.parse');
+    return get('player', 'json');
+  }).then(function (o) {
+    assert.equal(o.playerAds, undefined, '/player pruned');
+    assertSwapIgnored(o, '/player Response.json');
+    return get('player', 'text');
+  }).then(function (o) {
+    assertSwapIgnored(o, '/player text + JSON.parse');
+    return get('navigation/resolve_url', 'json');
+  }).then(function (o) {
+    assertSwapIgnored(o.endpoint.watchEndpoint.unserializedPrefetchData.playerResponse, 'resolve_url prefetch');
+  });
+});
+
+test('youtube-playability-recover: non-player JSON and non-OK responses are left untouched by the JSON.parse / Response.json hooks', function () {
+  var win = fakeWin('www.youtube.com');
+  run(win, 'youtube-playability-recover', []);
+  var plain = win.JSON.parse('{"status":"OK","a":{"status":"OK"}}');
+  assert.deepEqual(Object.getOwnPropertyDescriptor(plain, 'status'), { value: 'OK', writable: true, enumerable: true, configurable: true });
+  var deep = win.JSON.parse(JSON.stringify({ a: { b: okResponse() } }));
+  assert.notOk(guarded(deep.a.b), 'only known player locations, no deep walk');
+  var e = win.JSON.parse(JSON.stringify(enforcedResponse({ videoId: VID })));
+  assert.notOk(guarded(e), 'an enforced response is left for the reload fallback');
+  var g = win.JSON.parse(JSON.stringify(genuineError('LOGIN_REQUIRED')));
+  assert.notOk(guarded(g), 'genuine error untouched');
+  assert.equal(win.JSON.parse('[1,"x",null]').length, 3, 'arrays and primitives pass');
+  assert.equal(win.JSON.parse('"playabilityStatus"'), 'playabilityStatus');
+  assert.equal(win.JSON.parse('null'), null);
+  assert.equal(win.JSON.parse(JSON.stringify(okResponse()), function (k, v) { return v; }).playabilityStatus.status, 'OK', 'reviver kept');
+  return new win.Response('{"contents":{"x":1}}').json().then(function (o) {
+    assert.deepEqual(o, { contents: { x: 1 } }, 'Response.json of other JSON unchanged');
+    return new win.Response(JSON.stringify(okResponse())).json();
+  }).then(function (o) {
+    assert.ok(guarded(o), 'Response.json of a player response guarded');
+    assert.equal(JSON.parse(JSON.stringify(o)).videoDetails.videoId, VID, 'serialises as before');
+  });
+});
+
+test('youtube-playability-recover: the kHz error (ERROR / UNPLAYABLE, playerErrorMessageRenderer subreason 282054944) triggers the reload fallback', function () {
+  ['ERROR', 'UNPLAYABLE'].forEach(function (status) {
+    var r = okResponse();
+    khzSwap(r);
+    r.playabilityStatus.status = status;
+    r.playabilityStatus.errorScreen.playerErrorMessageRenderer.reason = { simpleText: 'Something went wrong. Please try again later.' };
+    var p = recoverPage({ resp: r, next: [okResponse()] });
+    p.ticks(3);
+    assert.deepEqual(p.loads, [[VID, 0]], status + ': reloaded');
+    p.tick();
+    assert.ok(p.hiddenRenderers(), status + ': recovered');
+  });
+});
+
 test('rules: youtube-playability-recover is in the youtube rule (every YouTube host), nowhere else', function () {
   ['www.youtube.com', 'm.youtube.com', 'www.youtube-nocookie.com', 'www.youtubekids.com'].forEach(function (h) {
     var names = R.pick(RULES, h).map(function (s) { return s[0]; });
