@@ -150,9 +150,10 @@
     usherIgnoreSubstrings: ['picture-by-picture'],
 
     // Client-side ad requests (CSAI): the page or its video worker asks Twitch's ad server for
-    // an ad. Answered locally with "no ad" (settings.blockClientAds) on VOD playback only; live
-    // requests always go out (TTV-AB does the same; a failed ad request on a live stream is the
-    // likely trigger of Twitch's "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md).
+    // an ad. Answered locally with a successful "no ad" (empty VAST, 200; settings.blockClientAds) on
+    // live and VOD. 2.0.0 let live requests go out (a *failed* request is the likely trigger of the
+    // "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md), but then the ad
+    // played (2026-11-22: page fetch edge.ads.twitch.tv/ads -> olv-ad-player -> Amazon mp4).
     // Until 2.0 a DNR ruleset (client_ads) blocked edge.ads.twitch.tv and apstag.js on every page.
     // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
     clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
@@ -324,7 +325,7 @@
   function defaults() {
     return {
       enabled: true,              // master switch: off = hooks pass everything through, rulesets disabled
-      blockClientAds: true,       // VOD pages only: Twitch's client-side ad requests answered with "no ad" (page + worker hooks)
+      blockClientAds: true,       // Twitch's client-side ad requests answered with "no ad" (empty VAST), live and VOD (page + worker hooks)
       blockTrackers: false,       // DNR ruleset "trackers" (off by default)
       hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements and display ads beside the player
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
@@ -1244,6 +1245,16 @@
 
     /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
      * embedded player with ?video=<id>. */
+    var EMPTY_VAST = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
+
+    /** Local "no ad" answer for a client-side ad request: an empty VAST (no fill) with status
+     * 200, or an empty 204 for /ads/format (not a VAST endpoint). */
+    function noAdResponse(url) {
+      var path = String(url || '').split(/[?#]/)[0];
+      if (/\/ads\/format$/.test(path)) return new Response(null, { status: 204, statusText: 'No Content' });
+      return new Response(EMPTY_VAST, { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/xml' } });
+    }
+
     function isVodPage(pathname, search, cfg) {
       if (new RegExp(cfg.vodPagePathPattern).test(String(pathname || ''))) return true;
       var q = String(search || '').replace(/^\?/, '');
@@ -1276,6 +1287,7 @@
       isM3u8Url: isM3u8Url,
       isClientAdUrl: isClientAdUrl,
       isVodPage: isVodPage,
+      noAdResponse: noAdResponse,
       splitUrl: splitUrl
     };
   }
@@ -2018,9 +2030,8 @@
  *   - ad segment URLs we have seen  -> tiny valid blank response, no network request
  *   - usher master playlists        -> parsed, variants remembered (processor.onMaster)
  *   - known media playlists         -> processor.onMedia (backup / strip)
- *   - client-side ad requests (m3u8.isClientAdUrl, GET) while this worker plays a VOD (last usher
- *     master was a VOD one) and settings.blockClientAds is on -> empty 204, no network request;
- *     on live streams they always go out (see cfg.clientAdOrigins)
+ *   - client-side ad requests (m3u8.isClientAdUrl, GET) with settings.blockClientAds on, live or
+ *     VOD -> m3u8.noAdResponse (empty VAST, 200), no network request
  *   - anything else                 -> original fetch, untouched
  * Any internal exception returns the original response untouched.
  * settings.enabled === false (sent by the page when the user switches the extension off):
@@ -2176,9 +2187,9 @@
         if (off()) return realFetch(input, init);
         url = typeof input === 'string' ? input : (input && input.url) || String(input);
         if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url));
-        if (playbackKind === 'vod' && settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
-          log.debug('client-side VOD ad request answered locally (worker)');
-          return Promise.resolve(new Response(null, { status: 204, statusText: 'No Content' }));
+        if (settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
+          log.debug('client-side ad request answered locally (worker)');
+          return Promise.resolve(M.noAdResponse(url));
         }
         var u = M.matchUsher(url, cfg);
         if (u) { playbackKind = u.kind; return handleMaster(input, init, url, u); }
@@ -2535,10 +2546,11 @@
  *  3. answers token requests from workers using the page's real fetch and captured headers;
  *  4. passes worker events to the ISOLATED-world bridge (stats, toast) and to health.js
  *     (playback metrics and the one gated nudge after a playlist switch);
- *  5. on VOD pages only (m3u8.isVodPage) and with settings.blockClientAds, answers Twitch's
- *     client-side ad requests (m3u8.isClientAdUrl, GET) locally with "no ad": fetch gets an
- *     empty 204, XMLHttpRequest an empty VAST document (as TTV-AB). Live pages are never
- *     touched: a failed ad request there is the likely trigger of Twitch's ad-block notice.
+ *  5. with settings.blockClientAds, answers Twitch's client-side ad requests (m3u8.isClientAdUrl,
+ *     GET) locally with a successful "no ad" (no fill): an empty VAST document with status 200
+ *     (m3u8.noAdResponse; /ads/format gets an empty 204), on live and VOD. The request succeeds
+ *     from the page's point of view, so nothing plays and nothing fails (a *failed* ad request
+ *     is the likely trigger of Twitch's ad-block notice; cf. TTV-AB "ad spoofing").
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -2663,15 +2675,13 @@
       .then(function (tok) { clearTimeout(timer); return tok; });
   }
 
-  // ------------------------------------------------------------------ client-side ads (VOD only)
+  // ------------------------------------------------------------------ client-side ads (live and VOD)
   var EMPTY_VAST_URL = 'data:application/xml,%3CVAST%20version%3D%223.0%22%3E%3C%2FVAST%3E';
 
   /** True when this request is a client-side ad request to answer locally. */
   function blocksClientAd(url, method) {
     if (!isEnabled() || settings.blockClientAds === false) return false;
-    if (String(method || 'GET').toUpperCase() !== 'GET' || !M.isClientAdUrl(url, cfg)) return false;
-    var loc = root.location;
-    return M.isVodPage(loc.pathname, loc.search, cfg);
+    return String(method || 'GET').toUpperCase() === 'GET' && M.isClientAdUrl(url, cfg);
   }
 
   function noAdResponse(input, init) {
@@ -2679,7 +2689,8 @@
     if (signal && signal.aborted) {
       return Promise.reject(signal.reason !== undefined ? signal.reason : new DOMException('The operation was aborted.', 'AbortError'));
     }
-    return Promise.resolve(new Response(null, { status: 204, statusText: 'No Content' }));
+    var url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    return Promise.resolve(M.noAdResponse(url));
   }
 
   var XP = root.XMLHttpRequest && root.XMLHttpRequest.prototype;
@@ -2688,7 +2699,7 @@
     XP.open = function (method, url) {
       try {
         if (blocksClientAd(String(url), method)) {
-          log.debug('client-side VOD ad request answered locally (xhr)');
+          log.debug('client-side ad request answered locally (xhr)');
           var a = Array.prototype.slice.call(arguments);
           a[1] = EMPTY_VAST_URL;
           return realXhrOpen.apply(this, a);
@@ -2704,7 +2715,7 @@
         var url = typeof input === 'string' ? input : (input && input.url) || String(input);
         var method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
         if (blocksClientAd(url, method)) {
-          log.debug('client-side VOD ad request answered locally (fetch)');
+          log.debug('client-side ad request answered locally (fetch)');
           return noAdResponse(input, init);
         }
         if (url.indexOf(cfg.gql.url) === 0) {
