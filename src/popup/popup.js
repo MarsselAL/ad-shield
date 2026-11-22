@@ -9,7 +9,10 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * Footer: Settings, an optional "Support Ad Shield" tip link (src/shared/donate.js), version.
+ * "Support Ad Shield" card under the header: the tip link and the BTC and USDC addresses with
+ * Copy buttons, all taken from src/shared/donate.js at runtime (textContent only). Rows without a
+ * value stay hidden; the card stays hidden when none is set.
+ * Footer: Settings, version.
  */
 (function () {
   'use strict';
@@ -167,16 +170,54 @@
     chrome.runtime.openOptionsPage();
   });
 
-  // "Support Ad Shield": opens the tip page (src/shared/donate.js) in a new tab; hidden without one.
-  var donate = ns.donate;
-  if (donate && donate.url) {
-    $('support').href = donate.url;
-    $('support').hidden = false;
-    $('support').addEventListener('click', function (e) {
+  // ---------------------------------------------------------------- support
+  var donate = ns.donate || {};
+  var copyTimers = {};
+
+  function copyLabel(btn, text) {
+    btn.textContent = text;
+    clearTimeout(copyTimers[btn.id]);
+    copyTimers[btn.id] = setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+  }
+
+  /** Selects the address text so it can be copied by hand when the clipboard is unavailable. */
+  function selectText(el) {
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
+  }
+
+  function showAddress(id, address, note) {
+    if (!address) return false;
+    var el = $(id + '-address');
+    var btn = $(id + '-copy');
+    el.textContent = address;
+    if (note) $('support-' + id).title = note;
+    $('support-' + id).hidden = false;
+    btn.addEventListener('click', function () {
+      function fallback() { selectText(el); copyLabel(btn, 'Selected'); }
+      try {
+        navigator.clipboard.writeText(address).then(function () { copyLabel(btn, 'Copied'); }, fallback);
+      } catch (e) { fallback(); }
+    });
+    return true;
+  }
+
+  if (donate.url) {
+    $('support-link').href = donate.url;
+    $('support-revolut').hidden = false;
+    $('support-link').addEventListener('click', function (e) {
       e.preventDefault();
       chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
     });
   }
+  var btcShown = showAddress('btc', donate.btc, donate.btcNote);
+  var usdcShown = showAddress('usdc', donate.usdcErc20, donate.usdcNote);
+  $('support').hidden = !(donate.url || btcShown || usdcShown);
 
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 

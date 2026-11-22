@@ -14,6 +14,32 @@
       <span class="muted" id="version"></span>
     </header>
 
+    <section class="card" id="support">
+      <h2>Support Ad Shield</h2>
+      <p class="muted">Ad Shield is free. If it saves you time, an optional tip helps keep it going. Thank you!</p>
+      <div class="row left" id="support-revolut" hidden>
+        <a class="button primary" id="support-link" href="#" target="_blank" rel="noopener noreferrer">☕ Tip via Revolut</a>
+      </div>
+      <div id="support-usdc" hidden>
+        <p class="coin-label"><strong>USDC · Ethereum (ERC-20) only</strong></p>
+        <div class="row left coin">
+          <code class="address" id="usdc-address" aria-label="USDC address"></code>
+          <button id="usdc-copy">Copy</button>
+          <span class="muted" id="usdc-copied" aria-live="polite"></span>
+        </div>
+        <p class="warn-note" id="usdc-note"></p>
+      </div>
+      <div id="support-btc" hidden>
+        <p class="coin-label"><strong>BTC · Bitcoin network</strong></p>
+        <div class="row left coin">
+          <code class="address" id="btc-address" aria-label="Bitcoin address"></code>
+          <button id="btc-copy">Copy</button>
+          <span class="muted" id="btc-copied" aria-live="polite"></span>
+        </div>
+        <p class="warn-note" id="btc-note"></p>
+      </div>
+    </section>
+
     <section class="card">
       <h2>General</h2>
       <div class="opt row">
@@ -141,31 +167,6 @@
         <span class="muted" id="lists-result" aria-live="polite"></span>
       </div>
       <p class="muted">Updates replace the network rules and the site-specific element hiding; the generic element-hiding CSS stays as built into this version. Filter data by The EasyList authors (easylist.to), used under CC BY-SA 3.0 (cookie list: CC BY 3.0). Cookie pop-up handling by DuckDuckGo autoconsent (MPL-2.0). See NOTICE.md.</p>
-    </section>
-    <section class="card" id="support">
-      <h2>Support Ad Shield</h2>
-      <p class="muted">Ad Shield is free. If it saves you time, an optional tip helps keep it going. Thank you!</p>
-      <div class="row left" id="support-revolut" hidden>
-        <a class="button primary" id="support-link" href="#" target="_blank" rel="noopener noreferrer">☕ Tip via Revolut</a>
-      </div>
-      <div id="support-usdc" hidden>
-        <p class="coin-label"><strong>Crypto: USDC</strong></p>
-        <div class="row left coin">
-          <code class="address" id="usdc-address" aria-label="USDC address"></code>
-          <button id="usdc-copy">Copy</button>
-          <span class="muted" id="usdc-copied" aria-live="polite"></span>
-        </div>
-        <p class="warn-note" id="usdc-note"></p>
-      </div>
-      <div id="support-btc" hidden>
-        <p class="coin-label"><strong>Crypto: Bitcoin (BTC)</strong></p>
-        <div class="row left coin">
-          <code class="address" id="btc-address" aria-label="Bitcoin address"></code>
-          <button id="btc-copy">Copy</button>
-          <span class="muted" id="btc-copied" aria-live="polite"></span>
-        </div>
-        <p class="warn-note" id="btc-note"></p>
-      </div>
     </section>
   </main>
 

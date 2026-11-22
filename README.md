@@ -367,7 +367,7 @@ Ad Shield is free. If it saves you time, an optional tip is welcome:
 - Crypto: Bitcoin, `bc1q37wpzj5zdfnpj7xa0vzwjyy6nep7fnf3s02cns` – **BTC on the Bitcoin network only**; other
   coins or networks will be lost.
 
-The popup footer and the settings page show the same links (values in `docs/donate.txt` and
+The popup (a card under the header) and the settings page (first card) show the same links (values in `docs/donate.txt` and
 `src/shared/donate.js`, kept in step by `tests/test_package.py`).
 
 ## Licence and credits
