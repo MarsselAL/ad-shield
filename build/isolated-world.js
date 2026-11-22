@@ -695,7 +695,11 @@
    * cosmeticExcludeHosts: hosts with generic-hiding exceptions; they get the generic CSS from the
    * background instead (minus the exceptions), so the static CSS file skips them.
    * slHosts: scriptletHosts(rules/scriptlets.json); build/scriptlets-main.js runs only there
-   * (MAIN world, every frame incl. about:blank ones), while Ads and Page scripts are both on.
+   * (MAIN world, every frame whose URL matches), while Ads and Page scripts are both on. No
+   * matchOriginAsFallback: YouTube appends a sandboxed about:blank iframe (sandbox="allow-same-origin",
+   * no allow-scripts) and Chrome logged "Blocked script execution in 'about:blank' ..." for our
+   * script there. Same-origin about:blank children are still patched from the parent through
+   * protectFrames (src/scriptlets/runner.js) and prevent-dom-bypass.
    * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
    * background for their CSS, so with Ads and Cookie banners both off it still runs there.
    */
@@ -730,7 +734,7 @@
     if (b.ads && b.scriptlets && slm.length) {
       var sl = {
         id: 'as-scriptlets', js: ['build/scriptlets-main.js'], matches: slm, world: 'MAIN', allFrames: true,
-        matchOriginAsFallback: true, runAt: 'document_start', persistAcrossSessions: true
+        runAt: 'document_start', persistAcrossSessions: true
       };
       if (allow.length) sl.excludeMatches = allow.slice();
       plan.push(sl);

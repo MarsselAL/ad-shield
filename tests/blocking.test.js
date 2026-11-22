@@ -177,7 +177,7 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   assert.equal(sl.world, 'MAIN');
   assert.equal(sl.runAt, 'document_start');
   assert.equal(sl.allFrames, true);
-  assert.equal(sl.matchOriginAsFallback, true);
+  assert.equal(sl.matchOriginAsFallback, undefined, 'no about:blank fallback: sandboxed blank frames logged script errors');
   assert.equal(sl.persistAcrossSessions, true);
   assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(sl.excludeMatches, ['*://*.off.com/*']);

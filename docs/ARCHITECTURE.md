@@ -62,7 +62,7 @@ Registered content scripts (ids start with `as-`; the Twitch ones stay in `manif
 | `as-site` | `src/content/general.js` (all sites while Ads or Cookie banners (hide) is on; otherwise only the hosts that have "My filters") | top | allowlist |
 | `as-autoconsent` | `vendor/autoconsent/content.bundle.js` (`matchOriginAsFallback`) | all | allowlist |
 | `as-css-youtube` | `rules/cosmetic/youtube.css`, matches `youtube.com`, `youtube-nocookie.com`, `youtubekids.com` (`YOUTUBE_CSS_HOSTS`) | all | allowlist |
-| `as-scriptlets` | `build/scriptlets-main.js`, `world: 'MAIN'`, `matchOriginAsFallback`, matches only the hosts of `rules/scriptlets.json` | all | allowlist |
+| `as-scriptlets` | `build/scriptlets-main.js`, `world: 'MAIN'`, no `matchOriginAsFallback` (sandboxed about:blank frames on YouTube logged errors; same-origin blank children are patched from the parent), matches only the hosts of `rules/scriptlets.json` | all | allowlist |
 
 Exception hosts (sites with `#@#` exceptions for generic selectors, `$generichide`, `$elemhide`)
 are excluded from the static CSS; for them the background injects the generic selectors minus

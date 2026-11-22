@@ -1491,7 +1491,8 @@ function genuineError(status) {
  * A watch page. opts.search, opts.resp (response the player has), opts.state (getPlayerState,
  * default 5 cued), opts.next (responses loadVideoById switches to; none left = the call is
  * swallowed), opts.hasPlayer, opts.readyState (document.readyState, default 'complete'; change
- * it later with page.doc.readyState). The scriptlet starts polling at once (document start).
+ * it later with page.doc.readyState). The scriptlet starts polling at once
+ * (document start); one poll tick = 100 ms.
  */
 function recoverPage(opts) {
   opts = opts || {};
@@ -1517,6 +1518,10 @@ function recoverPage(opts) {
   page.player.closest = function (sel) { return sel === 'ytd-player' ? page.ytdPlayer : null; };
   page.player.getPlayerResponse = function () { return page.resp; };
   page.player.getPlayerState = function () { return page.state; };
+  page.stateListeners = [];
+  page.player.addEventListener = function (type, fn) { if (type === 'onStateChange') page.stateListeners.push(fn); };
+  /** The player reports a state change (YouTube's player API: onStateChange with the new state). */
+  page.emitState = function (st) { page.state = st; page.stateListeners.forEach(function (fn) { fn(st); }); };
   page.player.loadVideoById = function (id, start) {
     page.loads.push([id, start]);
     if (!page.next.length) return; // swallowed: same response object, still cued
@@ -1540,27 +1545,27 @@ function recoverPage(opts) {
   page.win = win;
   page.doc = doc;
   page.fire = function (type) { if (listeners[type]) listeners[type]({ type: type }); };
-  /** Run the 500 ms poll timers scheduled so far (one round); other timers stay. */
+  /** Run the 100 ms poll timers scheduled so far (one round); other timers stay. */
   page.tick = function () {
-    var due = win.timers.filter(function (x) { return x.ms === 500; });
-    win.timers = win.timers.filter(function (x) { return x.ms !== 500; });
+    var due = win.timers.filter(function (x) { return x.ms === 100; });
+    win.timers = win.timers.filter(function (x) { return x.ms !== 100; });
     due.forEach(function (x) { x.fn(); });
     return due.length;
   };
   page.ticks = function (n) { for (var i = 0; i < n; i++) page.tick(); };
-  page.polling = function () { return win.timers.some(function (x) { return x.ms === 500; }); };
+  page.polling = function () { return win.timers.some(function (x) { return x.ms === 100; }); };
   page.hiddenRenderers = function () { return page.renderers.style.getPropertyValue('display') === 'none'; };
   run(win, 'youtube-playability-recover', []);
   return page;
 }
 
-test('youtube-playability-recover: from document start, no events needed: enforced + cued for 2 s -> loadVideoById(v, t); OK -> error view hidden, player shown', function () {
+test('youtube-playability-recover: from document start, no events needed: enforced + cued for 0.3 s -> loadVideoById(v, t); OK -> error view hidden, player shown', function () {
   var p = recoverPage({ search: '?v=' + VID + '&t=1m5s', resp: enforcedResponse(), next: [okResponse()] });
   assert.ok(p.polling(), 'polling from document start');
-  p.ticks(3);
-  assert.equal(p.loads.length, 0, 'first 1.5 s: wait for the player to settle');
+  p.ticks(2);
+  assert.equal(p.loads.length, 0, 'first 0.2 s: wait for the player to settle');
   p.tick();
-  assert.deepEqual(p.loads, [[VID, 65]], 'reloaded once at t=1m5s after 2 s');
+  assert.deepEqual(p.loads, [[VID, 65]], 'reloaded once at t=1m5s after 0.3 s');
   assert.notOk(p.hiddenRenderers(), 'nothing hidden before the new response is checked');
   p.tick();
   assert.ok(p.hiddenRenderers(), 'stale yt-playability-error-supported-renderers hidden');
@@ -1577,7 +1582,7 @@ test('youtube-playability-recover: from document start, no events needed: enforc
   assert.ok(p.hiddenRenderers(), 're-check hid the error view again');
   assert.notOk(p.flexy.hasAttribute('player-unavailable'));
   // more events for the same, now playing, video: nothing more
-  p.fire('yt-player-updated'); p.fire('yt-navigate-finish'); p.ticks(50);
+  p.fire('yt-player-updated'); p.fire('yt-navigate-finish'); p.ticks(250);
   assert.equal(p.loads.length, 1, 'no second reload of a recovered video');
   // in-page navigation away: what we hid / removed is given back to YouTube
   p.fire('yt-navigate-start');
@@ -1588,54 +1593,82 @@ test('youtube-playability-recover: from document start, no events needed: enforc
 test('youtube-playability-recover: player not ready at first (no player, then initialising) -> no call until cued / unstarted', function () {
   var p = recoverPage({ search: '?t=90&v=' + VID, resp: enforcedResponse({ aux: true, status: 'UNPLAYABLE' }), next: [okResponse()], hasPlayer: false });
   p.fire('DOMContentLoaded');
-  p.ticks(3);
+  p.ticks(15);
   assert.equal(p.loads.length, 0, 'no player yet');
   p.hasPlayer = true;
   p.state = 3; // still initialising / buffering
-  p.ticks(5);
+  p.ticks(25);
   assert.equal(p.loads.length, 0, 'player not ready: loadVideoById would be swallowed');
   p.state = -1;
-  p.ticks(3);
+  p.ticks(2);
   assert.equal(p.loads.length, 0, 'ready, settling');
   p.tick();
-  assert.deepEqual(p.loads, [[VID, 90]], 'reloaded 2 s after the player is ready');
+  assert.deepEqual(p.loads, [[VID, 90]], 'reloaded 0.3 s after the player is ready');
   p.tick();
   assert.ok(p.hiddenRenderers());
   // a player without getPlayerState is never asked
   var q = recoverPage({ resp: enforcedResponse(), next: [okResponse()] });
   q.player.getPlayerState = undefined;
-  q.ticks(50);
+  q.ticks(250);
   assert.equal(q.loads.length, 0, 'readiness unknown: no call');
   assert.ok(q.polling(), 'the 20 s budget counts from readiness: still waiting');
 });
 
-test('youtube-playability-recover: no call while document.readyState is loading or interactive; 2 s after complete', function () {
+test('youtube-playability-recover: no call while document.readyState is loading or interactive (and the player has not reported cued); 0.3 s after complete', function () {
   var p = recoverPage({ readyState: 'loading', resp: enforcedResponse(), next: [okResponse()] });
-  p.ticks(50);
-  assert.equal(p.loads.length, 0, 'loading: cued player, enforced response, no call');
+  p.ticks(250);
+  assert.equal(p.loads.length, 0, 'loading: cued player, enforced response, no onStateChange: no call');
   assert.ok(p.polling(), 'still waiting: the 20 s budget counts from readiness');
   p.doc.readyState = 'interactive';
   p.fire('DOMContentLoaded');
-  p.ticks(50);
+  p.ticks(250);
   assert.equal(p.loads.length, 0, 'interactive: no call');
   p.doc.readyState = 'complete';
-  p.ticks(3);
-  assert.equal(p.loads.length, 0, 'complete: settling for 2 s');
+  p.ticks(2);
+  assert.equal(p.loads.length, 0, 'complete: settling for 0.3 s');
   p.tick();
-  assert.deepEqual(p.loads, [[VID, 0]], 'reloaded 2 s after complete');
+  assert.deepEqual(p.loads, [[VID, 0]], 'reloaded 0.3 s after complete');
   p.tick();
   assert.ok(p.hiddenRenderers(), 'recovered');
 });
 
+test('youtube-playability-recover: the player reporting onStateChange 5 / -1 counts as ready before the window load event', function () {
+  [5, -1].forEach(function (st) {
+    var p = recoverPage({ readyState: 'interactive', resp: enforcedResponse(), next: [okResponse()], state: 3 });
+    p.tick();
+    assert.equal(p.stateListeners.length, 1, 'subscribed to onStateChange once the player API is there');
+    p.ticks(20);
+    assert.equal(p.stateListeners.length, 1, 'subscribed once per player element');
+    assert.equal(p.loads.length, 0, 'not ready yet');
+    p.emitState(1); p.emitState(3); p.state = st; p.ticks(20);
+    assert.equal(p.loads.length, 0, 'state ' + st + ' polled but never reported, page still loading: no call');
+    p.emitState(st);
+    p.ticks(2);
+    assert.equal(p.loads.length, 0, 'settling 0.3 s');
+    p.tick();
+    assert.deepEqual(p.loads, [[VID, 0]], 'reloaded 0.3 s after the player reported ' + st + ', readyState ' + p.doc.readyState);
+    p.tick();
+    assert.ok(p.hiddenRenderers(), 'recovered ' + st);
+  });
+  // a player whose addEventListener throws: falls back to waiting for complete
+  var q = recoverPage({ readyState: 'loading', resp: enforcedResponse(), next: [okResponse()] });
+  q.player.addEventListener = function () { throw new Error('boom'); };
+  q.ticks(50);
+  assert.equal(q.loads.length, 0);
+  q.doc.readyState = 'complete';
+  q.ticks(3);
+  assert.equal(q.loads.length, 1, 'readyState complete still works');
+});
+
 test('youtube-playability-recover: a swallowed reload (same response, still cued) is retried after 3 s; success on a later try', function () {
   var p = recoverPage({ resp: enforcedResponse() });
-  p.ticks(4);
+  p.ticks(3);
   assert.equal(p.loads.length, 1, 'first try');
-  p.ticks(5);
+  p.ticks(29);
   assert.equal(p.loads.length, 1, 'no retry within 3 s');
   p.next = [okResponse()];
-  p.ticks(3);
-  assert.equal(p.loads.length, 1, 'after 3 s: settling again for 2 s');
+  p.ticks(2);
+  assert.equal(p.loads.length, 1, 'after 3 s: settling again for 0.3 s');
   p.tick();
   assert.equal(p.loads.length, 2, 'retried: the response object never changed');
   assert.ok(logs.indexOf('youtube-playability-recover: reload had no effect') !== -1);
@@ -1644,23 +1677,23 @@ test('youtube-playability-recover: a swallowed reload (same response, still cued
   // still loading (state 3) with the old response: wait, no retry
   var q = recoverPage({ resp: enforcedResponse() });
   q.player.loadVideoById = function (id, s) { q.loads.push([id, s]); q.state = 3; };
-  q.ticks(4);
-  q.ticks(30);
+  q.ticks(3);
+  q.ticks(150);
   assert.equal(q.loads.length, 1, 'a reload in progress is not restarted');
 });
 
 test('youtube-playability-recover: at most 3 tries per video (swallowed or enforced again), then give up and leave the screen', function () {
   var p = recoverPage({ resp: enforcedResponse() });
-  p.ticks(60);
+  p.ticks(300);
   assert.equal(p.loads.length, 3, 'three swallowed tries');
-  p.fire('yt-navigate-finish'); p.fire('yt-player-updated'); p.ticks(60);
+  p.fire('yt-navigate-finish'); p.fire('yt-player-updated'); p.ticks(300);
   assert.equal(p.loads.length, 3, 'never more than 3');
   assert.ok(logs.indexOf('youtube-playability-recover: gave up') !== -1);
   assert.notOk(p.hiddenRenderers(), 'error screen left as it is');
   assert.ok(p.flexy.hasAttribute('player-unavailable'));
   assert.notOk(p.polling(), 'no timers left running');
   var q = recoverPage({ resp: enforcedResponse(), next: [enforcedResponse(), enforcedResponse(), enforcedResponse(), okResponse()] });
-  q.ticks(60);
+  q.ticks(300);
   assert.equal(q.loads.length, 3, 'enforced again each time: 3 tries');
   assert.notOk(q.hiddenRenderers());
 });
@@ -1669,7 +1702,7 @@ test('youtube-playability-recover: genuine errors (private, age gate, region) an
   [genuineError('ERROR'), genuineError('UNPLAYABLE'), genuineError('LOGIN_REQUIRED'), okResponse(),
     { playabilityStatus: { status: 'OK', errorScreen: { enforcementMessageViewModel: {} } } }].forEach(function (resp, i) {
     var p = recoverPage({ resp: resp });
-    p.fire('yt-navigate-finish'); p.ticks(50);
+    p.fire('yt-navigate-finish'); p.ticks(250);
     assert.equal(p.loads.length, 0, 'no reload ' + i);
     assert.notOk(p.hiddenRenderers(), 'renderers untouched ' + i);
     assert.ok(p.flexy.hasAttribute('player-unavailable'), 'flexy untouched ' + i);
@@ -1678,33 +1711,60 @@ test('youtube-playability-recover: genuine errors (private, age gate, region) an
   });
   // recovery that ends in a genuine error: no clean-up
   var q = recoverPage({ resp: enforcedResponse(), next: [genuineError()] });
-  q.ticks(50);
+  q.ticks(250);
   assert.equal(q.loads.length, 1);
   assert.notOk(q.hiddenRenderers(), 'a real error screen after the reload stays');
 });
 
+test('youtube-playability-recover: an OK response is watched until the video plays; an enforced swap after it is reloaded', function () {
+  var p = recoverPage({ resp: okResponse() });
+  p.ticks(10);
+  assert.ok(p.polling(), 'OK, cued: still watching');
+  p.resp = enforcedResponse({ videoId: VID });
+  p.next = [okResponse()];
+  p.ticks(2);
+  assert.equal(p.loads.length, 0, 'settling 0.3 s');
+  p.tick();
+  assert.deepEqual(p.loads, [[VID, 0]], 'enforced after the first OK: reloaded');
+  p.tick();
+  assert.ok(p.hiddenRenderers(), 'recovered');
+  var q = recoverPage({ resp: okResponse(), state: 3 });
+  q.ticks(5);
+  q.state = 1;
+  q.tick();
+  assert.notOk(q.polling(), 'playing: done');
+  q.resp = enforcedResponse({ videoId: VID });
+  q.ticks(250);
+  assert.equal(q.loads.length, 0, 'no watch after the video played');
+});
+
 test('youtube-playability-recover: SPA navigation; a stale response of another video is not acted on; non-watch pages ignored', function () {
   var p = recoverPage({ search: '?v=AAAAAAAAAAA', resp: okResponse('AAAAAAAAAAA') });
+  p.ticks(5);
+  assert.ok(p.polling(), 'OK but not playing yet: still watching');
+  p.state = 1;
   p.tick();
-  assert.notOk(p.polling(), 'OK page: done');
+  assert.notOk(p.polling(), 'OK and playing: done');
+  assert.equal(p.loads.length, 0);
   // navigate in-page to VID: the player still holds the old response for a moment, then the enforced one
   p.win.location.search = '?v=' + VID;
   p.fire('yt-navigate-start');
   p.fire('yt-navigate-finish');
-  p.ticks(3);
+  p.ticks(15);
   assert.equal(p.loads.length, 0, 'old video response ignored');
   p.resp = enforcedResponse({ videoId: VID });
+  p.state = 5;
   p.next = [okResponse()];
-  p.ticks(4);
+  p.ticks(3);
   assert.deepEqual(p.loads, [[VID, 0]], 'enforced response of the new video reloaded, start 0');
   p.tick();
   assert.ok(p.hiddenRenderers());
   // a response naming another video is never reloaded
   var q = recoverPage({ resp: enforcedResponse({ videoId: 'BBBBBBBBBBB' }) });
-  q.ticks(50);
+  q.ticks(250);
   assert.equal(q.loads.length, 0, 'response for another video');
   var home = recoverPage({ pathname: '/', search: '', resp: enforcedResponse() });
-  home.fire('yt-navigate-finish'); home.ticks(50);
+  home.fire('yt-navigate-finish'); home.ticks(250);
   assert.equal(home.loads.length, 0, 'not a watch page');
   assert.equal(home.win.timers.length, 0);
 });
@@ -1712,11 +1772,156 @@ test('youtube-playability-recover: SPA navigation; a stale response of another v
 test('youtube-playability-recover: throwing player methods and a missing document never escape', function () {
   var p = recoverPage({ resp: enforcedResponse() });
   p.player.loadVideoById = function () { throw new Error('boom'); };
-  p.ticks(50);
+  p.ticks(250);
   p.player.getPlayerResponse = function () { throw new Error('boom'); };
   p.player.getPlayerState = function () { throw new Error('boom'); };
-  p.fire('yt-navigate-finish'); p.ticks(50);
+  p.fire('yt-navigate-finish'); p.ticks(250);
   run(fakeWin('www.youtube.com'), 'youtube-playability-recover', []);
+});
+
+/** A non-watch YouTube page (no polling) for the embedded-response traps. */
+function guardWin() {
+  var win = fakeWin('www.youtube.com', { document: { readyState: 'loading', addEventListener: function () {}, querySelector: function () { return null; } } });
+  win.location = { hostname: 'www.youtube.com', pathname: '/', search: '' };
+  return win;
+}
+function withAds(r) { r.adPlacements = [{}]; r.playerAds = [{}]; r.adSlots = [{}]; return r; }
+var YT_PRUNE = ['ytInitialPlayerResponse', 'adPlacements adSlots playerAds'];
+/** YouTube's main app on a marked session (kevlar_base kHz): ERROR copy, videoDetails cleared. */
+function khzSwap(resp) {
+  var ps = resp.playabilityStatus;
+  resp.playabilityStatus = Object.assign({}, ps, { status: 'ERROR', errorScreen: { playerErrorMessageRenderer: { subreason: { simpleText: '282054944' } } } });
+  resp.videoDetails = undefined;
+}
+/** Kgb: the enforcement view model from auxiliaryUi as the error screen. */
+function kgbSwap(resp) {
+  var ps = resp.playabilityStatus;
+  resp.playabilityStatus = Object.assign({}, ps, { status: 'ERROR', errorScreen: { enforcementMessageViewModel: { title: 'x' } } });
+  resp.videoDetails = undefined;
+}
+
+test('youtube-playability-recover: an OK ytInitialPlayerResponse keeps OK and videoDetails through the kHz and Kgb swaps', function () {
+  [khzSwap, kgbSwap].forEach(function (swap, i) {
+    var win = guardWin();
+    run(win, 'youtube-playability-recover', []);
+    logs.length = 0;
+    var r = okResponse();
+    var vd = r.videoDetails;
+    win.ytInitialPlayerResponse = r;
+    assert.equal(win.ytInitialPlayerResponse, r, 'same object stored ' + i);
+    swap(win.ytInitialPlayerResponse);
+    assert.equal(r.playabilityStatus.status, 'OK', 'still OK ' + i);
+    assert.equal(r.playabilityStatus.errorScreen, undefined, 'no error screen ' + i);
+    assert.equal(r.videoDetails, vd, 'videoDetails kept ' + i);
+    assert.ok(logs.indexOf('youtube-playability-recover: kept the playable response') !== -1, 'logged ' + i);
+    assert.equal(JSON.parse(JSON.stringify(r)).videoDetails.videoId, VID, 'serialises as before ' + i);
+  });
+});
+
+test('youtube-playability-recover: other writes go through (a different ERROR, a fresh OK object, videoDetails)', function () {
+  var win = guardWin();
+  run(win, 'youtube-playability-recover', []);
+  var r = okResponse();
+  win.ytInitialPlayerResponse = r;
+  var fresh = { status: 'OK', playableInEmbed: true };
+  r.playabilityStatus = fresh;
+  assert.equal(r.playabilityStatus, fresh, 'fresh OK object stored');
+  var vd2 = { videoId: 'BBBBBBBBBBB' };
+  r.videoDetails = vd2;
+  assert.equal(r.videoDetails, vd2, 'new videoDetails stored');
+  r.videoDetails = undefined;
+  assert.equal(r.videoDetails, undefined, 'videoDetails = undefined without a blocked swap goes through');
+  var other = genuineError('ERROR').playabilityStatus;
+  r.playabilityStatus = other;
+  assert.equal(r.playabilityStatus, other, 'a non-enforcement ERROR goes through');
+  r.playabilityStatus = { status: 'ERROR', errorScreen: { playerErrorMessageRenderer: { subreason: { simpleText: 'Video unavailable' } } } };
+  assert.equal(r.playabilityStatus.status, 'ERROR', 'another subreason goes through');
+  // only responses that arrive OK are guarded
+  var e = enforcedResponse({ videoId: VID });
+  win.ytInitialPlayerResponse = e;
+  var d = Object.getOwnPropertyDescriptor(e, 'playabilityStatus');
+  assert.equal(d.get, undefined, 'an enforced response is left as it is');
+  var g = genuineError('LOGIN_REQUIRED');
+  win.ytInitialPlayerResponse = g;
+  assert.equal(Object.getOwnPropertyDescriptor(g, 'playabilityStatus').get, undefined, 'genuine error left alone');
+  assert.equal(win.ytInitialPlayerResponse, g);
+  // a value already there at document start is guarded too; a locked one is left alone
+  var w2 = guardWin();
+  var r2 = okResponse();
+  w2.ytInitialPlayerResponse = r2;
+  run(w2, 'youtube-playability-recover', []);
+  khzSwap(r2);
+  assert.equal(r2.playabilityStatus.status, 'OK', 'present at document start: guarded');
+  var locked = okResponse();
+  Object.defineProperty(locked, 'playabilityStatus', { value: { status: 'OK' }, writable: true, configurable: false, enumerable: true });
+  w2.ytInitialPlayerResponse = locked;
+  khzSwap(locked);
+  assert.equal(locked.playabilityStatus.status, 'ERROR', 'non-configurable: not guarded, no throw');
+});
+
+test('youtube-playability-recover: chained after prune-on-assign (rule order): pruned and guarded, the same object the page reads', function () {
+  var names = RULES.rules.filter(function (r) { return r.id === 'youtube'; })[0].scriptlets.map(function (s) { return s[0] + ' ' + (s[1] || ''); });
+  assert.ok(names.indexOf('prune-on-assign ytInitialPlayerResponse') !== -1);
+  assert.ok(names.indexOf('prune-on-assign ytInitialPlayerResponse') < names.indexOf('youtube-playability-recover '), 'prune-on-assign installs its accessor first');
+  var win = guardWin();
+  run(win, 'prune-on-assign', YT_PRUNE);
+  run(win, 'youtube-playability-recover', []);
+  logs.length = 0;
+  var ok = player();
+  win.ytInitialPlayerResponse = ok;
+  var stored = win.ytInitialPlayerResponse;
+  assert.equal(stored, ok, 'same object');
+  assertPlayerClean(stored, 'pruned by prune-on-assign');
+  assert.ok(logs.indexOf('prune-on-assign: ytInitialPlayerResponse') !== -1, 'prune-on-assign setter still runs');
+  var vd = stored.videoDetails;
+  khzSwap(win.ytInitialPlayerResponse);
+  assert.equal(win.ytInitialPlayerResponse.playabilityStatus.status, 'OK', 'guarded through the chained accessor');
+  assert.equal(win.ytInitialPlayerResponse.videoDetails, vd);
+  var d = Object.getOwnPropertyDescriptor(win, 'ytInitialPlayerResponse');
+  assert.equal(d.configurable, true);
+  assert.equal(typeof d.get, 'function');
+  // an enforced response passes through unchanged (pruned), the fallback reload handles it
+  var e = withAds(enforcedResponse());
+  win.ytInitialPlayerResponse = e;
+  assert.equal(win.ytInitialPlayerResponse, e, 'enforced response kept');
+  assert.equal(e.adPlacements, undefined, 'and pruned');
+  // a value prune-on-assign already holds when the guard is installed
+  var w2 = guardWin();
+  run(w2, 'prune-on-assign', YT_PRUNE);
+  var r2 = withAds(okResponse());
+  w2.ytInitialPlayerResponse = r2;
+  run(w2, 'youtube-playability-recover', []);
+  kgbSwap(w2.ytInitialPlayerResponse);
+  assert.equal(r2.playabilityStatus.status, 'OK', 'existing value guarded');
+  assert.equal(r2.adPlacements, undefined);
+});
+
+test('youtube-playability-recover: ytplayer.bootstrapPlayerResponse (ytplayer created now or later) is guarded too', function () {
+  var win = guardWin();
+  run(win, 'prune-on-assign', YT_PRUNE);
+  run(win, 'youtube-playability-recover', []);
+  win.ytplayer = {};
+  var r = okResponse();
+  win.ytplayer.bootstrapPlayerResponse = r;
+  assert.equal(win.ytplayer.bootstrapPlayerResponse, r);
+  khzSwap(r);
+  assert.equal(r.playabilityStatus.status, 'OK', 'ytplayer created later');
+  var r2 = okResponse();
+  win.ytplayer = { bootstrapPlayerResponse: r2, config: {} };
+  kgbSwap(r2);
+  assert.equal(r2.playabilityStatus.status, 'OK', 'ytplayer replaced by an object that already holds a response');
+  assert.ok(r2.videoDetails !== undefined, 'videoDetails kept');
+  assert.deepEqual(win.ytplayer.config, {}, 'other keys kept');
+  // the same object in both places: guarded once, still works
+  var w2 = guardWin();
+  w2.ytplayer = {};
+  run(w2, 'youtube-playability-recover', []);
+  var r3 = okResponse();
+  w2.ytInitialPlayerResponse = r3;
+  w2.ytplayer.bootstrapPlayerResponse = r3;
+  khzSwap(r3);
+  assert.equal(r3.playabilityStatus.status, 'OK', 'shared object guarded');
+  assert.equal(r3.videoDetails.videoId, VID);
 });
 
 test('rules: youtube-playability-recover is in the youtube rule (every YouTube host), nowhere else', function () {
