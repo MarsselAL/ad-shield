@@ -40,6 +40,7 @@
       el.disabled = !settings.enabled;
     });
     $('playerTypes').value = settings.playerTypes.join('\n');
+    $('twitchAdQuality').value = settings.twitchAdQuality;
   }
 
   function renderAllowlist() {
@@ -67,6 +68,10 @@
       next[el.getAttribute('data-key')] = el.checked;
       save(next).then(render, function () { render(); });
     });
+  });
+
+  $('twitchAdQuality').addEventListener('change', function () {
+    save(Object.assign({}, settings, { twitchAdQuality: $('twitchAdQuality').value })).then(render, function () { render(); });
   });
 
   Array.prototype.forEach.call(document.querySelectorAll('input[data-bkey]'), function (el) {

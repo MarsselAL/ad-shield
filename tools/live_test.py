@@ -34,7 +34,19 @@ Modes
       Phases: watch N minutes, quality switch (localStorage + reload), refresh, channel switch
       (if --switch-to, in-app navigation), VOD (if --vod).
       --compare-without-extension runs the same scenario a second time without the
-      extension as a baseline.
+      extension as a baseline; --baseline-only runs it only without the extension.
+      --refreshes N adds N phases refresh-1..N right after the watch phase (Page.reload, then
+      watch --refresh-seconds, default 45) to catch prerolls; --skip-phases quality,refresh,
+      switch,vod leaves out those later phases (e.g. watch + N refreshes only).
+      --dump-ads saves ad evidence under <results>/ads/: redacted bodies of media playlists with
+      ad markers (twitch-maf-ad, stitched, X-TV-TWITCH-AD, non-"live" #EXTINF titles; first 30
+      per run + the first clean one), requests.jsonl (below), and screenshots while Twitch's ad UI or more than one <video> is visible (one per 10 s at most).
+        ads/requests.jsonl: one line per request to edge.ads.twitch.tv, *.amazon-adsystem.com,
+        *.media-amazon.com, imasdk.googleapis.com, pubads.g.doubleclick.net and GQL operations
+        whose name contains "Ad": method, redacted URL, query parameter names, post body (GQL:
+        operation names + variable keys only), status, mime type, first 4000 chars of the body.
+      Every run also counts maf-ad / stitched media playlists, GQL "Ad" operations and visible
+      <video> elements per phase (report.md phase table).
       THIS MAKES REQUESTS TO TWITCH. Run it only with the owner's approval.
 
 Results: results/<timestamp>/report.json and report.md (+ screenshots for --live).
@@ -53,6 +65,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 
 # =========================================================================== TWITCH-SPECIFIC
 # Everything this harness assumes about Twitch's page markup lives in this block. It is a test
@@ -91,11 +104,16 @@ TWITCH = {
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-EXPECTED_VERSION = "2.0.0"  # --smoke checks the manifest version against this
+EXPECTED_VERSION = "2.0.1"  # --smoke checks the manifest version against this
 SW_PATH = "src/background/service-worker.js"
 CONFIG_JS = os.path.join(ROOT, "src", "config.js")
 INTERESTING = re.compile(r"usher\.ttvnw\.net|\.m3u8|gql\.twitch\.tv|edge\.ads\.twitch\.tv|amazon-adsystem|media-amazon\.com")
 REDACT_QUERY = re.compile(r"\?.*$")
+# --dump-ads: requests recorded in ads/requests.jsonl (plus GQL operations whose name contains "Ad").
+AD_REQ_HOST = re.compile(r"^https?://(edge\.ads\.twitch\.tv|([^/]+\.)?amazon-adsystem\.com|([^/]+\.)?media-amazon\.com|"
+                         r"imasdk\.googleapis\.com|pubads\.g\.doubleclick\.net)(:\d+)?(/|$)", re.I)
+AD_DUMP_MAX = 30          # ad playlist bodies saved per run (plus the first clean one)
+AD_SHOT_EVERY = 10        # seconds between ad-UI screenshots
 VIEWPORT = (1920, 1080)
 
 # Chrome flags that keep a throwaway profile quiet (no sync, no component updates, no pings).
@@ -144,6 +162,59 @@ def redact(url):
         return url
     segs = [(s[:12] + "…" + s[-8:]) if len(s) > 40 else s for s in m.group(2).split("/")]
     return m.group(1) + "/".join(segs)
+
+
+# Playlist bodies saved by --dump-ads: attribute values named *-URL / *-URLS become host+path
+# (no scheme, no query), other URLs keep scheme, host and path but lose the query string, and
+# USER-IP outside DATERANGE lines is replaced. Everything else (all DATERANGE attributes) is kept.
+_URL_ATTR = re.compile(r'(?<![A-Za-z0-9-])([A-Za-z0-9-]*-URLS?)=("[^"]*"|[^,\s]*)', re.I)
+_URL_ANY = re.compile(r"https?://[^\s\"',]+", re.I)
+_URL_QUERY = re.compile(r"(https?://[^\s\"'?]+)\?[^\s\"',]*", re.I)
+_ENC_URL_QUERY = re.compile(r"(https?%3A%2F%2F(?:(?!%3F)[^\s\"',&])+)%3F[^\s\"',]*", re.I)
+
+
+def _host_path(u):
+    m = re.match(r"^https?://([^/?#\s]+)([^?#\s]*)", u, re.I)
+    return (m.group(1) + m.group(2)) if m else ""
+
+
+def _url_attr_value(m):
+    inner = m.group(2)
+    if inner.startswith('"') and inner.endswith('"') and len(inner) >= 2:
+        inner = inner[1:-1]
+    urls = [_host_path(u) for u in _URL_ANY.findall(inner)]
+    if not urls:
+        urls = [_host_path(u) for u in _URL_ANY.findall(urllib.parse.unquote(inner))]
+    value = " ".join(u for u in urls if u) or "<no url, %d chars>" % len(inner)
+    return '%s="%s"' % (m.group(1), value)
+
+
+def redact_playlist(body):
+    out = []
+    for line in body.splitlines():
+        if line.startswith("#"):
+            line = _URL_ATTR.sub(_url_attr_value, line)
+            if not line.startswith("#EXT-X-DATERANGE"):
+                line = re.sub(r'(USER-IP=)("[^"]*"|[^,\s]*)', r'\1"<redacted>"', line)
+        line = _URL_QUERY.sub(lambda m: m.group(1) + "?…", line)
+        line = _ENC_URL_QUERY.sub(lambda m: m.group(1) + "%3F…", line)
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def gql_ops_detail(body):
+    """GQL post body -> [{operationName, variables: [keys]}] (no values)."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    out = []
+    for op in (data if isinstance(data, list) else [data]):
+        if isinstance(op, dict):
+            v = op.get("variables")
+            out.append({"operationName": op.get("operationName"),
+                         "variables": sorted(v.keys()) if isinstance(v, dict) else None})
+    return out
 
 
 # --------------------------------------------------------------------------- CDP over a pipe
@@ -936,7 +1007,7 @@ def scan_playlist(body):
     """Count ad marker lines in an m3u8 body. Returns a dict of counts only."""
     master = "#EXT-X-STREAM-INF" in body
     res = {"master": master, "bytes": len(body), "ad_lines": 0, "ad_segments": 0, "segments": 0,
-           "non_live_segments": 0, "hits": {}, "info": {}}
+           "non_live_segments": 0, "non_live_titled": 0, "hits": {}, "info": {}, "maf_ad": False, "stitched": False}
     if master:
         return res
     classes = AD_MARKERS["adDaterangeClasses"]
@@ -961,8 +1032,28 @@ def scan_playlist(body):
                 res["ad_segments"] += 1
             if title.strip() != "live":
                 res["non_live_segments"] += 1
+                if title.strip():  # VOD segments have no title; only a non-empty, non-"live" one is an ad sign
+                    res["non_live_titled"] += 1
     res["has_ad"] = res["ad_lines"] > 0 or res["ad_segments"] > 0
+    # Client-side (CSAI) ad: DATERANGE CLASS="twitch-maf-ad" over live segments. Server-side
+    # (stitched) ad: "stitched" markers or segment titles other than "live" (Amazon|.., FT|n-n-n, ...).
+    res["maf_ad"] = "twitch-maf-ad" in body
+    res["stitched"] = "stitched" in body or res["non_live_titled"] > 0
     return res
+
+
+def ad_dump_kinds(body, scan):
+    """Why a media playlist counts as ad evidence for --dump-ads ([] = clean)."""
+    kinds = []
+    if "twitch-maf-ad" in body:
+        kinds.append("maf")
+    if "stitched" in body:
+        kinds.append("stitched")
+    if "X-TV-TWITCH-AD" in body:
+        kinds.append("xtvad")
+    if scan.get("non_live_titled"):
+        kinds.append("nonlive")
+    return kinds
 
 
 # --------------------------------------------------------------------------- live: page JS
@@ -1045,6 +1136,16 @@ if (p) { const re = new RegExp(TW.ad_text_re, 'i');
     if (el.children.length || el.closest(TW.toast)) continue;
     const t = norm(el.textContent);
     if (t && t.length < 40 && re.test(t) && vis(el)) { adText = t; break; } } }
+const srcHP = x => { const s = x.currentSrc || x.src || ''; if (!s) return '';
+  try { if (s.startsWith('blob:')) return 'blob:' + new URL(s.slice(5)).host;
+        const u = new URL(s); return (u.host + u.pathname).slice(0, 80); } catch (e) { return s.slice(0, 20); } };
+const vlist = [...document.querySelectorAll('video')].map(x => { const r = x.getBoundingClientRect();
+  return { src: srcHP(x), size: Math.round(r.width) + 'x' + Math.round(r.height), visible: vis(x), paused: x.paused,
+           muted: x.muted, inPlayer: !!(p && p.contains(x)) }; });
+const videos = { count: vlist.length, visible: vlist.filter(x => x.visible).length, list: vlist.slice(0, 6) };
+const adAttrs = p ? [...new Set([...p.querySelectorAll('[data-a-target*="ad" i], [data-test-selector*="ad" i]')].filter(vis)
+  .flatMap(e => [e.getAttribute('data-a-target'), e.getAttribute('data-test-selector')])
+  .filter(a => a && a.toLowerCase().includes('ad')))].slice(0, 10) : [];
 const tre = new RegExp(TW.toast_re, 'i');
 const toasts = [...document.querySelectorAll(TW.toast)].filter(e => tre.test(e.textContent || ''))
   .map(e => ({ text: (e.textContent || '').slice(0, 120), visible: vis(e) }));
@@ -1055,6 +1156,7 @@ return {
   chatAdded: H.chatAdded, points: !!document.querySelector(TW.points), loggedOut: !!document.querySelector(TW.logged_out),
   standaloneAdVideosVisible: [...document.querySelectorAll('video')].filter(x =>
      /media-amazon\\.com|amazon-adsystem\\.com/.test(x.currentSrc || x.src || '') && vis(x)).length,
+  videos, adAttrs,
   viewport: [innerWidth, innerHeight], title: document.title.slice(0, 120)
 };
 })()"""
@@ -1279,9 +1381,21 @@ def chrome_usage(root_pid):
 
 # --------------------------------------------------------------------------- live: recorder
 class LiveRecorder:
-    def __init__(self, cdp, sid, outdir, label):
+    def __init__(self, cdp, sid, outdir, label, dump_ads=False):
         self.cdp, self.sid, self.outdir, self.label = cdp, sid, outdir, label
         self.phase = "start"
+        self.t0 = time.time()
+        self.dump_ads = dump_ads
+        self.ads_dir = os.path.join(outdir, "ads")
+        if dump_ads:
+            os.makedirs(self.ads_dir, exist_ok=True)
+        self.ad_reqs = {}        # (sessionId, requestId) -> ads/requests.jsonl entry (--dump-ads)
+        self.ad_gql_ops = {}     # GQL operationName containing "Ad" -> count (always)
+        self.ad_req_lines = 0    # lines written to ads/requests.jsonl
+        self.ad_dumped = 0       # ad playlist bodies saved
+        self.clean_dumped = False
+        self.ad_shots = []
+        self.last_ad_shot = 0.0
         self.requests = {}       # (sessionId, requestId) -> entry
         self.network = []
         self.playlists = []      # one entry per m3u8 response (counts only)
@@ -1311,6 +1425,10 @@ class LiveRecorder:
                 continue
             m, p = e.get("method"), e.get("params", {})
             key = (sid, p.get("requestId"))
+            if m == "Network.requestWillBeSent":
+                self._ad_request(e, types[sid], key, p)
+            elif key in self.ad_reqs and m in ("Network.responseReceived", "Network.loadingFinished", "Network.loadingFailed"):
+                self._ad_response(key, m, p)
             if m == "Network.requestWillBeSent":
                 url = p.get("request", {}).get("url", "")
                 if INTERESTING.search(url):
@@ -1343,6 +1461,92 @@ class LiveRecorder:
         for key in finished:
             self._scan_body(key)
 
+    # ------------------------------------------------------------------ ad requests (--dump-ads)
+    def _ad_request(self, e, stype, key, p):
+        req = p.get("request", {})
+        url = req.get("url", "")
+        body = req.get("postData") or ""
+        gql_ad_ops = []
+        if "gql.twitch.tv" in url:
+            gql_ad_ops = [op for op in re.findall(r'"operationName"\s*:\s*"([^"]+)"', body) if "Ad" in op]
+            for op in gql_ad_ops:
+                self.ad_gql_ops[op] = self.ad_gql_ops.get(op, 0) + 1
+        if not self.dump_ads or not (gql_ad_ops or AD_REQ_HOST.search(url)):
+            return
+        if key in self.ad_reqs:  # redirect: the earlier hop is finished
+            rr = p.get("redirectResponse") or {}
+            self.ad_reqs[key].update(status=rr.get("status"), mime=rr.get("mimeType"), redirected=True)
+            self._ad_write(key)
+        query = urllib.parse.urlsplit(url).query
+        entry = {"run": self.label, "t": round(e["_t"] - self.t0, 2), "phase": self.phase, "session": stype,
+                 "method": req.get("method"), "url": redact(url), "type": p.get("type"),
+                 "query_keys": sorted({k for k, _ in urllib.parse.parse_qsl(query, keep_blank_values=True)})[:40]}
+        if body:
+            if "gql.twitch.tv" in url:
+                detail = gql_ops_detail(body)
+                entry["post"] = json.dumps(detail)[:2000] if detail is not None else "<not JSON, %d chars>" % len(body)
+            else:
+                entry["post"] = body[:2000]
+        self.ad_reqs[key] = entry
+
+    def _ad_response(self, key, m, p):
+        entry = self.ad_reqs[key]
+        if m == "Network.responseReceived":
+            r = p.get("response", {})
+            entry["status"], entry["mime"] = r.get("status"), r.get("mimeType")
+            return
+        if m == "Network.loadingFailed":
+            entry["failed"] = p.get("errorText")
+            if p.get("blockedReason"):
+                entry["blocked"] = p["blockedReason"]
+        else:
+            mime = (entry.get("mime") or "").lower()
+            if not re.match(r"^(video|audio|image|font)/|^application/(octet-stream|mp4|vnd\.apple\.mpegurl-segment)", mime):
+                try:
+                    r = self.cdp.send("Network.getResponseBody", {"requestId": key[1]}, session=key[0], timeout=10)
+                    raw = r.get("body", "")
+                    if r.get("base64Encoded"):
+                        raw = base64.b64decode(raw)[:6000].decode("utf-8", "replace")
+                    entry["body"] = raw[:4000]
+                    entry["body_truncated"] = len(raw) > 4000
+                except Exception as ex:  # noqa: BLE001 - body may be gone; ignore
+                    entry["body_error"] = str(ex)[:120]
+        self._ad_write(key)
+
+    def _ad_write(self, key):
+        entry = self.ad_reqs.pop(key, None)
+        if entry is None:
+            return
+        with open(os.path.join(self.ads_dir, "requests.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self.ad_req_lines += 1
+
+    def flush_ads(self):
+        """Write requests still waiting for their response (end of run)."""
+        for key in list(self.ad_reqs):
+            self.ad_reqs[key]["unfinished"] = True
+            self._ad_write(key)
+
+    def _dump_playlist(self, entry, pl, body):
+        kinds = ad_dump_kinds(body, pl)
+        if kinds:
+            if self.ad_dumped >= AD_DUMP_MAX:
+                return
+            self.ad_dumped += 1
+            n, tag = self.ad_dumped, "-".join(kinds)
+        elif not self.clean_dumped:
+            self.clean_dumped = True
+            n, tag = 0, "clean"
+        else:
+            return
+        name = "%s-playlist-%03d-%s-%s-%s.m3u8" % (self.label, n, re.sub(r"[^A-Za-z0-9-]", "", entry["phase"]),
+                                                  entry["session"] or "x", tag)
+        with open(os.path.join(self.ads_dir, name), "w", encoding="utf-8") as f:
+            f.write("# saved by tools/live_test.py --dump-ads, %s, url %s, phase %s, session %s; URLs redacted\n"
+                    % (now_iso(), entry["url"], entry["phase"], entry["session"]))
+            f.write(redact_playlist(body))
+        pl["dump"] = name
+
     def _scan_body(self, key):
         entry = self.requests[key]
         pl = {"t": entry["t"], "phase": entry["phase"], "session": entry["session"],
@@ -1351,6 +1555,11 @@ class LiveRecorder:
             r = self.cdp.send("Network.getResponseBody", {"requestId": key[1]}, session=key[0], timeout=10)
             body = base64.b64decode(r["body"]).decode("utf-8", "replace") if r.get("base64Encoded") else r.get("body", "")
             pl.update(scan_playlist(body))
+            if self.dump_ads and pl.get("master") is False:
+                try:
+                    self._dump_playlist(entry, pl, body)
+                except OSError as e:
+                    pl["dump_error"] = str(e)[:120]
         except CDPError as e:
             pl["body_error"] = str(e)[:120]
         entry["playlist"] = {k: pl.get(k) for k in ("master", "has_ad", "ad_lines", "ad_segments")}
@@ -1365,6 +1574,18 @@ class LiveRecorder:
         s["t"] = time.time()
         s["phase"] = self.phase
         self.states.append(s)
+        if self.dump_ads and (s.get("adUi") or ((s.get("videos") or {}).get("visible") or 0) > 1) \
+                and s["t"] - self.last_ad_shot >= AD_SHOT_EVERY:
+            self.last_ad_shot = s["t"]
+            name = "%s-adui-%s-%d.png" % (self.label, re.sub(r"[^A-Za-z0-9-]", "", self.phase), int(s["t"] - self.t0))
+            try:
+                data = self.cdp.send("Page.captureScreenshot", {"format": "png"}, session=self.sid, timeout=20)["data"]
+                with open(os.path.join(self.ads_dir, name), "wb") as f:
+                    f.write(base64.b64decode(data))
+                self.ad_shots.append(name)
+                s["adShot"] = name
+            except (CDPError, OSError):
+                pass
         return s
 
     def health_sample(self):
@@ -1612,7 +1833,7 @@ def run_scenario(args, with_extension, outdir):
         cdp.send("Network.enable", NET_ENABLE, session=sid)
         cdp.send("Target.setAutoAttach", AUTO_ATTACH, session=sid)
         result["viewport"] = setup_window(cdp, tid, sid)
-        rec = LiveRecorder(cdp, sid, outdir, label)
+        rec = LiveRecorder(cdp, sid, outdir, label, dump_ads=args.dump_ads)
         base = args.base_url.rstrip("/")
         rec.base = base
 
@@ -1653,6 +1874,15 @@ def run_scenario(args, with_extension, outdir):
             rec.prepare()
             return watch(rec, 40, "refresh")
 
+        def p_refresh_n(name):
+            # Extra reloads right after the watch phase (--refreshes): a fresh player start can get a preroll.
+            def fn():
+                rec.phase = name
+                cdp.send("Page.reload", session=sid)
+                rec.prepare()
+                return watch(rec, args.refresh_seconds, name)
+            return fn
+
         def p_switch():
             if not args.switch_to:
                 return {"phase": "channel-switch", "ok": None, "note": "NOT RUN (no --switch-to)"}
@@ -1669,11 +1899,18 @@ def run_scenario(args, with_extension, outdir):
             goto(rec, args.vod, "vod")
             return watch(rec, 60, "vod")
 
+        skip = set(args.skip_phases)
         phase("watch", p_watch)
-        phase("quality-480p", p_quality)
-        phase("refresh", p_refresh)
-        phase("channel-switch", p_switch)
-        phase("vod", p_vod)
+        for k in range(1, args.refreshes + 1):
+            phase("refresh-%d" % k, p_refresh_n("refresh-%d" % k))
+        if "quality" not in skip:
+            phase("quality-480p", p_quality)
+        if "refresh" not in skip:
+            phase("refresh", p_refresh)
+        if "switch" not in skip:
+            phase("channel-switch", p_switch)
+        if "vod" not in skip:
+            phase("vod", p_vod)
 
         rec.phase = "end"
         result["page_health_end"] = rec.state()
@@ -1683,6 +1920,8 @@ def run_scenario(args, with_extension, outdir):
         result["chrome_stderr_tail"] = cdp.stderr_tail[-15:]
     finally:
         if rec is not None:
+            if rec.dump_ads:
+                rec.flush_ads()
             collect_run(result, rec, cdp)
         cdp.close()
     result["finished"] = now_iso()
@@ -1727,6 +1966,26 @@ def collect_run(result, rec, cdp):
         "markers_from": AD_MARKERS["source"],
         "first_ad_playlist_phase": next((p["phase"] for p in media if p.get("has_ad")), None),
     }
+    # Ad evidence per phase, counted by phase label (includes the page load before the watch window).
+    def _vis_videos(st):
+        return (st.get("videos") or {}).get("visible") or 0
+    for ph in result["phases"]:
+        name = ph.get("phase")
+        pst = [x for x in rec.states if x.get("phase") == name]
+        ad_s, prev = 0.0, None
+        for x in pst:
+            if prev is not None and x.get("adUi"):
+                ad_s += x["t"] - prev["t"]
+            prev = x
+        pmedia = [x for x in media if x.get("phase") == name]
+        ph["ad_evidence"] = {
+            "ad_ui_s_incl_load": round(ad_s, 1),
+            "maf_ad_playlists": sum(1 for x in pmedia if x.get("maf_ad")),
+            "stitched_playlists": sum(1 for x in pmedia if x.get("stitched")),
+            "edge_ads": sum(1 for r in net if r.get("phase") == name and "edge.ads.twitch.tv" in r["url"]),
+            "max_visible_videos": max([_vis_videos(x) for x in pst] or [0]),
+            "ad_attrs": sorted({a for x in pst for a in (x.get("adAttrs") or [])})[:10],
+        }
     states = rec.states
     end = result.get("page_health_end") or (states[-1] if states else {})
     switch = next((p for p in result["phases"] if p.get("phase") == "channel-switch"), {})
@@ -1741,7 +2000,17 @@ def collect_run(result, rec, cdp):
         "channel_points": ("n/a (logged out)" if end.get("loggedOut") else bool(end.get("points"))),
         "navigation": switch.get("navigation_ok") if switch.get("navigation") else "not run",
         "problems_by_source": src,
+        "maf_ad_playlists": sum(1 for p in media if p.get("maf_ad")),
+        "stitched_playlists": sum(1 for p in media if p.get("stitched")),
+        "edge_ads": result["network_summary"]["edge_ads"],
+        "ad_gql_ops": dict(sorted(rec.ad_gql_ops.items())),
+        "max_visible_videos": max([_vis_videos(x) for x in states] or [0]),
+        "ad_ui_visible_s_by_phase": {p.get("phase"): p.get("ad_ui_visible_s") for p in result["phases"]},
     }
+    if rec.dump_ads:
+        result["ads_dump"] = {"dir": "ads", "playlists_saved": rec.ad_dumped + (1 if rec.clean_dumped else 0),
+                              "ad_playlists_saved": rec.ad_dumped, "requests_jsonl_lines": rec.ad_req_lines,
+                              "screenshots": rec.ad_shots}
     result["network"] = net
     result["playlists"] = rec.playlists
     result["tas_console"] = rec.tas_console
@@ -1761,7 +2030,10 @@ def _cell(x):
 
 def summarize_md(report):
     md = ["# Live test %s" % report["started"], "", "Channel: `%s`, minutes: %s, switch-to: %s, vod: %s" % (
-        report["channel"], report["minutes"], report.get("switch_to"), report["vod"]), ""]
+        report["channel"], report["minutes"], report.get("switch_to"), report["vod"]),
+          "Refreshes: %s x %s s, skipped phases: %s, baseline only: %s, dump ads: %s" % (
+        report.get("refreshes"), report.get("refresh_seconds"), ", ".join(report.get("skip_phases") or []) or "none",
+        report.get("baseline_only"), report.get("dump_ads")), ""]
     for r in report["runs"]:
         md += ["## Run: %s" % r["label"], "", "Chrome: %s, viewport: %s" % (r.get("chrome"), json.dumps(r.get("viewport"))), ""]
         if r.get("error"):
@@ -1795,15 +2067,29 @@ def summarize_md(report):
                "| **Errors attributed to the extension** | **%s** (worker-blob suspects: %s) |" % (src.get("extension", 0), src.get("extension?", 0)),
                "| Twitch's own errors / blocked-by-extension | %s / %s |" % (src.get("twitch", 0), src.get("blocked-by-extension", 0)),
                "| [TAS] console lines | %s |" % len(r.get("tas_console", [])),
+               "| **CSAI: media playlists with twitch-maf-ad** | **%s** |" % s.get("maf_ad_playlists"),
+               "| **SSAI: stitched playlists (stitched marker / non-live title)** | **%s** |" % s.get("stitched_playlists"),
+               "| GQL \"Ad\" operations seen | %s |" % _cell(", ".join("%s x%s" % kv for kv in (s.get("ad_gql_ops") or {}).items()) or "none"),
+               "| Max visible <video> elements | %s |" % s.get("max_visible_videos"),
                ""]
-        md += ["| Phase | Video advanced (s) | OK | Paused / stalled samples | Ad UI (s) | Playlists (with ads) | Toasts | Chat + | Note |",
-               "|---|---|---|---|---|---|---|---|---|"]
+        if r.get("ads_dump"):
+            ad = r["ads_dump"]
+            md += ["Ad evidence (--dump-ads) in `ads/`: %s playlist bodies (%s with ad markers), %s line(s) in requests.jsonl, "
+                   "%s screenshot(s)." % (ad["playlists_saved"], ad["ad_playlists_saved"], ad.get("requests_jsonl_lines"),
+                                          len(ad["screenshots"])), ""]
+        md += ["| Phase | Video advanced (s) | OK | Paused / stalled samples | Ad UI (s) | Playlists (with ads) | Toasts | Chat + "
+               "| Ad UI incl. load (s) | maf-ad playlists | Stitched playlists | edge.ads | Max videos | Note |",
+               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for p in r.get("phases", []):
             note = p.get("note") or p.get("error") or ""
-            md.append("| %s | %s | %s | %s / %s | %s | %s (%s) | %s | %s | %s |" % (
+            ev = p.get("ad_evidence") or {}
+            md.append("| %s | %s | %s | %s / %s | %s | %s (%s) | %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 p["phase"], p.get("video_advanced_s"), p.get("ok"), p.get("paused_samples"), p.get("stall_samples"),
                 p.get("ad_ui_visible_s"), p.get("media_playlists"), p.get("media_playlists_with_ads"),
-                len(p.get("toasts") or []), p.get("chat_lines_added"), _cell(note)))
+                len(p.get("toasts") or []), p.get("chat_lines_added"), ev.get("ad_ui_s_incl_load"), ev.get("maf_ad_playlists"),
+                ev.get("stitched_playlists"), ev.get("edge_ads"), ev.get("max_visible_videos"), _cell(note)))
+        md += ["", "Ad UI (s) and Playlists: watch window only. Ad UI incl. load, maf-ad / stitched playlists, edge.ads and "
+               "max visible videos: whole phase including the page load before the watch window."]
         cpu = [x["chrome"]["cpu_percent"] for x in r.get("samples", []) if x.get("chrome")]
         heap = [x.get("JSHeapUsedSize_mb") for x in r.get("samples", []) if x.get("JSHeapUsedSize_mb") is not None]
         md.append("")
@@ -1854,10 +2140,15 @@ def run_live(args):
         print("Harness check against %s (not Twitch)." % args.base_url)
     outdir = results_dir("live-" + re.sub(r"[^a-zA-Z0-9_]", "", args.live))
     report = {"mode": "live", "channel": args.live, "minutes": args.minutes, "vod": bool(args.vod),
-              "switch_to": args.switch_to, "ad_markers": AD_MARKERS, "started": now_iso(), "runs": []}
-    report["runs"].append(run_scenario(args, True, outdir))
-    if args.compare_without_extension:
+              "switch_to": args.switch_to, "refreshes": args.refreshes, "refresh_seconds": args.refresh_seconds,
+              "skip_phases": args.skip_phases, "baseline_only": args.baseline_only, "dump_ads": args.dump_ads,
+              "ad_markers": AD_MARKERS, "started": now_iso(), "runs": []}
+    if args.baseline_only:
         report["runs"].append(run_scenario(args, False, outdir))
+    else:
+        report["runs"].append(run_scenario(args, True, outdir))
+        if args.compare_without_extension:
+            report["runs"].append(run_scenario(args, False, outdir))
     report["finished"] = now_iso()
     write_reports(outdir, report, summarize_md(report))
     print("Results:", os.path.relpath(outdir, ROOT))
@@ -1865,6 +2156,8 @@ def run_live(args):
 
 
 # --------------------------------------------------------------------------- main
+SKIPPABLE_PHASES = ("quality", "refresh", "switch", "vod")
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -1873,7 +2166,19 @@ def main(argv=None):
     ap.add_argument("--minutes", type=float, default=5, help="live: minutes to watch the channel (default 5)")
     ap.add_argument("--vod", metavar="URL", help="live: also play this VOD URL")
     ap.add_argument("--switch-to", metavar="CHANNEL2", help="live: switch to this channel afterwards (in-app navigation)")
-    ap.add_argument("--compare-without-extension", action="store_true", help="live: repeat the scenario without the extension")
+    ext = ap.add_mutually_exclusive_group()
+    ext.add_argument("--compare-without-extension", action="store_true", help="live: repeat the scenario without the extension")
+    ext.add_argument("--baseline-only", action="store_true", help="live: run the scenario only without the extension")
+    ap.add_argument("--refreshes", type=int, default=0, metavar="N",
+                    help="live: N extra phases refresh-1..N right after the watch phase (reload + watch; default 0)")
+    ap.add_argument("--refresh-seconds", type=float, default=45, metavar="S",
+                    help="live: seconds to watch in each refresh-k phase (default 45)")
+    ap.add_argument("--skip-phases", default="", metavar="LIST",
+                    help="live: comma list of later phases to leave out: %s (e.g. 'quality,refresh,switch,vod' "
+                         "for watch + --refreshes only)" % ",".join(SKIPPABLE_PHASES))
+    ap.add_argument("--dump-ads", action="store_true",
+                    help="live: save ad evidence under <results>/ads/ (redacted ad playlist bodies, requests.jsonl, "
+                         "screenshots while ad UI or several videos are visible)")
     ap.add_argument("--debug-logging", action="store_true", help="live: turn on [TAS] debug logging in the extension")
     ap.add_argument("--headless", action="store_true", help="live: run headless (default: visible window)")
     ap.add_argument("--base-url", default="https://www.twitch.tv",
@@ -1881,6 +2186,12 @@ def main(argv=None):
                          "harness itself offline, e.g. --base-url 'about:blank#'")
     ap.add_argument("--headed", action="store_true", help="smoke: show a window (default: headless=new)")
     args = ap.parse_args(argv)
+    args.skip_phases = [x.strip() for x in args.skip_phases.split(",") if x.strip()]
+    bad = [x for x in args.skip_phases if x not in SKIPPABLE_PHASES]
+    if bad:
+        ap.error("--skip-phases: unknown phase(s) %s; choose from %s" % (", ".join(bad), ",".join(SKIPPABLE_PHASES)))
+    if args.refreshes < 0 or args.refresh_seconds <= 0:
+        ap.error("--refreshes must be >= 0 and --refresh-seconds > 0")
     if not os.path.exists(CHROME):
         print("Google Chrome not found at", CHROME)
         return 2

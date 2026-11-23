@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '2.0.0',
+    version: '2.0.1',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -183,6 +183,17 @@
     // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
+    // Low-quality bridge types for the "twitchAdQuality: 'low'" setting (the default since
+    // 2026-11-21, 1.x behaviour): during a stitched ad break they are asked together with the HD
+    // types and the first clean answer of any type is served at once (an HD one when both land
+    // in the same turn); a clean HD type found later replaces the bridge, at most once per break.
+    // Taken from here, never from the viewer's playerTypes list. Used at any resolution of the
+    // player's codec family (m3u8.pickVariant anyResolution) and never pinned.
+    // autoplay: 360p, platform android (gql.androidPlatformPlayerTypes; vaft #450).
+    // picture-by-picture: the mini-player type (research-technique.md §4.1, video-swap-new). Our
+    // own backup requests use the worker's unhooked fetch, so usherIgnoreSubstrings (meant for
+    // the page's mini player masters) does not touch them.
+    bridgePlayerTypes: ['autoplay', 'picture-by-picture'],
     maxPlayerTypes: 8,
 
     // Codec prefixes. Source: research-technique.md §4.3 (avc*/av0* vs hev*/hvc*; AV1 is av01).
@@ -321,6 +332,10 @@
   var cfg = ns.config;
 
   var STORAGE_KEY = 'settings';
+  // twitchAdQuality: what plays during a Twitch stitched ad break. 'low' (default): the first
+  // ad-free stream of any type, a low-quality bridge included, then native quality when the
+  // break ends. 'full': same-resolution backups first, the 360p bridge only as a last resort.
+  var AD_QUALITY_VALUES = ['low', 'full'];
 
   function defaults() {
     return {
@@ -330,6 +345,7 @@
       hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements and display ads beside the player
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
       playerTypes: cfg.backupPlayerTypes.slice(),
+      twitchAdQuality: 'low',     // 'low' | 'full' (AD_QUALITY_VALUES)
       noticeOnAd: true,           // small toast in the player when an ad is handled
       debug: false                // verbose [TAS] logging
     };
@@ -386,6 +402,8 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
         out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
+      } else if (k === 'twitchAdQuality') {
+        out[k] = AD_QUALITY_VALUES.indexOf(s[k]) !== -1 ? s[k] : d[k];
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {
@@ -404,6 +422,10 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(candidate.playerTypes);
         errors = errors.concat(v.errors);
+      } else if (k === 'twitchAdQuality') {
+        if (candidate[k] !== undefined && AD_QUALITY_VALUES.indexOf(candidate[k]) === -1) {
+          errors.push('"twitchAdQuality" must be one of: ' + AD_QUALITY_VALUES.join(', ') + '.');
+        }
       } else if (typeof d[k] === 'boolean' && candidate[k] !== undefined && typeof candidate[k] !== 'boolean') {
         errors.push('"' + k + '" must be true or false.');
       }
@@ -413,6 +435,7 @@
 
   ns.settings = {
     STORAGE_KEY: STORAGE_KEY,
+    AD_QUALITY_VALUES: AD_QUALITY_VALUES,
     defaults: defaults,
     normalize: normalize,
     validate: validate,

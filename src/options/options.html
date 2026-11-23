@@ -121,6 +121,13 @@
         <label class="switch"><input type="checkbox" data-key="hideStandaloneAds" aria-label="Hide standalone video ads"><span class="track"></span></label>
       </div>
       <div class="opt row">
+        <div><strong><label for="twitchAdQuality">During Twitch ads</label></strong><p class="muted">What plays while Twitch inserts an ad into the stream. Low quality starts an ad-free 360p stream at once and returns to your quality when the break ends.</p></div>
+        <select id="twitchAdQuality">
+          <option value="low">Low quality, no ads (recommended)</option>
+          <option value="full">Try full quality first (may show a spinner or the ad)</option>
+        </select>
+      </div>
+      <div class="opt row">
         <div><strong>Prefer AVC (H.264) streams</strong><p class="muted">Removes HEVC/AV1 variants when an H.264 one exists, which avoids player errors when switching streams during ads. Turn off to keep 1440p/4K "enhanced" qualities.</p></div>
         <label class="switch"><input type="checkbox" data-key="preferAvc" aria-label="Prefer AVC"><span class="track"></span></label>
       </div>

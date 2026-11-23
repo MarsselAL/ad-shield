@@ -11,7 +11,10 @@ Evidence: `docs/research-v3.md`. Problems to fix: Twitch stops mid-stream and go
 2. **Never fight the player.** No seeks, no reloads, no localStorage quality writes. The only
    player action left is one gated pause/play nudge on Twitch (below).
 3. **Never lower quality.** A backup playlist is used only at the same resolution and codec
-   family as the variant the player chose. No 360p player types.
+   family as the variant the player chose. No 360p player types. *Reversed by default on
+   2026-11-21* (Twitch "During Twitch ads" setting, see the note under Twitch): a short
+   low-quality ad-free bridge beats a spinner or the ad; this rule now holds only with
+   `twitchAdQuality: 'full'`.
 4. **Measure.** Playback-health metrics (stalls, dropped frames, resolution, paused time) in both
    live test tools, with and without the extension.
 
@@ -24,14 +27,30 @@ ad detection by `stitched` markers and non-`live` `#EXTINF` titles.
 
 | Piece | 1.1.5 | 2.0 |
 |---|---|---|
-| Backup player types | site, popout, mobile_web, embed, **autoplay (360p)** | embed, site, mobile_web (popout skipped: the page token already is popout), then **autoplay as a last-resort 360p bridge** (2026-11-21): used only when every other type answered with ads, never pinned, left when an HD type is clean again or native is clean for 2 polls (docs/research-2026-11-21-twitch.md §3 item 4). No picture-by-picture. |
-| Variant choice | closest match, may be lower | exact RESOLUTION (height) and codec family, else the type is skipped |
+| Backup player types | site, popout, mobile_web, embed, **autoplay (360p)** | embed, site, mobile_web (popout skipped: the page token already is popout), then **autoplay as a last-resort 360p bridge** (2026-11-21): used only when every other type answered with ads, never pinned, left when an HD type is clean again or native is clean for 2 polls (docs/research-2026-11-21-twitch.md §3 item 4). No picture-by-picture. **Since 2026-11-21 this is `twitchAdQuality: 'full'` only**; the default `'low'` asks the bridge types `autoplay`, `picture-by-picture` (`cfg.bridgePlayerTypes`) together with embed, site, mobile_web and serves the first clean answer of any type (see the note below). |
+| Variant choice | closest match, may be lower | exact RESOLUTION (height) and codec family, else the type is skipped. Bridge / last-resort types: any resolution of the codec family (highest not above the player's). |
 | No clean backup | strip ads, then **replay the last clean playlist** for up to 6 s, hold 4 s | never an empty playlist: if stripping leaves no segments, wait for the whole backup search; if nothing is clean, pass the original through (the ad plays). Otherwise strip ad segments, keep MEDIA-SEQUENCE continuous with the live sequence numbers (existing `resequence`), DISCONTINUITY at the boundaries. No replay of stale playlists. |
 | Ad segment requested anyway | tiny blank answer | same (cached ad URLs, 120 s) |
 | Return to native | after 2 clean polls | same; it is one switch per break end |
 | Recovery (`src/page/recovery.js`) | soft kicks, gap seeks, frozen-picture detector, hard player reload, localStorage pinning | **removed**. Replaced by `src/page/health.js`: passive metrics plus one nudge |
 | HEVC/AV1 | `preferAvc` filter drops them from the master when AVC exists | kept (prevents codec switches between native and backup) |
 | fMP4 init segments | `EXT-X-MAP` kept per segment (1.1.3) | kept, it is required for backup segments with their own init |
+
+### Low-quality bridge during ads (2026-11-21)
+
+Decision: bring back the 1.x behaviour as the default, as a setting (`twitchAdQuality`, options
+page "During Twitch ads"). Reason: with "never lower quality", a stitched (SSAI) break where every
+HD type also carries the ad leaves a spinner or the ad itself; 1.x played a 360p ad-free stream at
+once and viewers preferred that.
+
+| `twitchAdQuality` | During a stitched ad break |
+|---|---|
+| `'low'` (default) | HD types (the viewer's list minus `cfg.bridgePlayerTypes` and the page token type) and the bridge types `autoplay` (360p, platform android) and `picture-by-picture` asked at once. The first clean answer of any type is served without waiting for the others (HD if both land in the same turn). On a bridge: the same bridge every poll (no flapping between bridge types) while the HD types are checked in the background; a clean HD type replaces the bridge on the next poll, at most once per break. Bridges are never pinned. Native again after 2 clean native polls. Prewarm at join: the first HD and the first bridge type. Nothing clean: strip / original as before. `ad-blocked-backup` carries `bridge: true` and the resolution. |
+| `'full'` | The 2.0 behaviour above: same-resolution HD types first, autoplay only as a last resort, no picture-by-picture. |
+
+Bridge types come from config, not from the viewer's list. Our backup usher requests go through
+the worker's unhooked fetch, so `usherIgnoreSubstrings` (`picture-by-picture`, meant for the
+page's own mini player) does not affect them.
 
 ### The one nudge
 

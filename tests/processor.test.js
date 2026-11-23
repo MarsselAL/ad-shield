@@ -28,7 +28,8 @@ function cleanFor(type) { return CLEAN.replace(/SYNTH-live/g, 'SYNTH-' + type + 
  */
 function makeWorld(mediaByType, opts) {
   opts = opts || {};
-  var w = { events: [], fetched: [], tokens: [], t: 1000000, settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true } };
+  var w = { events: [], fetched: [], tokens: [], t: 1000000, settings: { playerTypes: cfg.backupPlayerTypes.slice(), preferAvc: true, twitchAdQuality: 'full' } };
+  // Tests above the "low quality bridge" section run in 'full' mode (the 2.0 behaviour).
   w.now = function () { return w.t; };
   w.deps = {
     cfg: cfg,
@@ -984,5 +985,260 @@ test('a viewer list without autoplay never asks for it', function () {
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, PREROLL).then(function () {
     assert.equal(w.tokens.indexOf('autoplay'), -1);
+  });
+});
+
+// ------------------------------------------------------------------ twitchAdQuality 'low': bridge first
+// 1.x behaviour (2026-11-21): bridge types (cfg.bridgePlayerTypes) are asked with the HD types and
+// the first clean answer of any type is served; a clean HD type found later replaces the bridge once.
+var PBP = 'picture-by-picture';
+var PBP_360 = 'https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-picture-by-picture-360p30.m3u8';
+/**
+ * Low-mode world. media: type -> media playlist text (720p60 for HD types, 360p30 for the bridge
+ * types, whose masters are 360p-only). opts.gated: types whose media fetch waits for release(type).
+ * The poll deadline never fires.
+ */
+function lowWorld(media, opts) {
+  opts = opts || {};
+  var masters = { autoplay: master360('autoplay') };
+  masters[PBP] = master360(PBP);
+  var w = makeWorld(media, { masters: masters });
+  w.settings.twitchAdQuality = 'low';
+  var gates = {};
+  (opts.gated || []).forEach(function (t) {
+    var g = {}; g.p = new Promise(function (r) { g.open = r; }); gates[t] = g;
+  });
+  w.release = function (t) { gates[t].open(); };
+  var inner = w.deps.fetchText;
+  w.asked = [];
+  w.deps.fetchText = function (url) {
+    w.asked.push(url);
+    var m = /SYNTH-([a-z_-]+?)-(?:720p60|360p30)\.m3u8$/.exec(url);
+    function answer() {
+      if (url === AUTOPLAY_360 || url === PBP_360) {
+        w.fetched.push(url);
+        var text = media[m[1]];
+        return Promise.resolve(text === undefined ? { status: 404, text: '' } : { status: 200, text: text });
+      }
+      return inner(url);
+    }
+    return m && gates[m[1]] ? gates[m[1]].p.then(answer) : answer();
+  };
+  w.deps.setTimeout = function () { return 0; };
+  w.deps.clearTimeout = function () {};
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w;
+}
+function servedEvent(w) { return w.events.filter(function (e) { return e.name === 'ad-blocked-backup'; })[0]; }
+function allClean() {
+  var o = {};
+  ['embed', 'site', 'mobile_web', 'autoplay', PBP].forEach(function (t) { o[t] = cleanFor(t); });
+  return o;
+}
+
+test('low: serves the autoplay bridge at once while the HD types are slow (no waiting for HD)', function () {
+  var w = lowWorld(allClean(), { gated: ['embed', 'site', 'mobile_web', PBP] });
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
+    assertSameSegments(out, cleanFor('autoplay'));
+    ['embed', 'site', 'mobile_web', 'autoplay', PBP].forEach(function (t) {
+      assert.ok(w.tokens.indexOf(t) !== -1, t + ' asked');
+    });
+    assert.equal(w.tokens.indexOf('popout'), -1, 'the page token type is never asked');
+    var st = w.proc.stateOf('somechannel');
+    assert.equal(st.serving, 'backup:autoplay');
+    var ev = servedEvent(w);
+    assert.equal(ev.data.playerType, 'autoplay');
+    assert.equal(ev.data.resolution, '640x360');
+    assert.equal(ev.data.bridge, true);
+    ['embed', 'site', 'mobile_web', PBP].forEach(function (t) { w.release(t); });
+    return flush();
+  });
+});
+
+test('low: an HD type and a bridge landing in the same turn: HD served (and pinned)', function () {
+  var w = lowWorld(allClean(), { gated: ['embed', 'site', 'mobile_web', 'autoplay', PBP] });
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3);
+  return flush().then(function () {
+    w.release('autoplay'); w.release('site'); // same turn
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('site'));
+    var st = w.proc.stateOf('somechannel');
+    assert.equal(st.serving, 'backup:site');
+    assert.equal(st.pinned, 'site');
+    assert.equal(servedEvent(w).data.bridge, undefined, 'an HD backup is not a bridge');
+    ['embed', 'mobile_web', PBP].forEach(function (t) { w.release(t); });
+    return flush();
+  });
+});
+
+test('low: stays on the same bridge, switches to a clean HD type once, never back up again in the break', function () {
+  var media = allClean();
+  media.embed = PREROLL; media.site = PREROLL; media.mobile_web = PREROLL;
+  var w = lowWorld(media);
+  function serving() { return w.proc.stateOf('somechannel').serving; }
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
+    assertSameSegments(out, cleanFor('autoplay'), 'every HD type has ads: bridge');
+    w.t += 2000; w.fetched = []; w.tokens = [];
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    assert.equal(serving(), 'backup:autoplay', 'same bridge (picture-by-picture is clean too: no flapping)');
+    assert.deepEqual(w.tokens, [], 'HD types locked: no background requests');
+    assert.deepEqual(w.fetched, [AUTOPLAY_360], 'one fetch per poll on the bridge');
+    media.embed = cleanFor('embed'); media.site = cleanFor('site');
+    w.t += cfg.playerTypeLockoutMs;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    assert.equal(serving(), 'backup:autoplay', 'HD checked in the background; this poll stays on the bridge');
+    return flush();
+  }).then(function () {
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    assert.equal(serving(), 'backup:embed', 'clean HD found: switched up');
+    assert.equal(w.proc.stateOf('somechannel').pinned, 'embed');
+    assert.ok(w.fetched.indexOf(backupMedia720('embed')) !== -1, 'the 720p60 embed variant');
+    // HD gone bad again: back on a bridge, and no second switch up in this break.
+    media.embed = PREROLL; media.site = PREROLL;
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    assert.equal(serving(), 'backup:autoplay');
+    media.embed = cleanFor('embed'); media.site = cleanFor('site');
+    w.t += cfg.playerTypeLockoutMs + 1;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    return flush();
+  }).then(function () {
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    assert.equal(serving(), 'backup:autoplay', 'at most one bridge -> HD switch per break');
+    assert.equal(w.names().filter(function (n) { return n === 'ad-blocked-backup'; }).length, 1, 'counted once per break');
+  });
+});
+
+test('low: two clean native polls end the break and return to native quality', function () {
+  var media = allClean();
+  media.embed = PREROLL; media.site = PREROLL; media.mobile_web = PREROLL;
+  var w = lowWorld(media);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:autoplay');
+    w.t += 1000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:autoplay', 'debounce: one clean poll is not enough');
+    w.t += 1000;
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
+    var end = w.events.filter(function (e) { return e.name === 'ad-end'; })[0];
+    assert.equal(end.data.outcome, 'backup');
+  });
+});
+
+test('low: a bridge is never pinned (autoplay or picture-by-picture); next break races again', function () {
+  var media = allClean();
+  media.embed = PREROLL; media.site = PREROLL; media.mobile_web = PREROLL;
+  var w = lowWorld(media);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').pinned, null);
+    media.autoplay = PREROLL;
+    w.t += 2000;
+    return w.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function () {
+    var st = w.proc.stateOf('somechannel');
+    assert.equal(st.serving, 'backup:' + PBP);
+    assert.equal(st.pinned, null);
+  });
+});
+
+test('low: picture-by-picture bridge used when autoplay has ads too', function () {
+  var media = allClean();
+  media.embed = PREROLL; media.site = PREROLL; media.mobile_web = PREROLL; media.autoplay = PREROLL;
+  var w = lowWorld(media);
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) {
+    assertSameSegments(out, cleanFor(PBP));
+    assert.ok(w.fetched.indexOf(PBP_360) !== -1, 'the 360p picture-by-picture variant');
+    var ev = servedEvent(w);
+    assert.equal(ev.data.playerType, PBP);
+    assert.equal(ev.data.bridge, true);
+    assert.equal(ev.data.resolution, '640x360');
+    var usher = w.fetched.filter(function (u) { return u.indexOf('tok-' + PBP) !== -1; })[0];
+    assert.ok(usher && usher.indexOf('https://usher.ttvnw.net/') === 0, 'backup usher fetched for picture-by-picture');
+    assert.equal(w.names().indexOf('ad-stripped'), -1);
+  });
+});
+
+test('low: bridge types come from config, not the viewer list (a list without autoplay still bridges)', function () {
+  var media = allClean();
+  media.embed = PREROLL; media.site = PREROLL;
+  var w = lowWorld(media);
+  w.settings.playerTypes = ['embed', 'site'];
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:autoplay');
+    assert.equal(w.tokens.indexOf('mobile_web'), -1);
+  });
+});
+
+test('low is the default when the setting is missing', function () {
+  var w = lowWorld(allClean(), { gated: ['embed', 'site', 'mobile_web', PBP] });
+  delete w.settings.twitchAdQuality;
+  return w.proc.onMedia(NATIVE_720, PREROLL3).then(function () {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:autoplay');
+    ['embed', 'site', 'mobile_web', PBP].forEach(function (t) { w.release(t); });
+    return flush();
+  });
+});
+
+test('full: unchanged: HD first, autoplay only as last resort, picture-by-picture never asked', function () {
+  var w = gatedWorld({ embed: cleanFor('embed'), site: PREROLL, mobile_web: PREROLL, autoplay: cleanFor('autoplay') });
+  assert.equal(w.settings.twitchAdQuality, 'full');
+  var resolved = false;
+  var p = w.proc.onMedia(NATIVE_720, PREROLL3).then(function (out) { resolved = true; return out; });
+  return flush().then(function () {
+    w.release('autoplay'); w.release('site'); w.release('mobile_web');
+    return flush();
+  }).then(function () {
+    assert.notOk(resolved, 'waits for embed');
+    w.release('embed');
+    return p;
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('embed'));
+    assert.deepEqual(w.tokens, ['embed', 'site', 'mobile_web', 'autoplay']);
+    assert.equal(w.tokens.indexOf(PBP), -1);
+    assert.equal(servedEvent(w).data.bridge, undefined);
+  });
+});
+
+test('low prewarm: the first HD type and the first bridge type; the first ad poll is one media fetch each', function () {
+  var w = makeWorld({}, { masters: { autoplay: master360('autoplay') } });
+  w.settings.twitchAdQuality = 'low';
+  var pending = [];
+  var realTok = w.deps.getToken;
+  w.deps.getToken = function (ch, type) { w.tokens.push(type); return new Promise(function (r) { pending.push(r); }); };
+  w.proc = __TAS__.createProcessor(w.deps);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(w.tokens, ['embed', 'autoplay'], 'HD + bridge prewarmed');
+  w.settings.twitchAdQuality = 'full';
+  var wf = makeWorld({});
+  wf.deps.getToken = function (ch, type) { wf.tokens.push(type); return new Promise(function () {}); };
+  wf.proc = __TAS__.createProcessor(wf.deps);
+  wf.proc.onMaster(MASTER_URL, MASTER);
+  assert.deepEqual(wf.tokens, ['embed'], 'full mode: the first type only');
+
+  var lw = lowWorld({ embed: PREROLL, site: PREROLL, mobile_web: PREROLL, autoplay: cleanFor('autoplay') });
+  function ushers(t) { return lw.fetched.filter(function (u) { return u.indexOf('tok-' + t) !== -1; }).length; }
+  return flush().then(function () {
+    assert.equal(ushers('autoplay'), 1, 'autoplay master prewarmed');
+    assert.equal(ushers('embed'), 1, 'embed master prewarmed');
+    return lw.proc.onMedia(NATIVE_720, PREROLL3);
+  }).then(function (out) {
+    assertSameSegments(out, cleanFor('autoplay'));
+    assert.equal(lw.tokens.filter(function (t) { return t === 'autoplay'; }).length, 1, 'no second autoplay token');
+    assert.equal(ushers('autoplay'), 1, 'no second autoplay master');
+    pending.forEach(function (r) { r(null); });
+    void realTok;
   });
 });
