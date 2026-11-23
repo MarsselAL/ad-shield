@@ -723,7 +723,9 @@
    * matchOriginAsFallback: YouTube appends a sandboxed about:blank iframe (sandbox="allow-same-origin",
    * no allow-scripts) and Chrome logged "Blocked script execution in 'about:blank' ..." for our
    * script there. Same-origin about:blank children are still patched from the parent through
-   * protectFrames (src/scriptlets/runner.js) and prevent-dom-bypass.
+   * protectFrames (src/scriptlets/runner.js) and prevent-dom-bypass. The same for the
+   * autoconsent script (2026-11-23): Chrome injected it into that frame during YouTube's own
+   * appendChild and filed the same error under build/scriptlets-main.js (our wrapper in the stack).
    * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
    * background for their CSS, so with Ads and Cookie banners both off it still runs there.
    */
@@ -739,7 +741,6 @@
     }
     function js(id, file, allFrames, matches) {
       var o = { id: id, js: [file], matches: matches || WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
-      if (allFrames) o.matchOriginAsFallback = true;
       if (allow.length) o.excludeMatches = allow.slice();
       plan.push(o);
     }

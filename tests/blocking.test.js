@@ -160,7 +160,7 @@ test('hostPatterns and contentScriptPlan', function () {
   plan.forEach(function (s) { assert.equal(s.id.indexOf(B.SCRIPT_PREFIX), 0); assert.equal(s.runAt, 'document_start'); });
   var ac = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, autoRejectCookies: true }), []);
   assert.deepEqual(ac.map(function (s) { return s.id; }), ['as-autoconsent']);
-  assert.equal(ac[0].matchOriginAsFallback, true);
+  assert.equal(ac[0].matchOriginAsFallback, undefined, 'no about:blank fallback: sandboxed blank frames logged script errors');
   assert.equal(ac[0].excludeMatches, undefined);
 });
 
