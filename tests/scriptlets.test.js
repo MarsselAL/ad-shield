@@ -1590,28 +1590,46 @@ test('youtube-playability-recover: from document start, no events needed: enforc
   assert.ok(p.flexy.hasAttribute('player-unavailable'), 'player-unavailable restored for YouTube to manage');
 });
 
-test('youtube-playability-recover: player not ready at first (no player, then initialising) -> no call until cued / unstarted', function () {
+test('youtube-playability-recover: no player at first; once loaded, an enforced player cued, unstarted or buffering (3) is reloaded 0.3 s later', function () {
   var p = recoverPage({ search: '?t=90&v=' + VID, resp: enforcedResponse({ aux: true, status: 'UNPLAYABLE' }), next: [okResponse()], hasPlayer: false });
   p.fire('DOMContentLoaded');
   p.ticks(15);
   assert.equal(p.loads.length, 0, 'no player yet');
   p.hasPlayer = true;
-  p.state = 3; // still initialising / buffering
-  p.ticks(25);
-  assert.equal(p.loads.length, 0, 'player not ready: loadVideoById would be swallowed');
-  p.state = -1;
+  p.state = 3; // left buffering on the error screen (measured 2026-11-23)
   p.ticks(2);
-  assert.equal(p.loads.length, 0, 'ready, settling');
+  assert.equal(p.loads.length, 0, 'loaded, state 3, enforced: settling');
   p.tick();
-  assert.deepEqual(p.loads, [[VID, 90]], 'reloaded 0.3 s after the player is ready');
+  assert.deepEqual(p.loads, [[VID, 90]], 'reloaded 0.3 s after the player appeared');
   p.tick();
   assert.ok(p.hiddenRenderers());
+  // state 3 while the page is still loading / interactive and no onStateChange report: no call
+  var r = recoverPage({ readyState: 'loading', resp: enforcedResponse(), next: [okResponse()], state: 3 });
+  r.ticks(100);
+  r.doc.readyState = 'interactive';
+  r.ticks(100);
+  assert.equal(r.loads.length, 0, 'state 3, page not loaded: no call');
   // a player without getPlayerState is never asked
   var q = recoverPage({ resp: enforcedResponse(), next: [okResponse()] });
   q.player.getPlayerState = undefined;
   q.ticks(250);
   assert.equal(q.loads.length, 0, 'readiness unknown: no call');
   assert.ok(q.polling(), 'the 20 s budget counts from readiness: still waiting');
+});
+
+test('youtube-playability-recover: live trace 2026-11-23: 5 while loading, then 3 after the load event with the enforced response -> reloaded', function () {
+  var p = recoverPage({ readyState: 'loading', resp: enforcedResponse(), next: [okResponse()], state: 5 });
+  p.ticks(9);
+  p.doc.readyState = 'interactive';
+  p.fire('DOMContentLoaded');
+  p.ticks(4);
+  assert.equal(p.loads.length, 0, '5 / ERROR while loading / interactive: no call');
+  p.doc.readyState = 'complete';
+  p.state = 3;
+  p.ticks(3);
+  assert.deepEqual(p.loads, [[VID, 0]], 'complete, 3 / ERROR: loadVideoById within 0.3 s');
+  p.tick();
+  assert.ok(p.hiddenRenderers(), 'OK -> recovered');
 });
 
 test('youtube-playability-recover: no call while document.readyState is loading or interactive (and the player has not reported cued); 0.3 s after complete', function () {

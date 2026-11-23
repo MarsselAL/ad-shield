@@ -133,6 +133,54 @@ PROBE_JS = r"""(() => {
   }, true);
 })()"""
 
+# --simulate-enforcement: stand-in for YouTube's swap in a marked session (the harness profile is
+# not marked). The page-embedded player response is turned into the main app's enforced ERROR copy
+# (playerErrorMessageRenderer subreason 282054944, videoDetails removed) before the page reads it,
+# so the extension's guard cannot keep it and its reload fallback has to recover the video.
+# Records when the load event fired and when /youtubei/v1/player requests started (ms since
+# navigation start) in window.__asSim.
+SIM_JS = r"""(() => {
+  if (window.__asSim || location.pathname !== '/watch') return;
+  const S = window.__asSim = { swapped: 0, load: null, player: [] };
+  addEventListener('load', () => { S.load = Math.round(performance.now()); });
+  try { new PerformanceObserver(l => { for (const e of l.getEntries()) if (/\/youtubei\/v1\/player(\?|$)/.test(e.name)) S.player.push(Math.round(e.startTime)); })
+    .observe({ type: 'resource', buffered: true }); } catch (e) {}
+  let v;
+  const enforce = o => {
+    if (!o || typeof o !== 'object' || !o.playabilityStatus || o.playabilityStatus.status !== 'OK' || S.swapped) return;
+    S.swapped = Math.round(performance.now());
+    o.playabilityStatus = { status: 'ERROR', reason: 'Something went wrong', errorScreen: { playerErrorMessageRenderer: {
+      reason: { simpleText: 'Something went wrong' }, subreason: { runs: [{ text: 'Error 282054944' }] } } } };
+    delete o.videoDetails;
+  };
+  // When the player calls happen (loadVideoById from the extension's fallback) and what it holds.
+  S.reloads = []; S.states = [];
+  const t0 = () => Math.round(performance.now());
+  const poll = setInterval(() => {
+    const p = document.getElementById('movie_player');
+    if (!p || typeof p.getPlayerState !== 'function') return;
+    if (typeof p.loadVideoById === 'function' && !p.__asSimWrapped) {
+      const f = p.loadVideoById; p.__asSimWrapped = true;
+      p.loadVideoById = function () { S.reloads.push(t0()); return f.apply(this, arguments); };
+    }
+    let st = null, ps = null;
+    try { st = p.getPlayerState(); const r = p.getPlayerResponse(); ps = r && r.playabilityStatus ? r.playabilityStatus.status : null; } catch (e) {}
+    const k = st + '/' + ps + '/' + document.readyState;
+    if (!S.states.length || S.states[S.states.length - 1][1] !== k) S.states.push([t0(), k]);
+    if (performance.now() > 25000) clearInterval(poll);
+  }, 50);
+  // The extension's traps redefine the property later: wrap whatever setter they install.
+  const dp = Object.defineProperty;
+  Object.defineProperty = function (o, k, d) {
+    if (o === window && k === 'ytInitialPlayerResponse' && d && typeof d.set === 'function') {
+      const set = d.set; d = Object.assign({}, d, { set(x) { enforce(x); return set.call(this, x); } });
+    }
+    return dp.call(this, o, k, d);
+  };
+  dp(window, 'ytInitialPlayerResponse', { configurable: true, enumerable: true,
+    get() { return v; }, set(x) { enforce(x); v = x; } });
+})()"""
+
 PROBE_READ_JS = "window.__asProbe ? JSON.parse(JSON.stringify(window.__asProbe)) : null"
 
 FIRST_RESULT_JS = r"""(() => {
@@ -396,6 +444,10 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag, nudge=True, mode
         probe = cdp.evaluate(sid, PROBE_READ_JS)
     except lt.CDPError:
         probe = None
+    try:
+        sim = cdp.evaluate(sid, "window.__asSim ? JSON.parse(JSON.stringify(window.__asSim)) : null")
+    except lt.CDPError:
+        sim = None
     content_t = [s["t"] for s in samples if s.get("t") is not None and not s.get("adShowing")]
     last = next((s for s in reversed(samples) if "host" in s), {})
     if tab_tid:
@@ -406,7 +458,7 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag, nudge=True, mode
     return {
         "video": video_id, "label": label, "mode": mode, "query": query, "url": url,
         "consent": consent, "nudgedPlay": bool(nudged), "nudge": nudge,
-        "start": start_summary(samples, probe, video_id, t0),
+        "start": start_summary(samples, probe, video_id, t0), "simulated": sim,
         "played": bool(content_t) and max(content_t) > 3,
         "maxContentTime": round(max(content_t), 1) if content_t else None,
         "adShowingSeconds": sum(1 for s in samples if s.get("adShowing")),
@@ -427,7 +479,7 @@ def watch(cdp, sid, net, video_id, label, seconds, outdir, tag, nudge=True, mode
     }
 
 
-def run_once(with_extension, videos, seconds, outdir, extension=None, nudge=True, mode="direct", chrome_autoplay=False,
+def run_once(with_extension, videos, seconds, outdir, extension=None, nudge=True, mode="direct", chrome_autoplay=False, simulate=False,
              hover=0.0, headed=False):
     flags = [f for f in lt.LIVE_FLAGS if not (chrome_autoplay and f.startswith("--autoplay-policy="))]
     cdp = lt.PipeCDP(flags, headless=not headed)
@@ -453,14 +505,17 @@ def run_once(with_extension, videos, seconds, outdir, extension=None, nudge=True
         cdp.send("Emulation.setFocusEmulationEnabled", {"enabled": True}, session=sid)
         cdp.send("Page.bringToFront", session=sid)
         cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": PROBE_JS}, session=sid)
+        if simulate:
+            cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": SIM_JS}, session=sid)
         net = NetLog(cdp, sid)
         print("  %s consent: %s" % (tag, warm_up(cdp, sid, net)), flush=True)
         results = []
         for vid, label in videos:
             r = watch(cdp, sid, net, vid, label, seconds, outdir, tag, nudge=nudge, mode=mode, hover=hover)
             st = r["start"]
-            print("  %s %s start: ttff=%sms startedPaused=%s at3=%s at8=%s contentPauses=%d" % (
-                tag, r["video"], st["ttffMs"], st["startedPaused"], st["at3"], st["at8"], len(st["contentPauses"])), flush=True)
+            print("  %s %s start: ttff=%sms startedPaused=%s at3=%s at8=%s contentPauses=%d%s" % (
+                tag, r["video"], st["ttffMs"], st["startedPaused"], st["at3"], st["at8"], len(st["contentPauses"]),
+                " simulated=%s" % r["simulated"] if simulate else ""), flush=True)
             print("  %s %s: played=%s adShowing=%ss skip=%s ssap=%s wall=%s | page saw initial=%s player=%s | served html=%s player=%d/%d %s" % (
                 tag, vid, r["played"], r["adShowingSeconds"], r["skipButtonSeen"], r["ssapSeen"], r["enforcementSeen"],
                 r["pageSaw"]["initialKeys"], r["pageSaw"]["playerKeys"], r["served"]["htmlAdKeys"],
@@ -546,6 +601,10 @@ def main(argv=None):
                          "assign: a click on the current youtube.com page, then location.assign(watch URL) (a full "
                          "same-origin load after a user gesture); newtab: window.open(watch URL) with a user "
                          "gesture from the current youtube.com page (new tab, full load)")
+    ap.add_argument("--simulate-enforcement", action="store_true",
+                    help="turn the page-embedded player response into YouTube's enforced ERROR copy (subreason "
+                         "282054944) before the page reads it, as for a marked session, so the reload fallback runs; "
+                         "use with --only ext")
     args = ap.parse_args(argv)
     if args.extension and not os.path.isfile(os.path.join(args.extension, "manifest.json")):
         ap.error("--extension: no manifest.json in %s" % args.extension)
@@ -557,7 +616,8 @@ def main(argv=None):
             continue
         print("ext" if with_ext else "noext", flush=True)
         runs.append(run_once(with_ext, videos, args.seconds, outdir, os.path.abspath(args.extension) if args.extension else None,
-                             nudge=not args.no_nudge, mode=args.mode, chrome_autoplay=args.chrome_autoplay, hover=args.hover, headed=args.headed))
+                             nudge=not args.no_nudge, mode=args.mode, chrome_autoplay=args.chrome_autoplay, hover=args.hover, headed=args.headed,
+                             simulate=args.simulate_enforcement))
     with open(os.path.join(outdir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(runs, f, indent=1)
     write_md(outdir, runs, args.seconds)

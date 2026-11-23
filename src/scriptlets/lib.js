@@ -1295,8 +1295,10 @@ var asScriptlets = (function () {
    * is only asked once it is ready: the page has loaded (document.readyState 'complete'; a call
    * while the page is still loading was swallowed, measured 2026-11-22) or the player itself has
    * reported onStateChange 5 (cued) or -1 (unstarted) to us (subscribed with
-   * player.addEventListener once the element carries the player API), getPlayerState() is 5 or
-   * -1 now, and the enforced response has been seen on SETTLE_TICKS consecutive ticks (0.3 s).
+   * player.addEventListener once the element carries the player API), getPlayerState() is 5, -1
+   * or 3 now (with the enforced response: a player left on the 282054944 screen sat in 3 after
+   * the load event, measured 2026-11-23), and the enforced response has been seen on
+   * SETTLE_TICKS consecutive ticks (0.3 s).
    * Start time: the URL's t= (90, 90s, 1m30s, 1h2m3s) or 0. A reload that leaves the same
    * response object in place for RETRY_TICKS ticks (3 s) while the player is still cued /
    * unstarted counts as a failed try; a reload answered with the enforcement again is retried
@@ -1473,10 +1475,14 @@ var asScriptlets = (function () {
       }
     }
 
-    /** Cued (5) or unstarted (-1): the player shows the error screen and takes a loadVideoById. */
-    function ready(player) {
+    /**
+     * Cued (5) or unstarted (-1): the player shows the error screen and takes a loadVideoById.
+     * buffering: also 3, for an enforced response (it cannot be buffering content; measured
+     * 2026-11-23, the player sat in 3 on the error screen after the load event).
+     */
+    function ready(player, buffering) {
       var s = stateOf(player);
-      return (s === 5 || s === -1) && typeof player.loadVideoById === 'function';
+      return (s === 5 || s === -1 || (buffering && s === 3)) && typeof player.loadVideoById === 'function';
     }
 
     function show(el) {
@@ -1571,9 +1577,9 @@ var asScriptlets = (function () {
             if ((tries[j.vid] || 0) >= RECOVER_MAX_TRIES) { job = null; log(NAME, 'gave up'); return; }
             // A reload while the page is still loading was swallowed by the player (measured in
             // Chrome 2026-11-22): wait for the load event, or for the player to report itself
-            // cued / unstarted, then a settled, ready player.
+            // cued / unstarted, then a settled, ready player (3 counts: see ready()).
             var loaded = doc.readyState === 'complete' || j.cued;
-            if (!loaded || !ready(player)) { j.seen = 0; j.since = j.ticks; schedule(j); return; }
+            if (!loaded || !ready(player, true)) { j.seen = 0; j.since = j.ticks; schedule(j); return; }
             if (++j.seen >= RECOVER_SETTLE_TICKS) reload(j, player, resp);
             schedule(j);
             return;
