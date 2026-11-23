@@ -158,6 +158,12 @@
     // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
     clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
     clientAdPaths: ['/ads', '/ads/format', '/2018-01-01/3p/ads'],
+    // GQL operations that fetch a client-side ad (settings.blockClientAds): the request goes out,
+    // and the answer's data.fetchAds.ads.vast is replaced with the empty VAST (m3u8.EMPTY_VAST;
+    // gql.neutraliseFetchAds, src/page/page.js). Source: live run 2026-11-23 jynxzi
+    // (FetchAdsService_FetchAds answered an OUTSTREAM_MIRROR_PBYP_VIDEO VAST that then played
+    // above chat, "Ad 1 of 2").
+    clientAdGqlOperations: ['FetchAdsService_FetchAds'],
     // VOD pages: www.twitch.tv/videos/<id>; the embedded player with ?video=<id>.
     vodPagePathPattern: '^/videos/\\d+',
     vodPageQueryParam: 'video',
@@ -254,10 +260,12 @@
 
     // Tiny valid responses served for ad segment fetches (research-technique.md §3 item 4(a)).
     // .ts: one MPEG-TS null packet (188 bytes, PID 0x1FFF). Other: a 40-byte MP4 'ftyp' box.
-    // Only a fallback: ad segments never appear in playlists we serve, so the player should not
-    // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
-    // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
-    // demuxers drop null packets. See
+    // Without a telling extension the playlist's container decides (fMP4 if it has #EXT-X-MAP).
+    // Stripped playlists list no ad segment; a blanked one (the thin case, m3u8.blankAds: no
+    // clean backup and stripping would leave too little) lists them all and the player gets
+    // these answers for them (Purple 2.8.0 / vaft). Kept deliberately media-free: a generated
+    // silent/black segment cannot match the stream's codec parameters without parsing it, and a
+    // mismatch is a decode error, while demuxers drop null packets. See
     // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',
@@ -703,6 +711,12 @@
       }
     }
 
+    /** A DATERANGE line as a rewritten playlist keeps it: null for an ad class (removed), else
+     * the line with its ad tracking URLs neutralised (stripAds and blankAds). */
+    function keptDaterange(line, cfg) {
+      return isAdDaterange(line, cfg) ? null : neutralizeAdUrls(line, cfg);
+    }
+
     /**
      * Remove ad segments, ad DATERANGE/CUE tags and (in an ad context) prefetch / LL-HLS part
      * tags from a media playlist.
@@ -756,8 +770,8 @@
           if (line.indexOf('#EXT-X-CUE-OUT') === 0) { inCue = true; continue; }
           if (line.indexOf('#EXT-X-CUE-IN') === 0) { inCue = false; continue; }
           if (line.indexOf('#EXT-X-DATERANGE') === 0) {
-            if (isAdDaterange(line, cfg)) continue;
-            out.push(neutralizeAdUrls(line, cfg));
+            var dr = keptDaterange(line, cfg);
+            if (dr !== null) out.push(dr);
             continue;
           }
           if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) { seqIdx = out.length; out.push(line); continue; }
@@ -822,6 +836,80 @@
       return {
         text: out.join('\n') + (endsWithNewline ? '\n' : ''),
         removed: removed,
+        kept: kept,
+        removedUrls: removedUrls,
+        prefetchRemoved: prefetchRemoved
+      };
+    }
+
+    /**
+     * Blank the ads of a media playlist instead of removing them (the thin case: stripping would
+     * leave too little to play and no backup is clean; Purple 2.8.0 / vaft, live run 2026-11-23
+     * jynxzi). Every segment stays where it is with its own tags (#EXTINF, PROGRAM-DATE-TIME,
+     * DISCONTINUITY, MAP) and the numbering tags are untouched, so the playlist keeps its full
+     * length; the caller answers the returned ad URLs with a blank response (no network request).
+     * Ad DATERANGE, CUE tags and, in an ad context, prefetch / LL-HLS part tags are removed and
+     * other DATERANGEs kept with ad URLs neutralised, exactly as stripAds does.
+     * fMP4: the URI of an #EXT-X-MAP used only by ad segments (the ad's init segment) is returned
+     * too (not counted in blanked); a MAP also used by a live segment is not.
+     * Returns { text, blanked, kept, removedUrls, prefetchRemoved }.
+     */
+    function blankAds(text, cfg) {
+      var src = String(text || '');
+      var adContext = hasAds(src, cfg);
+      var live = isLivePlaylist(src);
+      var lines = splitLines(src);
+      var endsWithNewline = /\n$/.test(src);
+      if (endsWithNewline) lines.pop();
+      var out = [];
+      var extinf = null;
+      var inCue = false;
+      var blanked = 0, kept = 0, prefetchRemoved = 0;
+      var removedUrls = [];
+      var maps = [];      // { uri, ad, live } per MAP URI, in order
+      var curMap = null;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line === '') continue;
+        if (line.charAt(0) === '#') {
+          if (adContext && line.indexOf(cfg.prefetchTag) === 0) { prefetchRemoved++; continue; }
+          if (adContext && (line.indexOf('#EXT-X-PART:') === 0 || line.indexOf('#EXT-X-PRELOAD-HINT') === 0)) continue;
+          if (line.indexOf('#EXT-X-CUE-OUT') === 0) { inCue = true; continue; }
+          if (line.indexOf('#EXT-X-CUE-IN') === 0) { inCue = false; continue; }
+          if (line.indexOf('#EXT-X-DATERANGE') === 0) {
+            var dr = keptDaterange(line, cfg);
+            if (dr !== null) out.push(dr);
+            continue;
+          }
+          if (line.indexOf('#EXT-X-MAP:') === 0) {
+            var uri = parseAttributes(tagValue(line)).URI || '';
+            curMap = null;
+            for (var m = 0; m < maps.length; m++) if (maps[m].uri === uri) curMap = maps[m];
+            if (!curMap && uri) { curMap = { uri: uri, ad: false, live: false }; maps.push(curMap); }
+          } else if (line.indexOf('#EXTINF') === 0) {
+            extinf = line;
+          }
+          out.push(line);
+          continue;
+        }
+        // URI line: completes a segment, which stays listed either way.
+        if (isAdSegment(extinf, line, inCue, live, cfg)) {
+          blanked++;
+          removedUrls.push(line);
+          if (curMap) curMap.ad = true;
+        } else {
+          kept++;
+          if (curMap) curMap.live = true;
+        }
+        out.push(line);
+        extinf = null;
+      }
+      for (var k = 0; k < maps.length; k++) {
+        if (maps[k].ad && !maps[k].live) removedUrls.push(maps[k].uri);
+      }
+      return {
+        text: out.join('\n') + (endsWithNewline ? '\n' : ''),
+        blanked: blanked,
         kept: kept,
         removedUrls: removedUrls,
         prefetchRemoved: prefetchRemoved
@@ -1266,8 +1354,8 @@
       return false;
     }
 
-    /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
-     * embedded player with ?video=<id>. */
+    /** Empty VAST document (no fill): the "no ad" answer for client-side ad requests, also used
+     * for the VAST of a GQL FetchAdsService_FetchAds answer (src/page/page.js). */
     var EMPTY_VAST = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
 
     /** Local "no ad" answer for a client-side ad request: an empty VAST (no fill) with status
@@ -1278,6 +1366,8 @@
       return new Response(EMPTY_VAST, { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/xml' } });
     }
 
+    /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
+     * embedded player with ?video=<id>. */
     function isVodPage(pathname, search, cfg) {
       if (new RegExp(cfg.vodPagePathPattern).test(String(pathname || ''))) return true;
       var q = String(search || '').replace(/^\?/, '');
@@ -1296,6 +1386,7 @@
       isAdSegmentUrl: isAdSegmentUrl,
       isLivePlaylist: isLivePlaylist,
       stripAds: stripAds,
+      blankAds: blankAds,
       parseMedia: parseMedia,
       newSequenceState: newSequenceState,
       resequence: resequence,
@@ -1311,6 +1402,7 @@
       isClientAdUrl: isClientAdUrl,
       isVodPage: isVodPage,
       noAdResponse: noAdResponse,
+      EMPTY_VAST: EMPTY_VAST,
       splitUrl: splitUrl
     };
   }
@@ -1323,7 +1415,8 @@
 
 // ---- src/core/gql.js ----
 /*
- * GQL helpers for the PlaybackAccessToken request. Pure (no DOM, no fetch); the page script
+ * GQL helpers for the PlaybackAccessToken request and the client-side ad answer
+ * (FetchAdsService_FetchAds). Pure (no DOM, no fetch); the page script
  * does the actual request with the page's real fetch. Source of the request shape:
  * docs/research-technique.md §1.1 (values live in src/config.js).
  */
@@ -1479,6 +1572,45 @@
       return changed ? { body: JSON.stringify(parsed), changed: true } : { body: body, changed: false };
     }
 
+    /**
+     * True when a GQL request body (string, single or batched) has an operation whose
+     * operationName is in cfg.clientAdGqlOperations (a client-side ad fetch). Never throws.
+     */
+    function isClientAdGqlRequest(body, cfg) {
+      var ops = cfg.clientAdGqlOperations || [];
+      if (typeof body !== 'string' || !ops.length) return false;
+      var named = false;
+      for (var i = 0; i < ops.length && !named; i++) if (body.indexOf(ops[i]) !== -1) named = true;
+      if (!named) return false;
+      var parsed;
+      try { parsed = JSON.parse(body); } catch (e) { return false; }
+      var list = Array.isArray(parsed) ? parsed : [parsed];
+      for (var j = 0; j < list.length; j++) {
+        if (list[j] && ops.indexOf(list[j].operationName) !== -1) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Client-side ad answer (FetchAdsService_FetchAds, live run 2026-11-23 jynxzi): in every item
+     * of a GQL response (batched array or single object) whose data.fetchAds.ads is an object
+     * with a `vast` string, set vast to emptyVast (no fill). Other items and fields untouched;
+     * unexpected shapes are left alone. Mutates json. Returns { json, changed }.
+     */
+    function neutraliseFetchAds(json, emptyVast) {
+      var items = Array.isArray(json) ? json : [json];
+      var changed = false;
+      for (var i = 0; i < items.length; i++) {
+        var d = items[i] && typeof items[i] === 'object' ? items[i].data : null;
+        var fa = d && typeof d === 'object' ? d.fetchAds : null;
+        var ads = fa && typeof fa === 'object' ? fa.ads : null;
+        if (ads && typeof ads === 'object' && !Array.isArray(ads) && typeof ads.vast === 'string') {
+          if (ads.vast !== emptyVast) { ads.vast = emptyVast; changed = true; }
+        }
+      }
+      return { json: json, changed: changed };
+    }
+
     return {
       buildTokenBody: buildTokenBody,
       buildTokenHeaders: buildTokenHeaders,
@@ -1487,6 +1619,8 @@
       isPersistedQueryNotFound: isPersistedQueryNotFound,
       fetchToken: fetchToken,
       rewritePlayerType: rewritePlayerType,
+      isClientAdGqlRequest: isClientAdGqlRequest,
+      neutraliseFetchAds: neutraliseFetchAds,
       randomDeviceId: randomDeviceId
     };
   }
@@ -1539,8 +1673,12 @@
  *                              page's own token was rewritten to (cfg.forcedPlayerType) is never
  *                              tried. Stripping would leave no segment (or, before anything was
  *                              served, fewer than sequencer.minSegments): no poll deadline, the
- *                              search runs to its end, and with no clean backup the original
- *                              playlist is served unmodified ('ad-passthrough'), never an empty one.
+ *                              search runs to its end, and with no clean backup the native
+ *                              playlist is served at full length with its ad segments blanked
+ *                              (m3u8.blankAds: ad DATERANGE and prefetch removed, ad segment URLs
+ *                              answered with the blank response by the worker; 'ad-blanked'),
+ *                              never an empty one and never the ad itself (Purple 2.8.0, vaft;
+ *                              live run 2026-11-23 jynxzi: every backup had its own preroll).
  *  any exception    -> the original playlist text is returned untouched.
  */
 (function (root) {
@@ -1568,7 +1706,7 @@
       var log = deps.log || { debug: function () {}, info: function () {}, warn: function () {}, error: function () {} };
       var media = new Map();      // media playlist URL -> { key, variant }
       var channels = new Map();   // "live:<login>" / "vod:<id>" -> channel state
-      var adSegments = new Map(); // ad segment URL -> time seen
+      var adSegments = new Map(); // ad segment URL -> { at: time seen, mp4: fMP4 playlist }
 
       function settings() {
         var s = deps.getSettings ? deps.getSettings() : null;
@@ -1606,12 +1744,15 @@
         emit('playlist-switch', { channel: c.id, from: from, to: to });
       }
 
-      function rememberAdSegments(urls) {
+      /** Remember ad segment URLs for the worker's blank answer; playlistText says the container
+       * (an #EXT-X-MAP means fMP4, else MPEG-TS) for URLs without a telling extension. */
+      function rememberAdSegments(urls, playlistText) {
         var t = now();
-        for (var i = 0; i < urls.length; i++) adSegments.set(urls[i], t);
+        var mp4 = String(playlistText || '').indexOf('#EXT-X-MAP:') !== -1;
+        for (var i = 0; i < urls.length; i++) adSegments.set(urls[i], { at: t, mp4: mp4 });
         if (adSegments.size > 500 || urls.length) {
           adSegments.forEach(function (seen, u) {
-            if (t - seen > cfg.adSegmentCacheTtlMs) adSegments.delete(u);
+            if (t - seen.at > cfg.adSegmentCacheTtlMs) adSegments.delete(u);
           });
           bound(adSegments, 1000);
         }
@@ -1653,8 +1794,14 @@
 
       function isAdSegment(url) {
         if (!adSegments.has(url)) return false;
-        if (now() - adSegments.get(url) > cfg.adSegmentCacheTtlMs) { adSegments.delete(url); return false; }
+        if (now() - adSegments.get(url).at > cfg.adSegmentCacheTtlMs) { adSegments.delete(url); return false; }
         return true;
+      }
+
+      /** 'mp4' or 'ts': the container of the playlist a remembered ad URL came from; null if unknown. */
+      function adSegmentFormat(url) {
+        var e = adSegments.get(url);
+        return e ? (e.mp4 ? 'mp4' : 'ts') : null;
       }
 
       function lock(c, type) {
@@ -1971,7 +2118,7 @@
       function endBreak(c) {
         emit('ad-end', {
           channel: c.id, midroll: c.midroll,
-          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none')
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : (c.flags.blanked ? 'blanked' : 'none'))
         });
         c.inBreak = false;
         c.flags = {};
@@ -1993,8 +2140,14 @@
           if (!info) {
             if (!ads) return Promise.resolve(text);
             var r0 = M.stripAds(text, cfg);
-            rememberAdSegments(r0.removedUrls);
-            return Promise.resolve(r0.kept > 0 ? r0.text : text);
+            if (r0.kept > 0 || r0.removed === 0) {
+              rememberAdSegments(r0.removedUrls, text);
+              return Promise.resolve(r0.kept > 0 ? r0.text : text);
+            }
+            // Nothing would be left: every segment listed, the ads answered blank.
+            var b0 = M.blankAds(text, cfg);
+            rememberAdSegments(b0.removedUrls, text);
+            return Promise.resolve(b0.text);
           }
           c = channels.get(info.key);
           if (!c) return Promise.resolve(text);
@@ -2003,7 +2156,7 @@
             log.warn('backup search failed, stripping', e && e.message);
             if (!ads) return { kind: 'native' };
             var st = M.stripAds(text, cfg);
-            return { kind: st.removed > 0 && st.kept < 1 ? 'original' : 'stripped', stripped: st };
+            return { kind: st.removed > 0 && st.kept < 1 ? 'blanked' : 'stripped', stripped: st };
           });
           // Answers leave in request order, so an older slow answer never overtakes a newer
           // one, and state changes (switch events, numbering) happen in that order too.
@@ -2046,13 +2199,14 @@
         }
         var stripped = M.stripAds(text, cfg);
         // Too thin to serve stripped: nothing left, or (nothing served yet for this channel) fewer
-        // than the sequencer's minimum, so a fresh player would give up. No poll deadline then:
-        // wait for the whole search (each step has its own timeouts); still nothing clean ->
-        // the original playlist, ad included (an ad that plays beats a dead player).
+        // than the sequencer's minimum, so a fresh player would give up (an empty playlist made
+        // it give up, d6aefe7). No poll deadline then: wait for the whole search (each step has
+        // its own timeouts); still nothing clean -> the native playlist at full length with the
+        // ad segments blanked (finalize, serveBlanked).
         var thin = stripped.removed > 0 && (stripped.kept < 1 ||
           (c.kind === 'live' && !c.served && stripped.kept < cfg.sequencer.minSegments));
-        if (!thin) rememberAdSegments(stripped.removedUrls);
-        var fallback = thin ? { kind: 'original', stripped: stripped } : { kind: 'stripped', stripped: stripped };
+        if (!thin) rememberAdSegments(stripped.removedUrls, text);
+        var fallback = thin ? { kind: 'blanked', stripped: stripped } : { kind: 'stripped', stripped: stripped };
         if (!canSwap(c)) return Promise.resolve(fallback);
         var found = search(c, info.variant);
         return (thin ? found : withDeadline(found)).then(function (b) {
@@ -2081,7 +2235,7 @@
       /** Apply a plan (in request order) and build the answer. */
       function finalize(c, url, original, pl) {
         c.served = true;
-        if (pl.kind === 'original') return serveOriginal(c, url, original, pl.stripped);
+        if (pl.kind === 'blanked') return sequenced(c, url, original, serveBlanked(c, original), 'native');
         if (pl.kind === 'native') {
           if (c.inBreak) endBreak(c);
           setServing(c, 'native');
@@ -2104,16 +2258,26 @@
         return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
-      /** Stripping would leave too little and no backup is clean: the native playlist as is. */
-      function serveOriginal(c, url, original, stripped) {
-        // The player must be able to load the ad segments (the worker blanks remembered ones).
-        for (var i = 0; i < stripped.removedUrls.length; i++) adSegments.delete(stripped.removedUrls[i]);
-        if (!c.flags.passthrough) {
-          c.flags.passthrough = true;
-          emit('ad-passthrough', { channel: c.id, midroll: c.midroll, kept: stripped.kept, removed: stripped.removed });
+      /**
+       * Stripping would leave too little and no backup is clean: the native playlist at full
+       * length with its ad segments blanked (the worker answers them with the blank response).
+       * Numbered by resequence as source 'native', like the stripped playlist, so a clean backup
+       * or native playlist continues the numbering.
+       */
+      function serveBlanked(c, original) {
+        try {
+          var bl = M.blankAds(original, cfg);
+          rememberAdSegments(bl.removedUrls, original);
+          if (!c.flags.blanked) {
+            c.flags.blanked = true;
+            emit('ad-blanked', { channel: c.id, midroll: c.midroll, blanked: bl.blanked });
+          }
+          setServing(c, 'blanked');
+          return bl.text;
+        } catch (e) {
+          emit('failure', { channel: c.id, where: 'blank', message: String(e && e.message) });
+          return original;
         }
-        setServing(c, 'native');
-        return sequenced(c, url, original, original, 'native');
       }
 
       function serveStripped(c, original, stripped) {
@@ -2149,6 +2313,7 @@
         onMedia: onMedia,
         knowsMedia: knowsMedia,
         isAdSegment: isAdSegment,
+        adSegmentFormat: adSegmentFormat,
         stateOf: stateOf
       };
     };
@@ -2209,8 +2374,14 @@
     var blankTs = decode(cfg.blankTsBase64);
     var blankMp4 = decode(cfg.blankMp4Base64);
 
-    function blankResponse(url) {
-      var isTs = /\.ts$/i.test(M.splitUrl(url).base);
+    /**
+     * Blank answer for a remembered ad URL: TS for .ts, MP4 for .mp4/.m4s/.m4v/.m4a; without a
+     * telling extension (Twitch segment URLs sometimes have none) the container of the playlist
+     * the URL came from (format: proc.adSegmentFormat, 'mp4' for fMP4, else MPEG-TS).
+     */
+    function blankResponse(url, format) {
+      var base = M.splitUrl(url).base;
+      var isTs = /\.ts$/i.test(base) || (!/\.(mp4|m4s|m4v|m4a)$/i.test(base) && format !== 'mp4');
       return new Response(isTs ? blankTs : blankMp4, {
         status: 200,
         headers: { 'Content-Type': isTs ? 'video/mp2t' : 'video/mp4' }
@@ -2328,7 +2499,7 @@
         // Switched off in the popup while this tab was open: stay passive until the reload.
         if (off()) return realFetch(input, init);
         url = typeof input === 'string' ? input : (input && input.url) || String(input);
-        if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url));
+        if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url, proc.adSegmentFormat(url)));
         if (settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
           log.debug('client-side ad request answered locally (worker)');
           return Promise.resolve(M.noAdResponse(url));
@@ -2693,6 +2864,9 @@
  *     (m3u8.noAdResponse; /ads/format gets an empty 204), on live and VOD. The request succeeds
  *     from the page's point of view, so nothing plays and nothing fails (a *failed* ad request
  *     is the likely trigger of Twitch's ad-block notice; cf. TTV-AB "ad spoofing").
+ *     Also with settings.blockClientAds: a GQL request naming one of cfg.clientAdGqlOperations
+ *     (FetchAdsService_FetchAds) goes out as usual, and its answer's ad VAST is replaced with the
+ *     empty VAST (gql.neutraliseFetchAds); anything unexpected leaves the answer untouched.
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -2835,6 +3009,40 @@
     return Promise.resolve(M.noAdResponse(url));
   }
 
+  /** Response headers as a plain object, without content-length / content-encoding (the body changes). */
+  function copyHeaders(h) {
+    var o = {};
+    if (h && typeof h.forEach === 'function') {
+      h.forEach(function (v, k) {
+        var lk = String(k).toLowerCase();
+        if (lk !== 'content-length' && lk !== 'content-encoding') o[k] = v;
+      });
+    }
+    return o;
+  }
+
+  /**
+   * GQL client-side ad answer (FetchAdsService_FetchAds, live run 2026-11-23 jynxzi): the same
+   * response with every fetchAds VAST replaced by the empty VAST, status and headers kept. The
+   * original response on anything unexpected (non-JSON, other shape) or when switched off.
+   */
+  function withoutClientAd(res) {
+    if (!res || !res.ok || typeof res.clone !== 'function') return res;
+    return res.clone().text().then(function (text) {
+      if (!isEnabled() || settings.blockClientAds === false) return res;
+      var json = JSON.parse(text);
+      var r = G.neutraliseFetchAds(json, M.EMPTY_VAST);
+      if (!r.changed) return res;
+      var out = new Response(JSON.stringify(r.json), { status: res.status, statusText: res.statusText, headers: copyHeaders(res.headers) });
+      try { if (res.url) Object.defineProperty(out, 'url', { value: res.url }); } catch (e) { /* url stays '' */ }
+      log.debug('client-side ad answer (GQL fetchAds) emptied');
+      return out;
+    }).catch(function (e) {
+      log.debug('GQL fetchAds answer left untouched', e && e.message);
+      return res;
+    });
+  }
+
   var XP = root.XMLHttpRequest && root.XMLHttpRequest.prototype;
   var realXhrOpen = XP && XP.open;
   if (typeof realXhrOpen === 'function') {
@@ -2853,6 +3061,7 @@
 
   if (typeof realFetch === 'function') {
     root.fetch = function (input, init) {
+      var clientAdGql = false;
       try {
         var url = typeof input === 'string' ? input : (input && input.url) || String(input);
         var method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
@@ -2872,12 +3081,14 @@
               init = Object.assign({}, init, { body: r.body });
               log.debug('page token request playerType ->', cfg.forcedPlayerType);
             }
+            clientAdGql = settings.blockClientAds !== false && G.isClientAdGqlRequest(init.body, cfg);
           }
         }
       } catch (e) {
         log.warn('fetch hook error (request passed through)', e && e.message);
       }
-      return realFetch.call(this === undefined ? root : this, input, init);
+      var p = realFetch.call(this === undefined ? root : this, input, init);
+      return clientAdGql ? p.then(withoutClientAd) : p;
     };
   }
 

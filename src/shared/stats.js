@@ -5,6 +5,8 @@
  *   ad-detected        -> detected
  *   ad-blocked-backup  -> backup      (served an ad-free backup stream)
  *   ad-stripped        -> stripped    (no clean backup: ad segments removed)
+ *   ad-blanked         -> stripped    (no clean backup, too little left to strip: ad segments
+ *                                      listed but answered blank)
  *   ad-unremovable / failure / reload-failed -> failures
  *   standalone-ad-hidden -> standalone (cosmetic)
  *   player-reload      -> reloads
@@ -18,6 +20,7 @@
     'ad-detected': 'detected',
     'ad-blocked-backup': 'backup',
     'ad-stripped': 'stripped',
+    'ad-blanked': 'stripped',
     'ad-unremovable': 'failures',
     'failure': 'failures',
     'reload-failed': 'failures',
@@ -63,7 +66,9 @@
       case 'ad-detected': return kind + ' ad detected' + where;
       case 'ad-blocked-backup': return kind + ' ad blocked using backup stream "' + (d.playerType || '?') + '"' + where;
       case 'ad-stripped': return kind + ' ad blocked by removing ' + (d.removed || 0) + ' ad segment(s)' + where;
+      case 'ad-blanked': return kind + ' ad blocked by blanking ' + (d.blanked || 0) + ' ad segment(s)' + where;
       case 'ad-unremovable': return 'Ad markers without removable segments (client-side ad?)' + where;
+      // No longer emitted (2.0.1 only; replaced by ad-blanked); kept for old logs.
       case 'ad-passthrough': return kind + ' ad played: no clean backup, and removing it would leave nothing to play' + where;
       case 'ad-end': return 'Ad break ended' + where;
       case 'failure': return 'Internal error, stream passed through untouched' + (d.where ? ' [' + d.where + ']' : '');
@@ -77,7 +82,7 @@
 
   function toastText(name) {
     if (name === 'ad-blocked-backup') return 'Ad blocked – using backup stream';
-    if (name === 'ad-stripped') return 'Ad blocked – ad segments removed, stream resumes shortly';
+    if (name === 'ad-stripped' || name === 'ad-blanked') return 'Ad blocked – ad segments removed, stream resumes shortly';
     if (name === 'degraded') return 'Ad Shield: strip-only mode for this channel (too many reloads)';
     return null;
   }

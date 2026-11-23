@@ -46,8 +46,14 @@
     var blankTs = decode(cfg.blankTsBase64);
     var blankMp4 = decode(cfg.blankMp4Base64);
 
-    function blankResponse(url) {
-      var isTs = /\.ts$/i.test(M.splitUrl(url).base);
+    /**
+     * Blank answer for a remembered ad URL: TS for .ts, MP4 for .mp4/.m4s/.m4v/.m4a; without a
+     * telling extension (Twitch segment URLs sometimes have none) the container of the playlist
+     * the URL came from (format: proc.adSegmentFormat, 'mp4' for fMP4, else MPEG-TS).
+     */
+    function blankResponse(url, format) {
+      var base = M.splitUrl(url).base;
+      var isTs = /\.ts$/i.test(base) || (!/\.(mp4|m4s|m4v|m4a)$/i.test(base) && format !== 'mp4');
       return new Response(isTs ? blankTs : blankMp4, {
         status: 200,
         headers: { 'Content-Type': isTs ? 'video/mp2t' : 'video/mp4' }
@@ -165,7 +171,7 @@
         // Switched off in the popup while this tab was open: stay passive until the reload.
         if (off()) return realFetch(input, init);
         url = typeof input === 'string' ? input : (input && input.url) || String(input);
-        if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url));
+        if (proc.isAdSegment(url)) return Promise.resolve(blankResponse(url, proc.adSegmentFormat(url)));
         if (settings.blockClientAds !== false && isGet(input, init) && M.isClientAdUrl(url, cfg)) {
           log.debug('client-side ad request answered locally (worker)');
           return Promise.resolve(M.noAdResponse(url));

@@ -17,6 +17,9 @@
  *     (m3u8.noAdResponse; /ads/format gets an empty 204), on live and VOD. The request succeeds
  *     from the page's point of view, so nothing plays and nothing fails (a *failed* ad request
  *     is the likely trigger of Twitch's ad-block notice; cf. TTV-AB "ad spoofing").
+ *     Also with settings.blockClientAds: a GQL request naming one of cfg.clientAdGqlOperations
+ *     (FetchAdsService_FetchAds) goes out as usual, and its answer's ad VAST is replaced with the
+ *     empty VAST (gql.neutraliseFetchAds); anything unexpected leaves the answer untouched.
  *
  * Settings: defaults are available synchronously (src/shared/settings.js); the bridge sends
  * the stored settings as soon as chrome.storage answers, which is long before Twitch creates
@@ -159,6 +162,40 @@
     return Promise.resolve(M.noAdResponse(url));
   }
 
+  /** Response headers as a plain object, without content-length / content-encoding (the body changes). */
+  function copyHeaders(h) {
+    var o = {};
+    if (h && typeof h.forEach === 'function') {
+      h.forEach(function (v, k) {
+        var lk = String(k).toLowerCase();
+        if (lk !== 'content-length' && lk !== 'content-encoding') o[k] = v;
+      });
+    }
+    return o;
+  }
+
+  /**
+   * GQL client-side ad answer (FetchAdsService_FetchAds, live run 2026-11-23 jynxzi): the same
+   * response with every fetchAds VAST replaced by the empty VAST, status and headers kept. The
+   * original response on anything unexpected (non-JSON, other shape) or when switched off.
+   */
+  function withoutClientAd(res) {
+    if (!res || !res.ok || typeof res.clone !== 'function') return res;
+    return res.clone().text().then(function (text) {
+      if (!isEnabled() || settings.blockClientAds === false) return res;
+      var json = JSON.parse(text);
+      var r = G.neutraliseFetchAds(json, M.EMPTY_VAST);
+      if (!r.changed) return res;
+      var out = new Response(JSON.stringify(r.json), { status: res.status, statusText: res.statusText, headers: copyHeaders(res.headers) });
+      try { if (res.url) Object.defineProperty(out, 'url', { value: res.url }); } catch (e) { /* url stays '' */ }
+      log.debug('client-side ad answer (GQL fetchAds) emptied');
+      return out;
+    }).catch(function (e) {
+      log.debug('GQL fetchAds answer left untouched', e && e.message);
+      return res;
+    });
+  }
+
   var XP = root.XMLHttpRequest && root.XMLHttpRequest.prototype;
   var realXhrOpen = XP && XP.open;
   if (typeof realXhrOpen === 'function') {
@@ -177,6 +214,7 @@
 
   if (typeof realFetch === 'function') {
     root.fetch = function (input, init) {
+      var clientAdGql = false;
       try {
         var url = typeof input === 'string' ? input : (input && input.url) || String(input);
         var method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
@@ -196,12 +234,14 @@
               init = Object.assign({}, init, { body: r.body });
               log.debug('page token request playerType ->', cfg.forcedPlayerType);
             }
+            clientAdGql = settings.blockClientAds !== false && G.isClientAdGqlRequest(init.body, cfg);
           }
         }
       } catch (e) {
         log.warn('fetch hook error (request passed through)', e && e.message);
       }
-      return realFetch.call(this === undefined ? root : this, input, init);
+      var p = realFetch.call(this === undefined ? root : this, input, init);
+      return clientAdGql ? p.then(withoutClientAd) : p;
     };
   }
 

@@ -241,7 +241,7 @@ test('types with ads are locked out briefly: next poll makes no token requests',
     return w.proc.onMedia(NATIVE_720, PREROLL);
   }).then(function (out) {
     assert.deepEqual(w.tokens, []);
-    // (The window may re-list a segment the player already got in the passed-through first poll.)
+    // (The window may re-list a segment the player already got in the blanked first poll.)
     assert.notIncludes(out, 'twitch-stitched-ad');
     assert.notIncludes(out, ',Amazon|');
     w.t += cfg.playerTypeLockoutMs + 1;
@@ -261,17 +261,25 @@ test('ad segment cache expires', function () {
   });
 });
 
-test('stripping empties the playlist, no clean backup: original playlist (the ad plays), no last-clean replay', function () {
+test('mid-session all-ad poll, no clean backup: native playlist with the ad segments blanked (never empty, no last-clean replay)', function () {
   var w = makeWorld(allTypes(PREROLL));
   w.proc.onMaster(MASTER_URL, MASTER);
+  var ALL = fixture('all-ads.m3u8');
   return w.proc.onMedia(NATIVE_720, CLEAN).then(function (out) {
     assert.equal(out, CLEAN, 'untouched while clean');
     w.t += 2000;
-    return w.proc.onMedia(NATIVE_720, fixture('all-ads.m3u8'));
+    return w.proc.onMedia(NATIVE_720, ALL);
   }).then(function (out) {
     assert.ok(out !== CLEAN, 'the last clean playlist is not replayed');
-    assert.equal(out, fixture('all-ads.m3u8'), 'never an empty playlist');
-    assert.ok(w.names().indexOf('ad-passthrough') !== -1);
+    segUrls(ALL).forEach(function (u) {
+      assert.includes(out, u, 'ad segment listed (blanked), never an empty playlist');
+      assert.ok(w.proc.isAdSegment(u), 'ad segment answered with the blank response');
+    });
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.notIncludes(out, '#EXT-X-TWITCH-PREFETCH');
+    assert.ok(w.names().indexOf('ad-blanked') !== -1);
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
+    assert.equal(w.proc.stateOf('somechannel').serving, 'blanked');
     assert.equal(cfg.lastCleanMaxAgeMs, undefined);
     assert.equal(cfg.backupHoldMs, undefined);
   });
@@ -621,19 +629,23 @@ test('kaicenat: native and popout ad-only, embed clean but slow: waits past the 
   });
 });
 
-test('kaicenat: every backup ad-only too: original playlist unmodified (the ad plays), never an empty one', function () {
+test('kaicenat: every backup ad-only too: native playlist with the ad segments blanked, never an empty one', function () {
   var native = adOnly('native-');
   var w = makeWorld({ popout: adOnly('popout-'), embed: adOnly('embed-'), site: adOnly('site-'), mobile_web: adOnly('mobile_web-') });
   w.deps.setTimeout = function (f) { f(); return 1; }; // the poll deadline is already over
   w.proc = __TAS__.createProcessor(w.deps);
   w.proc.onMaster(MASTER_URL, MASTER);
   return w.proc.onMedia(NATIVE_720, native).then(function (out) {
-    assert.equal(out, native, 'original, byte for byte');
+    assert.deepEqual(segUrls(out), segUrls(native), 'every segment listed');
+    assert.equal(tag(out, '#EXT-X-MEDIA-SEQUENCE'), 100, 'Twitch\'s numbering');
+    assert.notIncludes(out, 'twitch-stitched-ad');
     assert.equal(w.tokens.indexOf('popout'), -1, 'popout never requested');
     assert.ok(w.tokens.length > 0, 'the backups were tried');
-    assert.ok(w.names().indexOf('ad-passthrough') !== -1, 'reported');
+    assert.ok(w.names().indexOf('ad-blanked') !== -1, 'reported');
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
     assert.equal(w.names().indexOf('ad-stripped'), -1);
-    assert.notOk(w.proc.isAdSegment(SEGB + 'ad-500.ts'), 'the ad segments are not blanked: the ad plays');
+    assert.ok(w.proc.isAdSegment(SEGB + 'ad-500.ts'), 'the ad segments are blanked');
+    assert.equal(w.proc.adSegmentFormat(SEGB + 'ad-500.ts'), 'ts');
   });
 });
 
@@ -678,7 +690,7 @@ function preroll(o) {
   return lines.join('\n') + '\n';
 }
 
-test('stitched preroll passed through, then live segments appear: the live segments are served, not dropped', function () {
+test('stitched preroll blanked, then live segments appear: the live segments are served, not dropped', function () {
   var w = makeWorld(allTypes(adOnly('backup-')));
   w.deps.setTimeout = function (f) { f(); return 1; }; // the poll deadline is already over
   w.proc = __TAS__.createProcessor(w.deps);
@@ -688,8 +700,10 @@ test('stitched preroll passed through, then live segments appear: the live segme
   var poll3 = preroll({ seq: 2, live: 58602, firstAd: 2, ads: 8, from: 58602, to: 58605 });
   var seq2;
   return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
-    assert.equal(out, poll1, 'ad-only preroll, no clean backup: original');
-    assert.ok(w.names().indexOf('ad-passthrough') !== -1);
+    assert.deepEqual(segUrls(out), segUrls(poll1), 'ad-only preroll, no clean backup: every segment, blanked');
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.ok(w.names().indexOf('ad-blanked') !== -1);
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
     return w.proc.onMedia(NATIVE_720, poll2);
   }).then(function (out) {
     assert.includes(out, SEGB + 'live-58602.ts', 'first live segment served');
@@ -705,7 +719,7 @@ test('stitched preroll passed through, then live segments appear: the live segme
   });
 });
 
-test('stitched preroll with live segments passed through on the first poll: next polls still serve the live segments', function () {
+test('stitched preroll with live segments blanked on the first poll: next polls still serve the live segments', function () {
   var w = makeWorld(allTypes(adOnly('backup-')));
   w.deps.setTimeout = function (f) { f(); return 1; };
   w.proc = __TAS__.createProcessor(w.deps);
@@ -715,7 +729,9 @@ test('stitched preroll with live segments passed through on the first poll: next
   var poll3 = preroll({ seq: 4, live: 58602, firstAd: 4, ads: 8, from: 58602, to: 58607 });
   var seq2;
   return w.proc.onMedia(NATIVE_720, poll1).then(function (out) {
-    assert.equal(out, poll1, 'first poll too thin to strip, no clean backup: original');
+    assert.deepEqual(segUrls(out), segUrls(poll1), 'first poll too thin to strip, no clean backup: every segment, ads blanked');
+    assert.ok(w.proc.isAdSegment(SEGB + 'preroll-ad-0.ts'));
+    assert.notOk(w.proc.isAdSegment(SEGB + 'live-58602.ts'));
     return w.proc.onMedia(NATIVE_720, poll2);
   }).then(function (out) {
     assert.includes(out, SEGB + 'live-58604.ts', 'new live segment served');
@@ -1240,5 +1256,129 @@ test('low prewarm: the first HD type and the first bridge type; the first ad pol
     assert.equal(ushers('autoplay'), 1, 'no second autoplay master');
     pending.forEach(function (r) { r(null); });
     void realTok;
+  });
+});
+
+// ------------------------------------------------------------------ blanked native (thin case)
+// twitch.tv/jynxzi 2026-11-23, fresh load: a 30 s stitched preroll, MEDIA-SEQUENCE 0, every segment
+// Amazon|<id> after a DISCONTINUITY; embed, autoplay, picture-by-picture, site and mobile_web
+// ALL "also has ads". 2.0.1 served the original playlist ('ad-passthrough') and the ad played.
+// Now: the native playlist at full length with the ad segments answered blank (Purple 2.8.0, vaft).
+var JYN = 'https://video-edge-c0ffee.sea02.abs.hls.ttvnw.net/v1/segment/';
+function jynxziPreroll(n, live) {
+  var lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:3', '#EXT-X-MEDIA-SEQUENCE:0'];
+  lines.push('#EXT-X-DATERANGE:ID="stitched-ad-1-30",CLASS="twitch-stitched-ad",START-DATE="2026-11-23T20:00:00.000Z",DURATION=30.030,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL",X-TV-TWITCH-AD-URL="https://example.invalid/ad"');
+  lines.push('#EXT-X-DATERANGE:ID="quartile-start-1",CLASS="twitch-ad-quartile",START-DATE="2026-11-23T20:00:00.000Z",DURATION=0.000,X-TV-TWITCH-AD-QUARTILE-URLS="https://example.invalid/q0"');
+  lines.push('#EXT-X-DATERANGE:ID="source-1",CLASS="twitch-stream-source",START-DATE="2026-11-23T20:00:00.000Z",X-TV-TWITCH-STREAM-SOURCE="Amazon|4000000001"');
+  lines.push('#EXT-X-DATERANGE:ID="trigger-1",CLASS="twitch-trigger",START-DATE="2026-11-23T20:00:00.000Z"');
+  for (var i = 0; i < n; i++) {
+    lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXT-X-PROGRAM-DATE-TIME:' + new Date(Date.parse('2025-11-11T19:59:00.000Z') + i * 2002).toISOString());
+    lines.push('#EXTINF:2.002,Amazon|4000000001');
+    lines.push(JYN + 'ad-' + i + (i % 2 ? '' : '.ts')); // some without an extension
+  }
+  for (var k = 0; k < (live || 0); k++) {
+    if (k === 0) lines.push('#EXT-X-DISCONTINUITY');
+    lines.push('#EXTINF:2.000,live');
+    lines.push(JYN + 'live-' + k + '.ts');
+  }
+  lines.push('#EXT-X-TWITCH-PREFETCH:' + JYN + 'ad-' + n + '.ts');
+  return lines.join('\n') + '\n';
+}
+
+test('jynxzi preroll, every backup has its own ad, fresh player: blanked native served (full length, ads blanked), not the original', function () {
+  var native = jynxziPreroll(15);
+  var w = makeWorld(allTypes(jynxziPreroll(15)));
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, native).then(function (out) {
+    assert.ok(out !== native, 'not the original playlist');
+    assert.deepEqual(segUrls(out), segUrls(native), 'every segment URI, in order');
+    assert.equal(tag(out, '#EXT-X-MEDIA-SEQUENCE'), 0);
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.notIncludes(out, '#EXT-X-TWITCH-PREFETCH');
+    segUrls(native).forEach(function (u) { assert.ok(w.proc.isAdSegment(u), 'blank answer for ' + u); });
+    assert.equal(w.proc.adSegmentFormat(JYN + 'ad-1'), 'ts', 'no extension: MPEG-TS playlist -> TS blank');
+    var names = w.names();
+    assert.deepEqual(names, ['ad-detected', 'ad-blanked', 'playlist-switch']);
+    assert.equal(w.events[1].data.blanked, 15);
+    assert.equal(w.events[1].data.midroll, false);
+    assert.equal(w.events[2].data.to, 'blanked');
+    assert.equal(names.indexOf('ad-passthrough'), -1);
+  });
+});
+
+test('blanked preroll: next all-ad poll blanked again (one event per break); clean native poll -> native, break ends as blanked', function () {
+  var w = makeWorld(allTypes(jynxziPreroll(15)));
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var seq1;
+  return w.proc.onMedia(NATIVE_720, jynxziPreroll(15)).then(function (out) {
+    seq1 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    w.t += cfg.playerTypeLockoutMs + 1;
+    return w.proc.onMedia(NATIVE_720, jynxziPreroll(17));
+  }).then(function (out) {
+    assert.includes(out, JYN + 'ad-16.ts', 'new ad segment listed (blanked)');
+    assert.ok(w.proc.isAdSegment(JYN + 'ad-16.ts'));
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq1, 'numbering continuous');
+    assert.equal(w.names().filter(function (n) { return n === 'ad-blanked'; }).length, 1, 'once per break');
+    return w.proc.onMedia(NATIVE_720, CLEAN);
+  }).then(function (out) {
+    assert.includes(out, segUrls(CLEAN)[segUrls(CLEAN).length - 1], 'clean native served');
+    assert.equal(w.proc.stateOf('somechannel').serving, 'native');
+    var end = w.events.filter(function (e) { return e.name === 'ad-end'; })[0];
+    assert.equal(end.data.outcome, 'blanked');
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
+  });
+});
+
+test('blanked preroll: a clean backup on a later poll takes over, numbering continuous', function () {
+  var media = allTypes(jynxziPreroll(15));
+  var w = makeWorld(media);
+  w.proc.onMaster(MASTER_URL, MASTER);
+  var seq1;
+  return w.proc.onMedia(NATIVE_720, jynxziPreroll(15)).then(function (out) {
+    seq1 = tag(out, '#EXT-X-MEDIA-SEQUENCE');
+    media.embed = cleanFor('embed');
+    w.t += cfg.playerTypeLockoutMs + 1;
+    return w.proc.onMedia(NATIVE_720, jynxziPreroll(15));
+  }).then(function (out) {
+    assert.equal(w.proc.stateOf('somechannel').serving, 'backup:embed');
+    assert.includes(out, 'SYNTH-embed-live');
+    assert.ok(tag(out, '#EXT-X-MEDIA-SEQUENCE') >= seq1);
+    assert.ok(w.names().indexOf('ad-blocked-backup') !== -1);
+  });
+});
+
+test('low mode (default): every HD and bridge type has ads on a fresh preroll -> blanked native', function () {
+  var ad = jynxziPreroll(15);
+  var media = { embed: ad, site: ad, mobile_web: ad, autoplay: ad };
+  media[PBP] = ad;
+  var w = lowWorld(media);
+  return w.proc.onMedia(NATIVE_720, ad).then(function (out) {
+    assert.deepEqual(segUrls(out), segUrls(ad));
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.ok(w.names().indexOf('ad-blanked') !== -1);
+    assert.equal(w.names().indexOf('ad-passthrough'), -1);
+  });
+});
+
+test('unknown media playlist with only ad segments: blanked, not the original', function () {
+  var w = makeWorld({});
+  var ALL = fixture('all-ads.m3u8');
+  return w.proc.onMedia('https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/UNKNOWN.m3u8', ALL).then(function (out) {
+    assert.deepEqual(segUrls(out), segUrls(ALL));
+    assert.notIncludes(out, 'twitch-stitched-ad');
+    assert.ok(w.proc.isAdSegment(segUrls(ALL)[0]));
+  });
+});
+
+test('fMP4 blanked preroll: ad init segment blanked too, answered as MP4', function () {
+  var fm = fixture('fmp4-preroll.m3u8');
+  var w = makeWorld(allTypes(fm));
+  w.proc.onMaster(MASTER_URL, MASTER);
+  return w.proc.onMedia(NATIVE_720, fm).then(function (out) {
+    assert.deepEqual(segUrls(out), segUrls(fm));
+    assert.ok(w.proc.isAdSegment('https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-init.mp4'));
+    assert.equal(w.proc.adSegmentFormat('https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-0.mp4'), 'mp4');
   });
 });

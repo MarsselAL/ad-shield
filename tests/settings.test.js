@@ -203,6 +203,46 @@ test('rewritePlayerType: site live token -> popout (single and batched); others 
   assert.equal(G.rewritePlayerType('{not json PlaybackAccessToken', cfg).changed, false);
   assert.equal(G.rewritePlayerType(undefined, cfg).changed, false);
 });
+// Client-side ad via GQL (live run 2026-11-23 jynxzi): FetchAdsService_FetchAds answered with a
+// VAST for an OUTSTREAM_MIRROR_PBYP_VIDEO ad that then played above chat.
+var EMPTY_VAST = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
+function fetchAdsAnswer() {
+  return { data: { fetchAds: { ads: { format: 'OUTSTREAM_MIRROR_PBYP_VIDEO', vast: '<VAST version="3.0"><Ad id="1"><InLine></InLine></Ad></VAST>' }, other: 1 } }, extensions: { operationName: 'FetchAdsService_FetchAds' } };
+}
+test('clientAdGqlOperations: FetchAdsService_FetchAds', function () {
+  assert.deepEqual(ns.config.clientAdGqlOperations, ['FetchAdsService_FetchAds']);
+});
+test('isClientAdGqlRequest: single and batched bodies naming a listed operation; others, non-JSON, non-string: no', function () {
+  var G = ns.gql, cfg = ns.config;
+  assert.ok(G.isClientAdGqlRequest(JSON.stringify([{ operationName: 'FetchAdsService_FetchAds', variables: { input: {} } }]), cfg));
+  assert.ok(G.isClientAdGqlRequest(JSON.stringify({ operationName: 'FetchAdsService_FetchAds' }), cfg));
+  assert.ok(G.isClientAdGqlRequest(JSON.stringify([{ operationName: 'ChannelShell' }, { operationName: 'FetchAdsService_FetchAds' }]), cfg));
+  assert.notOk(G.isClientAdGqlRequest(JSON.stringify([{ operationName: 'ChannelShell', variables: { note: 'FetchAdsService_FetchAds' } }]), cfg));
+  assert.notOk(G.isClientAdGqlRequest('FetchAdsService_FetchAds{', cfg));
+  assert.notOk(G.isClientAdGqlRequest(null, cfg));
+});
+test('neutraliseFetchAds: batched answer -> vast emptied, other fields and items untouched', function () {
+  var G = ns.gql;
+  var other = { data: { channel: { id: '1' } } };
+  var json = [other, fetchAdsAnswer()];
+  var r = G.neutraliseFetchAds(json, EMPTY_VAST);
+  assert.ok(r.changed);
+  assert.equal(r.json[1].data.fetchAds.ads.vast, EMPTY_VAST);
+  assert.equal(r.json[1].data.fetchAds.ads.format, 'OUTSTREAM_MIRROR_PBYP_VIDEO');
+  assert.equal(r.json[1].data.fetchAds.other, 1);
+  assert.deepEqual(r.json[0], { data: { channel: { id: '1' } } });
+});
+test('neutraliseFetchAds: single object answer; unexpected shapes unchanged', function () {
+  var G = ns.gql;
+  var r = G.neutraliseFetchAds(fetchAdsAnswer(), EMPTY_VAST);
+  assert.ok(r.changed);
+  assert.equal(r.json.data.fetchAds.ads.vast, EMPTY_VAST);
+  [null, 'x', 3, {}, [], [{ data: null }], { data: { fetchAds: null } }, { data: { fetchAds: { ads: null } } },
+    { data: { fetchAds: { ads: { vast: 5 } } } }, { data: { fetchAds: { ads: [{ vast: '<VAST/>' }] } } }].forEach(function (j) {
+    assert.notOk(G.neutraliseFetchAds(j, EMPTY_VAST).changed, JSON.stringify(j));
+  });
+});
+
 test('randomDeviceId: 32 chars [a-z0-9]', function () {
   assert.ok(/^[a-z0-9]{32}$/.test(G.randomDeviceId()));
 });
@@ -223,9 +263,9 @@ test('shouldRunInFrame: top frame yes, clips and clip pages no, player sub-frame
 test('stats: applyEvent counts once per event type, badge sums blocked', function () {
   var St = ns.stats;
   var s = St.empty();
-  ['ad-detected', 'ad-blocked-backup', 'ad-detected', 'ad-stripped', 'failure', 'ad-unremovable', 'standalone-ad-hidden', 'ad-end', 'unknown'].forEach(function (n) { s = St.applyEvent(s, n); });
-  assert.deepEqual(s, { detected: 2, backup: 1, stripped: 1, failures: 2, standalone: 1, reloads: 0 });
-  assert.equal(St.badgeText(s), '3');
+  ['ad-detected', 'ad-blocked-backup', 'ad-detected', 'ad-stripped', 'ad-blanked', 'failure', 'ad-unremovable', 'standalone-ad-hidden', 'ad-end', 'unknown'].forEach(function (n) { s = St.applyEvent(s, n); });
+  assert.deepEqual(s, { detected: 2, backup: 1, stripped: 2, failures: 2, standalone: 1, reloads: 0 });
+  assert.equal(St.badgeText(s), '4');
   assert.equal(St.badgeText(St.empty()), '');
   assert.equal(St.badgeText({ backup: 5000 }), '999+');
   assert.deepEqual(St.normalize({ detected: -1, backup: 'x' }), St.empty());
@@ -236,6 +276,10 @@ test('stats: describeEvent and toast texts', function () {
   assert.equal(St.describeEvent('nope', {}), null);
   assert.includes(St.toastText('ad-blocked-backup'), 'using backup stream');
   assert.equal(St.toastText('ad-detected'), null);
+  assert.equal(St.toastText('ad-blanked'), St.toastText('ad-stripped'));
+  assert.ok(St.isCounted('ad-blanked'));
+  assert.includes(St.describeEvent('ad-blanked', { channel: 'c', blanked: 15 }), 'Preroll ad blocked by blanking 15 ad segment(s) (c)');
+  assert.ok(St.describeEvent('ad-passthrough', {}), 'old event name still described');
 });
 test('popupStatus covers every state', function () {
   var P = ns.stats.popupStatus;

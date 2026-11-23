@@ -1,5 +1,6 @@
 /*
- * GQL helpers for the PlaybackAccessToken request. Pure (no DOM, no fetch); the page script
+ * GQL helpers for the PlaybackAccessToken request and the client-side ad answer
+ * (FetchAdsService_FetchAds). Pure (no DOM, no fetch); the page script
  * does the actual request with the page's real fetch. Source of the request shape:
  * docs/research-technique.md §1.1 (values live in src/config.js).
  */
@@ -155,6 +156,45 @@
       return changed ? { body: JSON.stringify(parsed), changed: true } : { body: body, changed: false };
     }
 
+    /**
+     * True when a GQL request body (string, single or batched) has an operation whose
+     * operationName is in cfg.clientAdGqlOperations (a client-side ad fetch). Never throws.
+     */
+    function isClientAdGqlRequest(body, cfg) {
+      var ops = cfg.clientAdGqlOperations || [];
+      if (typeof body !== 'string' || !ops.length) return false;
+      var named = false;
+      for (var i = 0; i < ops.length && !named; i++) if (body.indexOf(ops[i]) !== -1) named = true;
+      if (!named) return false;
+      var parsed;
+      try { parsed = JSON.parse(body); } catch (e) { return false; }
+      var list = Array.isArray(parsed) ? parsed : [parsed];
+      for (var j = 0; j < list.length; j++) {
+        if (list[j] && ops.indexOf(list[j].operationName) !== -1) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Client-side ad answer (FetchAdsService_FetchAds, live run 2026-11-23 jynxzi): in every item
+     * of a GQL response (batched array or single object) whose data.fetchAds.ads is an object
+     * with a `vast` string, set vast to emptyVast (no fill). Other items and fields untouched;
+     * unexpected shapes are left alone. Mutates json. Returns { json, changed }.
+     */
+    function neutraliseFetchAds(json, emptyVast) {
+      var items = Array.isArray(json) ? json : [json];
+      var changed = false;
+      for (var i = 0; i < items.length; i++) {
+        var d = items[i] && typeof items[i] === 'object' ? items[i].data : null;
+        var fa = d && typeof d === 'object' ? d.fetchAds : null;
+        var ads = fa && typeof fa === 'object' ? fa.ads : null;
+        if (ads && typeof ads === 'object' && !Array.isArray(ads) && typeof ads.vast === 'string') {
+          if (ads.vast !== emptyVast) { ads.vast = emptyVast; changed = true; }
+        }
+      }
+      return { json: json, changed: changed };
+    }
+
     return {
       buildTokenBody: buildTokenBody,
       buildTokenHeaders: buildTokenHeaders,
@@ -163,6 +203,8 @@
       isPersistedQueryNotFound: isPersistedQueryNotFound,
       fetchToken: fetchToken,
       rewritePlayerType: rewritePlayerType,
+      isClientAdGqlRequest: isClientAdGqlRequest,
+      neutraliseFetchAds: neutraliseFetchAds,
       randomDeviceId: randomDeviceId
     };
   }

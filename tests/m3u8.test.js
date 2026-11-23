@@ -201,6 +201,83 @@ test('stripAds handles CRLF input', function () {
   assert.equal(r.removed, 4);
 });
 
+// ------------------------------------------------------------------ blanking (thin case, live run 2026-11-23 jynxzi)
+// Stitched preroll with every backup also carrying it: the native playlist keeps every segment
+// (full length, same numbering); the ad segment URLs are answered with the blank response.
+function segmentLines(text) {
+  // Every #EXTINF / PROGRAM-DATE-TIME / DISCONTINUITY line and URI, in order.
+  return text.split('\n').filter(function (l) {
+    return l && (l.charAt(0) !== '#' || l.indexOf('#EXTINF') === 0 || l.indexOf('#EXT-X-PROGRAM-DATE-TIME') === 0 || l === '#EXT-X-DISCONTINUITY');
+  });
+}
+test('blankAds all-ads preroll: every segment line and the numbering kept, stitched-ad DATERANGE and prefetch removed, ad URLs returned', function () {
+  var src = fixture('all-ads.m3u8');
+  var r = M.blankAds(src, cfg);
+  assert.deepEqual(segmentLines(r.text), segmentLines(src.split('\n').filter(function (l) { return l.indexOf('#EXT-X-TWITCH-PREFETCH') !== 0; }).join('\n')));
+  assert.deepEqual(segUrls(r.text), segUrls(src));
+  assert.deepEqual(tagLines(r.text, '#EXT-X-MEDIA-SEQUENCE'), ['#EXT-X-MEDIA-SEQUENCE:50']);
+  assert.equal(tagLines(r.text, '#EXT-X-DISCONTINUITY-SEQUENCE').length, 0, 'no numbering change');
+  assert.notIncludes(r.text, 'twitch-stitched-ad');
+  assert.notIncludes(r.text, '#EXT-X-TWITCH-PREFETCH');
+  assert.equal(r.blanked, 2);
+  assert.equal(r.kept, 0);
+  assert.deepEqual(r.removedUrls, segUrls(src));
+});
+test('blankAds preroll with live segments: ad and live segments all kept in order; only the ad URLs blanked; other DATERANGEs as stripAds keeps them', function () {
+  var src = fixture('preroll.m3u8');
+  var r = M.blankAds(src, cfg);
+  assert.deepEqual(segUrls(r.text), segUrls(src));
+  assert.equal(M.countSegments(r.text), 6);
+  assert.deepEqual(tagLines(r.text, '#EXT-X-MEDIA-SEQUENCE'), ['#EXT-X-MEDIA-SEQUENCE:100']);
+  assert.deepEqual(tagLines(r.text, '#EXT-X-TWITCH-LIVE-SEQUENCE'), ['#EXT-X-TWITCH-LIVE-SEQUENCE:104']);
+  assert.equal(tagLines(r.text, '#EXTINF').length, 6);
+  assert.equal(tagLines(r.text, '#EXT-X-PROGRAM-DATE-TIME').length, 6);
+  assert.equal(tagLines(r.text, '#EXT-X-DISCONTINUITY').filter(function (l) { return l === '#EXT-X-DISCONTINUITY'; }).length, 1);
+  assert.equal(r.blanked, 4);
+  assert.equal(r.kept, 2);
+  assert.deepEqual(r.removedUrls, segUrls(src).slice(0, 4));
+  assert.notIncludes(r.text, 'twitch-stitched-ad');
+  assert.notIncludes(r.text, '#EXT-X-TWITCH-PREFETCH');
+  // Same DATERANGE handling as stripAds: non-ad classes kept, ad URL attributes neutralised.
+  assert.deepEqual(tagLines(r.text, '#EXT-X-DATERANGE'), tagLines(M.stripAds(src, cfg).text, '#EXT-X-DATERANGE'));
+  assert.includes(r.text, 'CLASS="twitch-session"');
+  assert.notIncludes(r.text, 'example.invalid');
+});
+test('blankAds midroll: live, ad, live kept in order; only the ad URLs returned', function () {
+  var src = fixture('midroll.m3u8');
+  var r = M.blankAds(src, cfg);
+  var st = M.stripAds(src, cfg);
+  assert.deepEqual(segUrls(r.text), segUrls(src));
+  assert.deepEqual(r.removedUrls, st.removedUrls);
+  assert.equal(r.blanked, st.removed);
+  assert.equal(r.kept, st.kept);
+  assert.deepEqual(tagLines(r.text, '#EXT-X-MEDIA-SEQUENCE'), tagLines(src, '#EXT-X-MEDIA-SEQUENCE'));
+});
+test('blankAds fMP4 preroll: an init segment (EXT-X-MAP) used only by ad segments is blanked too, MAP line kept', function () {
+  var src = fixture('fmp4-preroll.m3u8');
+  var r = M.blankAds(src, cfg);
+  assert.deepEqual(segUrls(r.text), segUrls(src));
+  assert.deepEqual(tagLines(r.text, '#EXT-X-MAP'), tagLines(src, '#EXT-X-MAP'));
+  assert.equal(r.blanked, 3);
+  assert.deepEqual(r.removedUrls, segUrls(src).concat(['https://synth0000.cloudfront.hls.ttvnw.net/SYNTH-ad-init.mp4']));
+});
+test('blankAds fMP4: a MAP shared by ad and live segments is not blanked', function () {
+  var src = '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXT-X-MAP:URI="https://x.invalid/init.mp4"\n' +
+    '#EXTINF:2.000,Amazon|1\nhttps://x.invalid/ad-1.mp4\n#EXTINF:2.000,live\nhttps://x.invalid/live-2.mp4\n';
+  var r = M.blankAds(src, cfg);
+  assert.deepEqual(r.removedUrls, ['https://x.invalid/ad-1.mp4']);
+});
+test('blankAds clean playlist: unchanged, nothing blanked', function () {
+  var src = fixture('clean.m3u8');
+  var r = M.blankAds(src, cfg);
+  assert.equal(r.text, src);
+  assert.equal(r.blanked, 0);
+  assert.deepEqual(r.removedUrls, []);
+});
+test('EMPTY_VAST: the empty VAST used for client-side ad answers', function () {
+  assert.equal(M.EMPTY_VAST, '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>');
+});
+
 // ------------------------------------------------------------------ master / variants
 test('parseMaster: all variants with resolution, frame rate, codecs, name', function () {
   var v = M.parseMaster(fixture('master.m3u8'));
