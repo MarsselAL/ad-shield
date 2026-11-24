@@ -39,8 +39,12 @@
  *                              page's own token was rewritten to (cfg.forcedPlayerType) is never
  *                              tried. Stripping would leave no segment (or, before anything was
  *                              served, fewer than sequencer.minSegments): no poll deadline, the
- *                              search runs to its end, and with no clean backup the original
- *                              playlist is served unmodified ('ad-passthrough'), never an empty one.
+ *                              search runs to its end, and with no clean backup the native
+ *                              playlist is served at full length with its ad segments blanked
+ *                              (m3u8.blankAds: ad DATERANGE and prefetch removed, ad segment URLs
+ *                              answered with the blank response by the worker; 'ad-blanked'),
+ *                              never an empty one and never the ad itself (Purple 2.8.0, vaft;
+ *                              live run 2026-11-23 jynxzi: every backup had its own preroll).
  *  any exception    -> the original playlist text is returned untouched.
  */
 (function (root) {
@@ -68,7 +72,7 @@
       var log = deps.log || { debug: function () {}, info: function () {}, warn: function () {}, error: function () {} };
       var media = new Map();      // media playlist URL -> { key, variant }
       var channels = new Map();   // "live:<login>" / "vod:<id>" -> channel state
-      var adSegments = new Map(); // ad segment URL -> time seen
+      var adSegments = new Map(); // ad segment URL -> { at: time seen, mp4: fMP4 playlist }
 
       function settings() {
         var s = deps.getSettings ? deps.getSettings() : null;
@@ -106,12 +110,15 @@
         emit('playlist-switch', { channel: c.id, from: from, to: to });
       }
 
-      function rememberAdSegments(urls) {
+      /** Remember ad segment URLs for the worker's blank answer; playlistText says the container
+       * (an #EXT-X-MAP means fMP4, else MPEG-TS) for URLs without a telling extension. */
+      function rememberAdSegments(urls, playlistText) {
         var t = now();
-        for (var i = 0; i < urls.length; i++) adSegments.set(urls[i], t);
+        var mp4 = String(playlistText || '').indexOf('#EXT-X-MAP:') !== -1;
+        for (var i = 0; i < urls.length; i++) adSegments.set(urls[i], { at: t, mp4: mp4 });
         if (adSegments.size > 500 || urls.length) {
           adSegments.forEach(function (seen, u) {
-            if (t - seen > cfg.adSegmentCacheTtlMs) adSegments.delete(u);
+            if (t - seen.at > cfg.adSegmentCacheTtlMs) adSegments.delete(u);
           });
           bound(adSegments, 1000);
         }
@@ -153,8 +160,14 @@
 
       function isAdSegment(url) {
         if (!adSegments.has(url)) return false;
-        if (now() - adSegments.get(url) > cfg.adSegmentCacheTtlMs) { adSegments.delete(url); return false; }
+        if (now() - adSegments.get(url).at > cfg.adSegmentCacheTtlMs) { adSegments.delete(url); return false; }
         return true;
+      }
+
+      /** 'mp4' or 'ts': the container of the playlist a remembered ad URL came from; null if unknown. */
+      function adSegmentFormat(url) {
+        var e = adSegments.get(url);
+        return e ? (e.mp4 ? 'mp4' : 'ts') : null;
       }
 
       function lock(c, type) {
@@ -471,7 +484,7 @@
       function endBreak(c) {
         emit('ad-end', {
           channel: c.id, midroll: c.midroll,
-          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : 'none')
+          outcome: c.flags.backup ? 'backup' : (c.flags.stripped ? 'stripped' : (c.flags.blanked ? 'blanked' : 'none'))
         });
         c.inBreak = false;
         c.flags = {};
@@ -493,8 +506,14 @@
           if (!info) {
             if (!ads) return Promise.resolve(text);
             var r0 = M.stripAds(text, cfg);
-            rememberAdSegments(r0.removedUrls);
-            return Promise.resolve(r0.kept > 0 ? r0.text : text);
+            if (r0.kept > 0 || r0.removed === 0) {
+              rememberAdSegments(r0.removedUrls, text);
+              return Promise.resolve(r0.kept > 0 ? r0.text : text);
+            }
+            // Nothing would be left: every segment listed, the ads answered blank.
+            var b0 = M.blankAds(text, cfg);
+            rememberAdSegments(b0.removedUrls, text);
+            return Promise.resolve(b0.text);
           }
           c = channels.get(info.key);
           if (!c) return Promise.resolve(text);
@@ -503,7 +522,7 @@
             log.warn('backup search failed, stripping', e && e.message);
             if (!ads) return { kind: 'native' };
             var st = M.stripAds(text, cfg);
-            return { kind: st.removed > 0 && st.kept < 1 ? 'original' : 'stripped', stripped: st };
+            return { kind: st.removed > 0 && st.kept < 1 ? 'blanked' : 'stripped', stripped: st };
           });
           // Answers leave in request order, so an older slow answer never overtakes a newer
           // one, and state changes (switch events, numbering) happen in that order too.
@@ -546,13 +565,14 @@
         }
         var stripped = M.stripAds(text, cfg);
         // Too thin to serve stripped: nothing left, or (nothing served yet for this channel) fewer
-        // than the sequencer's minimum, so a fresh player would give up. No poll deadline then:
-        // wait for the whole search (each step has its own timeouts); still nothing clean ->
-        // the original playlist, ad included (an ad that plays beats a dead player).
+        // than the sequencer's minimum, so a fresh player would give up (an empty playlist made
+        // it give up, d6aefe7). No poll deadline then: wait for the whole search (each step has
+        // its own timeouts); still nothing clean -> the native playlist at full length with the
+        // ad segments blanked (finalize, serveBlanked).
         var thin = stripped.removed > 0 && (stripped.kept < 1 ||
           (c.kind === 'live' && !c.served && stripped.kept < cfg.sequencer.minSegments));
-        if (!thin) rememberAdSegments(stripped.removedUrls);
-        var fallback = thin ? { kind: 'original', stripped: stripped } : { kind: 'stripped', stripped: stripped };
+        if (!thin) rememberAdSegments(stripped.removedUrls, text);
+        var fallback = thin ? { kind: 'blanked', stripped: stripped } : { kind: 'stripped', stripped: stripped };
         if (!canSwap(c)) return Promise.resolve(fallback);
         var found = search(c, info.variant);
         return (thin ? found : withDeadline(found)).then(function (b) {
@@ -581,7 +601,7 @@
       /** Apply a plan (in request order) and build the answer. */
       function finalize(c, url, original, pl) {
         c.served = true;
-        if (pl.kind === 'original') return serveOriginal(c, url, original, pl.stripped);
+        if (pl.kind === 'blanked') return sequenced(c, url, original, serveBlanked(c, original), 'native');
         if (pl.kind === 'native') {
           if (c.inBreak) endBreak(c);
           setServing(c, 'native');
@@ -604,16 +624,26 @@
         return sequenced(c, url, original, serveStripped(c, original, pl.stripped), 'native');
       }
 
-      /** Stripping would leave too little and no backup is clean: the native playlist as is. */
-      function serveOriginal(c, url, original, stripped) {
-        // The player must be able to load the ad segments (the worker blanks remembered ones).
-        for (var i = 0; i < stripped.removedUrls.length; i++) adSegments.delete(stripped.removedUrls[i]);
-        if (!c.flags.passthrough) {
-          c.flags.passthrough = true;
-          emit('ad-passthrough', { channel: c.id, midroll: c.midroll, kept: stripped.kept, removed: stripped.removed });
+      /**
+       * Stripping would leave too little and no backup is clean: the native playlist at full
+       * length with its ad segments blanked (the worker answers them with the blank response).
+       * Numbered by resequence as source 'native', like the stripped playlist, so a clean backup
+       * or native playlist continues the numbering.
+       */
+      function serveBlanked(c, original) {
+        try {
+          var bl = M.blankAds(original, cfg);
+          rememberAdSegments(bl.removedUrls, original);
+          if (!c.flags.blanked) {
+            c.flags.blanked = true;
+            emit('ad-blanked', { channel: c.id, midroll: c.midroll, blanked: bl.blanked });
+          }
+          setServing(c, 'blanked');
+          return bl.text;
+        } catch (e) {
+          emit('failure', { channel: c.id, where: 'blank', message: String(e && e.message) });
+          return original;
         }
-        setServing(c, 'native');
-        return sequenced(c, url, original, original, 'native');
       }
 
       function serveStripped(c, original, stripped) {
@@ -649,6 +679,7 @@
         onMedia: onMedia,
         knowsMedia: knowsMedia,
         isAdSegment: isAdSegment,
+        adSegmentFormat: adSegmentFormat,
         stateOf: stateOf
       };
     };

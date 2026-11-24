@@ -180,6 +180,12 @@
       }
     }
 
+    /** A DATERANGE line as a rewritten playlist keeps it: null for an ad class (removed), else
+     * the line with its ad tracking URLs neutralised (stripAds and blankAds). */
+    function keptDaterange(line, cfg) {
+      return isAdDaterange(line, cfg) ? null : neutralizeAdUrls(line, cfg);
+    }
+
     /**
      * Remove ad segments, ad DATERANGE/CUE tags and (in an ad context) prefetch / LL-HLS part
      * tags from a media playlist.
@@ -233,8 +239,8 @@
           if (line.indexOf('#EXT-X-CUE-OUT') === 0) { inCue = true; continue; }
           if (line.indexOf('#EXT-X-CUE-IN') === 0) { inCue = false; continue; }
           if (line.indexOf('#EXT-X-DATERANGE') === 0) {
-            if (isAdDaterange(line, cfg)) continue;
-            out.push(neutralizeAdUrls(line, cfg));
+            var dr = keptDaterange(line, cfg);
+            if (dr !== null) out.push(dr);
             continue;
           }
           if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) { seqIdx = out.length; out.push(line); continue; }
@@ -299,6 +305,80 @@
       return {
         text: out.join('\n') + (endsWithNewline ? '\n' : ''),
         removed: removed,
+        kept: kept,
+        removedUrls: removedUrls,
+        prefetchRemoved: prefetchRemoved
+      };
+    }
+
+    /**
+     * Blank the ads of a media playlist instead of removing them (the thin case: stripping would
+     * leave too little to play and no backup is clean; Purple 2.8.0 / vaft, live run 2026-11-23
+     * jynxzi). Every segment stays where it is with its own tags (#EXTINF, PROGRAM-DATE-TIME,
+     * DISCONTINUITY, MAP) and the numbering tags are untouched, so the playlist keeps its full
+     * length; the caller answers the returned ad URLs with a blank response (no network request).
+     * Ad DATERANGE, CUE tags and, in an ad context, prefetch / LL-HLS part tags are removed and
+     * other DATERANGEs kept with ad URLs neutralised, exactly as stripAds does.
+     * fMP4: the URI of an #EXT-X-MAP used only by ad segments (the ad's init segment) is returned
+     * too (not counted in blanked); a MAP also used by a live segment is not.
+     * Returns { text, blanked, kept, removedUrls, prefetchRemoved }.
+     */
+    function blankAds(text, cfg) {
+      var src = String(text || '');
+      var adContext = hasAds(src, cfg);
+      var live = isLivePlaylist(src);
+      var lines = splitLines(src);
+      var endsWithNewline = /\n$/.test(src);
+      if (endsWithNewline) lines.pop();
+      var out = [];
+      var extinf = null;
+      var inCue = false;
+      var blanked = 0, kept = 0, prefetchRemoved = 0;
+      var removedUrls = [];
+      var maps = [];      // { uri, ad, live } per MAP URI, in order
+      var curMap = null;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line === '') continue;
+        if (line.charAt(0) === '#') {
+          if (adContext && line.indexOf(cfg.prefetchTag) === 0) { prefetchRemoved++; continue; }
+          if (adContext && (line.indexOf('#EXT-X-PART:') === 0 || line.indexOf('#EXT-X-PRELOAD-HINT') === 0)) continue;
+          if (line.indexOf('#EXT-X-CUE-OUT') === 0) { inCue = true; continue; }
+          if (line.indexOf('#EXT-X-CUE-IN') === 0) { inCue = false; continue; }
+          if (line.indexOf('#EXT-X-DATERANGE') === 0) {
+            var dr = keptDaterange(line, cfg);
+            if (dr !== null) out.push(dr);
+            continue;
+          }
+          if (line.indexOf('#EXT-X-MAP:') === 0) {
+            var uri = parseAttributes(tagValue(line)).URI || '';
+            curMap = null;
+            for (var m = 0; m < maps.length; m++) if (maps[m].uri === uri) curMap = maps[m];
+            if (!curMap && uri) { curMap = { uri: uri, ad: false, live: false }; maps.push(curMap); }
+          } else if (line.indexOf('#EXTINF') === 0) {
+            extinf = line;
+          }
+          out.push(line);
+          continue;
+        }
+        // URI line: completes a segment, which stays listed either way.
+        if (isAdSegment(extinf, line, inCue, live, cfg)) {
+          blanked++;
+          removedUrls.push(line);
+          if (curMap) curMap.ad = true;
+        } else {
+          kept++;
+          if (curMap) curMap.live = true;
+        }
+        out.push(line);
+        extinf = null;
+      }
+      for (var k = 0; k < maps.length; k++) {
+        if (maps[k].ad && !maps[k].live) removedUrls.push(maps[k].uri);
+      }
+      return {
+        text: out.join('\n') + (endsWithNewline ? '\n' : ''),
+        blanked: blanked,
         kept: kept,
         removedUrls: removedUrls,
         prefetchRemoved: prefetchRemoved
@@ -743,8 +823,8 @@
       return false;
     }
 
-    /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
-     * embedded player with ?video=<id>. */
+    /** Empty VAST document (no fill): the "no ad" answer for client-side ad requests, also used
+     * for the VAST of a GQL FetchAdsService_FetchAds answer (src/page/page.js). */
     var EMPTY_VAST = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
 
     /** Local "no ad" answer for a client-side ad request: an empty VAST (no fill) with status
@@ -755,6 +835,8 @@
       return new Response(EMPTY_VAST, { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/xml' } });
     }
 
+    /** True when a page location (pathname, search) is VOD playback: /videos/<id>, or the
+     * embedded player with ?video=<id>. */
     function isVodPage(pathname, search, cfg) {
       if (new RegExp(cfg.vodPagePathPattern).test(String(pathname || ''))) return true;
       var q = String(search || '').replace(/^\?/, '');
@@ -773,6 +855,7 @@
       isAdSegmentUrl: isAdSegmentUrl,
       isLivePlaylist: isLivePlaylist,
       stripAds: stripAds,
+      blankAds: blankAds,
       parseMedia: parseMedia,
       newSequenceState: newSequenceState,
       resequence: resequence,
@@ -788,6 +871,7 @@
       isClientAdUrl: isClientAdUrl,
       isVodPage: isVodPage,
       noAdResponse: noAdResponse,
+      EMPTY_VAST: EMPTY_VAST,
       splitUrl: splitUrl
     };
   }

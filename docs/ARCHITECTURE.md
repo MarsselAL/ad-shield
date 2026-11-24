@@ -290,18 +290,18 @@ almost untouched.
 | `src/shared/logger.js` | all, inlined in worker | `[TAS]` logger; debug/info only when debug is on. |
 | `src/shared/frame.js` | MAIN, ISOLATED | Run in top frame and Twitch player sub-frames only; skip clips. |
 | `src/shared/stats.js` | background, bridge, popup | Event → counter mapping, badge text, event and toast texts, popup status logic. |
-| `src/core/m3u8.js` | MAIN, inlined in worker, tests | Pure HLS functions: `hasAds`, `isMidroll`, `classifyDateranges`, `stripAds`, `parseMedia`, `resequence`, `parseMaster`, `pickVariant`, `filterMasterCodecs`, `buildUsherUrl`, `matchUsher`, `isAdSegmentUrl`. No DOM, no `URL`, no `chrome.*`. |
-| `src/core/gql.js` | MAIN, tests | PlaybackAccessToken body/headers, header capture, playerType rewrite, token parsing. |
+| `src/core/m3u8.js` | MAIN, inlined in worker, tests | Pure HLS functions: `hasAds`, `isMidroll`, `classifyDateranges`, `stripAds`, `blankAds`, `parseMedia`, `resequence`, `parseMaster`, `pickVariant`, `filterMasterCodecs`, `buildUsherUrl`, `matchUsher`, `isAdSegmentUrl`. No DOM, no `URL`, no `chrome.*`. |
+| `src/core/gql.js` | MAIN, tests | PlaybackAccessToken body/headers, header capture, playerType rewrite, token parsing; `isClientAdGqlRequest` / `neutraliseFetchAds` for the GQL client-side ad answer. |
 | `src/core/processor.js` | inlined in worker, tests | The backup / strip state machine with injected `fetchText`, `getToken`, `now`, `emit`, `setTimeout`: poll deadline, single-flight search, ordered answers, renumbering. |
 | `src/worker/worker-main.js` | inlined in worker | Replaces the worker's `fetch`, talks to the page, serves blank ad-segment answers. |
 | `src/core/worker-source.js` | MAIN, tests | Builds the replacement worker source from the factories' `toString()` plus JSON data plus Twitch's original source. |
 | `src/page/health.js` | MAIN | Playback metrics while the video plays (debug-only `health` events) and the one gated pause/play nudge after a playlist switch (2.0; replaced `recovery.js`). |
-| `src/page/page.js` | MAIN | fetch hook, Worker hook, token requests, event relay. |
+| `src/page/page.js` | MAIN | fetch hook (incl. the GQL `FetchAdsService_FetchAds` answer: VAST emptied), Worker hook, token requests, event relay. |
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements; hides display-ad containers beside the player and mutes/pauses videos in them. |
 | `src/background/service-worker.js` | service worker | Settings defaults, script registration, DNR rulesets, stats, badge. |
 | `src/popup/*`, `src/options/*`, `src/ui/common.css` | extension pages | UI. Light/dark via `prefers-color-scheme`, no external resources. |
-| `rules/client_ads.json`, `rules/trackers.json` | DNR | Static rules, toggled with `updateEnabledRulesets`. `client_ads` (on with the master switch): allow rules, priority 5, so Twitch's client-side ad requests (`edge.ads.twitch.tv`, Amazon `vaes` ad path) from twitch.tv pages never fail on live streams although EasyList blocks them; VOD ad requests are answered in the page / worker (`settings.blockClientAds`). `trackers`: block rules, off by default. |
+| `rules/client_ads.json`, `rules/trackers.json` | DNR | Static rules, toggled with `updateEnabledRulesets`. `client_ads` (on with the master switch): allow rules, priority 5, so Twitch's client-side ad requests (`edge.ads.twitch.tv`, Amazon `vaes` ad path) from twitch.tv pages never fail on live streams although EasyList blocks them; VOD ad requests are answered in the page / worker (`settings.blockClientAds`). With the same setting the page lets a GQL request naming `cfg.clientAdGqlOperations` (`FetchAdsService_FetchAds`) go out and replaces `data.fetchAds.ads.vast` in its answer with the empty VAST (`m3u8.EMPTY_VAST`); other batched items, non-JSON or unexpected answers are untouched (live run 2026-11-23 jynxzi: an `OUTSTREAM_MIRROR_PBYP_VIDEO` ad above chat). `trackers`: block rules, off by default. |
 
 ### Inlining into the worker
 
@@ -416,11 +416,22 @@ config values:
 - **Empty after stripping**: the newest known segments are listed again with their numbers
   (`resequence`, so the player gets nothing new and nothing renumbered); 1.x's replay of the
   last clean playlist is gone.
-- **Ad segment answers**: ad segments never appear in served playlists. A leftover request for
-  a remembered ad URL is answered locally with one MPEG-TS null packet (or an MP4 `ftyp`),
-  i.e. no media. Chosen over an empty 204 (cannot be tested against Twitch's player here) and
-  over a generated silent/black segment (it would have to match the stream's codecs and
-  timestamps; a mismatch is a decode error, worse than a hole).
+- **Too thin to strip, no clean backup** (all segments ads, or a fresh player with fewer than
+  `sequencer.minSegments` left): the search runs to its end (no poll deadline); with nothing
+  clean the native playlist is served **blanked** (`m3u8.blankAds`): every segment with its
+  `#EXTINF`, date-time, DISCONTINUITY and numbering kept, ad DATERANGE / CUE / prefetch removed
+  as in stripping, and the ad URLs (plus an fMP4 init segment used only by ads) answered blank
+  by the worker. Event `ad-blanked` (counted as stripped, same toast), serving `blanked`,
+  renumbered as source `native`. 2.0.1 served the original playlist here (`ad-passthrough`, the
+  ad played; live run 2026-11-23 jynxzi: every backup had its own preroll); an empty playlist
+  makes a fresh player give up (d6aefe7). Same method as Purple 2.8.0 and vaft.
+- **Ad segment answers**: ad segments never appear in stripped playlists; in a blanked one they
+  are all listed. A request for a remembered ad URL is answered locally with one MPEG-TS null
+  packet (or an MP4 `ftyp`; without a `.ts` / `.mp4`-like extension the playlist's container
+  decides: `#EXT-X-MAP` means fMP4), i.e. no media. Chosen over an empty 204 (cannot be
+  tested against Twitch's player here) and over a generated silent/black segment (it would
+  have to match the stream's codecs and timestamps; a mismatch is a decode error, worse than
+  a hole).
 - **Off switch while a tab is open**: the worker and fetch hooks see `enabled: false` and become
   passive at once; the scripts disappear on the next reload.
 

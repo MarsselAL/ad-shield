@@ -155,6 +155,12 @@
     // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
     clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
     clientAdPaths: ['/ads', '/ads/format', '/2018-01-01/3p/ads'],
+    // GQL operations that fetch a client-side ad (settings.blockClientAds): the request goes out,
+    // and the answer's data.fetchAds.ads.vast is replaced with the empty VAST (m3u8.EMPTY_VAST;
+    // gql.neutraliseFetchAds, src/page/page.js). Source: live run 2026-11-23 jynxzi
+    // (FetchAdsService_FetchAds answered an OUTSTREAM_MIRROR_PBYP_VIDEO VAST that then played
+    // above chat, "Ad 1 of 2").
+    clientAdGqlOperations: ['FetchAdsService_FetchAds'],
     // VOD pages: www.twitch.tv/videos/<id>; the embedded player with ?video=<id>.
     vodPagePathPattern: '^/videos/\\d+',
     vodPageQueryParam: 'video',
@@ -251,10 +257,12 @@
 
     // Tiny valid responses served for ad segment fetches (research-technique.md §3 item 4(a)).
     // .ts: one MPEG-TS null packet (188 bytes, PID 0x1FFF). Other: a 40-byte MP4 'ftyp' box.
-    // Only a fallback: ad segments never appear in playlists we serve, so the player should not
-    // ask for them. Kept deliberately media-free: a generated silent/black segment cannot match
-    // the stream's codec parameters without parsing it, and a mismatch is a decode error, while
-    // demuxers drop null packets. See
+    // Without a telling extension the playlist's container decides (fMP4 if it has #EXT-X-MAP).
+    // Stripped playlists list no ad segment; a blanked one (the thin case, m3u8.blankAds: no
+    // clean backup and stripping would leave too little) lists them all and the player gets
+    // these answers for them (Purple 2.8.0 / vaft). Kept deliberately media-free: a generated
+    // silent/black segment cannot match the stream's codec parameters without parsing it, and a
+    // mismatch is a decode error, while demuxers drop null packets. See
     // docs/ARCHITECTURE.md "Ad segment answers".
     blankTsBase64: 'Rx//EP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8=',
     blankMp4Base64: 'AAAAKGZ0eXBtcDQyAAAAAG1wNDJtcDQxaXNvbWlzbzJhdmMxZGFzaA==',

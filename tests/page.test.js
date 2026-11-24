@@ -242,3 +242,55 @@ test('client-side ad requests: answered locally with a no-fill VAST on live and 
     loc.pathname = saved.pathname; loc.search = saved.search;
   });
 });
+
+// Client-side ad via GQL (live run 2026-11-23 jynxzi): FetchAdsService_FetchAds answered with a VAST
+// that Twitch then played above chat. The request goes out; the answer's VAST is emptied.
+test('GQL FetchAdsService_FetchAds: answer rewritten to the empty VAST; other GQL, blockClientAds off, disabled, non-JSON: untouched', function () {
+  env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  globalThis.Response = function (body, init) { this.body = body; this.status = init.status; this.statusText = init.statusText; this.headers = init.headers; };
+  var EMPTY = '<?xml version="1.0" encoding="UTF-8"?><VAST version="3.0"></VAST>';
+  var FA = JSON.stringify([{ operationName: 'FetchAdsService_FetchAds', variables: { input: { adSlot: 'x' } }, extensions: {} }]);
+  var OTHER = JSON.stringify([{ operationName: 'ChannelShell', variables: { login: 'somechannel' } }]);
+  env.fetchJson = function (input, init) {
+    return init.body === FA
+      ? [{ data: { fetchAds: { ads: { format: 'OUTSTREAM_MIRROR_PBYP_VIDEO', vast: '<VAST version="3.0"><Ad id="1"><InLine></InLine></Ad></VAST>' } } }, extensions: { durationMilliseconds: 5 } }]
+      : [{ data: { user: { id: '1' } } }];
+  };
+  function call(body) {
+    var before = env.fetches.length;
+    return fetch(cfg.gql.url, { method: 'POST', body: body }).then(function (r) { return { sent: env.fetches.length - before, r: r, orig: env.lastResponse }; });
+  }
+  return call(FA).then(function (x) {
+    assert.equal(x.sent, 1, 'the real request goes out');
+    assert.ok(x.r !== x.orig, 'a rewritten response');
+    var j = JSON.parse(x.r.body);
+    assert.equal(j[0].data.fetchAds.ads.vast, EMPTY);
+    assert.equal(j[0].data.fetchAds.ads.format, 'OUTSTREAM_MIRROR_PBYP_VIDEO');
+    assert.equal(j[0].extensions.durationMilliseconds, 5);
+    assert.equal(x.r.status, 200);
+    assert.equal(x.r.statusText, 'OK');
+    assert.equal(x.r.headers['content-type'], 'application/json');
+    assert.equal(x.r.headers['content-length'], undefined, 'content-length dropped');
+    assert.equal(x.r.headers['content-encoding'], undefined, 'content-encoding dropped');
+    return call(OTHER);
+  }).then(function (x) {
+    assert.equal(x.r, x.orig, 'other GQL: the original response');
+    env.fetchRaw = function () { return 'not json'; };
+    return call(FA);
+  }).then(function (x) {
+    env.fetchRaw = null;
+    assert.equal(x.r, x.orig, 'non-JSON: the original response');
+    var s = settingsWith(true); s.blockClientAds = false;
+    env.toPage(cfg, { type: 'settings', settings: s });
+    return call(FA);
+  }).then(function (x) {
+    assert.equal(x.r, x.orig, 'blockClientAds off: the original response');
+    env.toPage(cfg, { type: 'settings', settings: settingsWith(false) });
+    return call(FA);
+  }).then(function (x) {
+    assert.equal(x.r, x.orig, 'disabled: the original response');
+    assert.equal(x.sent, 1);
+    env.fetchJson = null;
+    env.toPage(cfg, { type: 'settings', settings: settingsWith(true) });
+  });
+});

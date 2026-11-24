@@ -102,10 +102,22 @@ function installBrowserStubs(opts) {
   g.location = { hostname: 'www.twitch.tv', pathname: '/somechannel', href: 'https://www.twitch.tv/somechannel' };
   g.top = g;
 
+  // env.fetchJson(input, init) -> the JSON answer; env.fetchRaw(input, init) -> a raw text answer
+  // (wins when not null). env.lastResponse: the last response object handed out.
   g.fetch = function (input, init) {
     env.fetches.push({ input: input, init: init });
     var json = env.fetchJson ? env.fetchJson(input, init) : {};
-    return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(json); } });
+    var raw = env.fetchRaw ? env.fetchRaw(input, init) : null;
+    var hs = { 'content-type': 'application/json', 'content-length': '999', 'content-encoding': 'gzip' };
+    var res = {
+      ok: true, status: 200, statusText: 'OK', url: typeof input === 'string' ? input : String(input && input.url),
+      headers: { forEach: function (cb) { Object.keys(hs).forEach(function (k) { cb(hs[k], k); }); } },
+      json: function () { return Promise.resolve(raw !== null ? JSON.parse(raw) : json); },
+      text: function () { return Promise.resolve(raw !== null ? raw : JSON.stringify(json)); },
+      clone: function () { return res; }
+    };
+    env.lastResponse = res;
+    return Promise.resolve(res);
   };
 
   // open on the prototype (as in browsers), so page.js can hook XMLHttpRequest.prototype.open.

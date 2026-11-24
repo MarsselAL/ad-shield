@@ -223,6 +223,37 @@ test('all backups have ads: stripped playlist served; ad segment fetch answered 
     });
 });
 
+test('all backups have ads on a fresh preroll: blanked native served; ad segments without an extension answered with blank TS', function () {
+  // jynxzi 2026-11-23: ad-only preroll, some segment URLs without an extension.
+  var SEG = 'https://video-edge-c0ffee.sea02.abs.hls.ttvnw.net/v1/segment/';
+  var preroll = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n' +
+    '#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad",START-DATE="2026-11-23T20:00:00.000Z",DURATION=6.006,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"\n' +
+    '#EXT-X-DISCONTINUITY\n#EXTINF:2.002,Amazon|1\n' + SEG + 'ad-0\n' +
+    '#EXT-X-DISCONTINUITY\n#EXTINF:2.002,Amazon|1\n' + SEG + 'ad-1.ts\n' +
+    '#EXT-X-DISCONTINUITY\n#EXTINF:2.002,Amazon|1\n' + SEG + 'ad-2\n';
+  var routes = {};
+  routes[MASTER_URL.replace('&parent_domains=example.invalid', '')] = MASTER;
+  routes[NATIVE_720] = preroll;
+  cfg.backupPlayerTypes.forEach(function (t) {
+    routes['https://video-weaver.xyz01.hls.ttvnw.net/v1/playlist/SYNTH-' + t + '-720p60.m3u8'] = preroll;
+  });
+  var scope = makeScope(routes);
+  runInWorker(scope);
+  return scope.fetch(MASTER_URL).then(function () { return scope.fetch(NATIVE_720); })
+    .then(function (r) { return r.text(); })
+    .then(function (t) {
+      assert.deepEqual(segUrls(t), [SEG + 'ad-0', SEG + 'ad-1.ts', SEG + 'ad-2'], 'full length');
+      assert.notIncludes(t, 'twitch-stitched-ad');
+      var before = scope.realCalls.length;
+      return scope.fetch(SEG + 'ad-0').then(function (r) {
+        assert.equal(scope.realCalls.length, before, 'no network request for the ad segment');
+        assert.equal(r.status, 200);
+        assert.equal(r.body.length, 188, 'TS blank for an MPEG-TS playlist segment without an extension');
+        assert.equal(r.headers['Content-Type'], 'video/mp2t');
+      });
+    });
+});
+
 test('internal exception in the hook: request passed to the real fetch untouched', function () {
   var scope = makeScope({});
   runInWorker(scope);
