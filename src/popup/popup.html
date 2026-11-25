@@ -111,6 +111,16 @@
     </div>
   </section>
 
+  <div class="sheet-backdrop prompt-backdrop" id="support-prompt" role="dialog" aria-modal="true" aria-labelledby="prompt-text" hidden>
+    <div class="sheet prompt">
+      <span class="heart" aria-hidden="true"><svg class="ico"><use href="#i-heart"/></svg></span>
+      <p id="prompt-text"></p>
+      <button type="button" class="primary block" id="prompt-support">Support AdBrake <span aria-hidden="true">↗</span></button>
+      <button type="button" class="block" id="prompt-later">Not now</button>
+      <button type="button" class="link-btn muted-link" id="prompt-never">Don’t ask again</button>
+    </div>
+  </div>
+
   <div class="sheet-backdrop" id="qr-sheet" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
     <div class="sheet">
       <h2 id="qr-title">Pay with your phone</h2>
@@ -125,6 +135,7 @@
   <script src="../shared/blocking.js"></script>
   <script src="../shared/stats.js"></script>
   <script src="../shared/donate.js"></script>
+  <script src="../shared/supportprompt.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

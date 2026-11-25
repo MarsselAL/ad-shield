@@ -41,6 +41,7 @@ Not every ad can be blocked (Chrome's rule system cannot express every filter ty
 
 SUPPORT
 AdBrake is free. If it saves you time, an optional tip is welcome: https://revolut.me/marsel951u
+Now and then, after a milestone, the popup may show a short optional message asking for support. It never appears on web pages, can be dismissed for 60 days or for good, and can be turned off in Settings.
 
 SOURCE CODE AND ISSUES
 https://github.com/MarsselAL/ad-shield
@@ -50,8 +51,9 @@ Notes: v1 was rejected for keyword spam (Yellow Argon, 22 Nov 2026) over the lin
 brands at all; keep it that way (attribution lives in NOTICE.md, not the listing).
 "No telemetry / no remote config" are true (see `privacy-policy.md`). The repo is private
 today; the GitHub link must go live (repo public) before submission or be removed.
-The Revolut link is the only donation link in the listing, as requested. The popup and settings
-page also show USDC and BTC addresses (see `review-risks.md`, risk 6).
+The Revolut link is the only donation link in the listing, as requested. The settings page also
+shows USDC and BTC addresses (see `review-risks.md`, risk 6); the popup shows only the Revolut link
+and its QR code, plus the occasional support note described in the listing text.
 
 ## Edge search terms (max 7, ≤30 chars each, ≤21 words total)
 Edge Partner Center › Store listings › Search terms; one term per box:

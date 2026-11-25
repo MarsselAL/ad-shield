@@ -59,6 +59,11 @@
           </div>
         </div>
       </div>
+      <div class="opt row reminder-row">
+        <span class="opt-ico" aria-hidden="true"><svg class="ico"><use href="#i-bell"/></svg></span>
+        <div><strong>Occasional support reminders</strong><p class="muted">After a milestone (from 1,000 ads blocked, and at least 7 days after install) the popup may show a short note asking for support. At most once every 60 days; never in web pages.</p></div>
+        <label class="switch"><input type="checkbox" id="support-reminders" aria-label="Occasional support reminders" checked><span class="track"></span></label>
+      </div>
       <details class="crypto" id="support-crypto">
         <summary>Crypto</summary>
         <div class="coin-row" id="support-usdc" hidden>
@@ -253,6 +258,7 @@
   <script src="../shared/userfilters.js"></script>
   <script src="../shared/lists.js"></script>
   <script src="../shared/donate.js"></script>
+  <script src="../shared/supportprompt.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

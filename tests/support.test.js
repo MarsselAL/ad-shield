@@ -6,7 +6,7 @@
  * written in this file: every expected value is read from donate.js or docs/donate.txt.
  */
 loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/blocking.js', 'src/shared/stats.js',
-  'src/shared/userfilters.js', 'src/shared/lists.js', 'src/shared/donate.js');
+  'src/shared/userfilters.js', 'src/shared/lists.js', 'src/shared/donate.js', 'src/shared/supportprompt.js');
 
 var REAL_DONATE = __TAS__.donate;
 
@@ -277,4 +277,64 @@ test('support: settings page hides the card when nothing is set', function () {
   var env = runOptions({ url: '', usdcErc20: '', btc: '' });
   assert.equal(env.els['support'].hidden, true);
   return settle();
+});
+
+// ------------------------------------------------------------------------------ support note (popup)
+
+/** Runs popup.js on a web tab with `ads` blocked on the page and `store` as chrome.storage.local. */
+function runPopupWithTab(store, ads) {
+  var env = installPage('src/popup/popup.html');
+  env.store = store;
+  chrome.runtime.getManifest = function () { return { version: '2.0.3' }; };
+  chrome.tabs.query = function () { return Promise.resolve([{ id: 7, url: 'https://news.example/' }]); };
+  chrome.storage.local.get = function (keys) {
+    var out = {};
+    [].concat(keys).forEach(function (k) { if (k in store) out[k] = JSON.parse(JSON.stringify(store[k])); });
+    return Promise.resolve(out);
+  };
+  chrome.storage.local.set = function (o) { Object.keys(o).forEach(function (k) { store[k] = o[k]; }); return Promise.resolve(); };
+  chrome.storage.session.get = function () { return Promise.resolve({ 'page:7': { t: 1234 } }); };
+  chrome.declarativeNetRequest.getMatchedRules = function () {
+    var infos = [];
+    for (var i = 0; i < ads; i++) infos.push({ rule: { ruleId: 10 + i, rulesetId: 'ads_1' } });
+    return Promise.resolve({ rulesMatchedInfo: infos });
+  };
+  __TAS__.donate = REAL_DONATE;
+  load('src/popup/popup.js');
+  return env;
+}
+
+test('support note: shown in the popup at the first milestone, "at least" the counted ads', function () {
+  var SP = __TAS__.supportPrompt;
+  var store = {};
+  store[SP.INSTALL_KEY] = Date.now() - 30 * SP.DAY;
+  store[SP.SEEN_KEY] = { total: 990, lastKey: 'old', lastCount: 4 };
+  store[SP.STATE_KEY] = { version: '2.0.3' };
+  var env = runPopupWithTab(store, 20);
+  return settle().then(settle).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, false, 'note shown');
+    assert.includes(env.els['prompt-text'].textContent, 'at least 1,010 ads');
+    assert.equal(store[SP.SEEN_KEY].total, 1010);
+    assert.equal(store[SP.STATE_KEY].lastMilestone, 1000, 'milestone used up');
+    env.els['prompt-later'].fire('click');
+    return settle();
+  }).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, true, 'Not now closes');
+    assert.ok(store[SP.STATE_KEY].snoozedUntil > Date.now() + 59 * SP.DAY, 'snoozed 60 days');
+    assert.deepEqual(env.tabsCreated, [], 'no tab opened by itself');
+  });
+});
+
+test('support note: not on the first popup open after an update; older installs get an install date', function () {
+  var SP = __TAS__.supportPrompt;
+  var store = {};
+  store[SP.SEEN_KEY] = { total: 50000 };
+  store[SP.STATE_KEY] = { version: '2.0.2' };
+  var env = runPopupWithTab(store, 3);
+  return settle().then(settle).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, true, 'not shown');
+    assert.equal(store[SP.STATE_KEY].version, '2.0.3', 'version noted');
+    assert.ok(store[SP.INSTALL_KEY] > 0, 'install date set now');
+    assert.equal(store[SP.SEEN_KEY].total, 50003);
+  });
 });

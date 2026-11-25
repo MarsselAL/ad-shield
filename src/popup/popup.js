@@ -11,7 +11,8 @@
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
  * "Support AdBrake" card below the "This website" card: the tip link from src/shared/donate.js
  * and "Pay with phone", a sheet with the link's QR code (Esc closes it). Hidden when no link is set.
- * The crypto addresses are only on the settings page.
+ * The crypto addresses are only on the settings page. The occasional support note (a sheet over the
+ * popup, src/shared/supportprompt.js) can show after a milestone; "Not now" or Esc snooze it.
  * Layout: header (icon, name, Settings button), the big power button (#enabled, the master switch)
  * with the "Ad Blocking On/Off/Paused" line, the page counts, the "This website" card (its chevron
  * opens the per-site switch #site-on), quick actions ("Hide an element" and "Allowlist site" /
@@ -80,6 +81,7 @@
         setCount('g-cookies', c.cookies);
         setCount('g-banners', c.banners + (page.hidden || 0) + (page.rejected || 0));
         $('counts-note').textContent = '';
+        supportNote(c.ads, page.t);
       }, function () {
         ['g-ads', 'g-trackers', 'g-cookies'].forEach(function (id) { setCount(id, null); });
         setCount('g-banners', (page.hidden || 0) + (page.rejected || 0));
@@ -229,6 +231,82 @@
     });
   }
   $('support').hidden = !donate.url;
+
+  // ---------------------------------------------------------------- occasional support note
+  // src/shared/supportprompt.js decides; this adds the page's ads count to a lower-bound total
+  // (no extra getMatchedRules calls) and shows the note over the popup at most at a milestone.
+  var SP = ns.supportPrompt;
+  var promptChecked = false;
+
+  function updateState(fn) {
+    return chrome.storage.local.get(SP.STATE_KEY).then(function (r) {
+      var o = {};
+      o[SP.STATE_KEY] = fn(r[SP.STATE_KEY]);
+      return chrome.storage.local.set(o);
+    }).catch(function () {});
+  }
+
+  function hidePrompt() { $('support-prompt').hidden = true; }
+
+  function showPrompt(count) {
+    $('prompt-text').textContent = SP.message(count);
+    $('support-prompt').hidden = false;
+    try { $('prompt-support').focus(); } catch (e) {}
+  }
+
+  function supportNote(ads, loadedAt) {
+    if (!SP || !activeTab || typeof activeTab.id !== 'number') return Promise.resolve();
+    var key = SP.pageKey(activeTab.id, tabUrl(), loadedAt);
+    return chrome.storage.local.get([SP.SEEN_KEY, SP.INSTALL_KEY, SP.STATE_KEY]).then(function (r) {
+      var now = Date.now();
+      var seen = SP.accumulate(r[SP.SEEN_KEY], key, ads);
+      var o = {};
+      o[SP.SEEN_KEY] = seen;
+      var installedAt = r[SP.INSTALL_KEY];
+      if (!installedAt) { installedAt = now; o[SP.INSTALL_KEY] = now; } // installed before this key existed
+      if (!promptChecked) {
+        promptChecked = true;
+        var version = chrome.runtime.getManifest().version;
+        var d = SP.decide({ now: now, installedAt: installedAt, seen: seen, state: r[SP.STATE_KEY],
+          version: version, hasLink: !!donate.url });
+        var st = SP.normalizeState(r[SP.STATE_KEY]);
+        st.version = version;
+        if (d.show) {
+          st = SP.shown(st, now, d.milestone);
+          showPrompt(d.count);
+        }
+        o[SP.STATE_KEY] = st;
+      }
+      return chrome.storage.local.set(o);
+    }).catch(function () {});
+  }
+
+  if (SP) {
+    $('prompt-support').addEventListener('click', function () {
+      hidePrompt();
+      if (donate.url) chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
+    });
+    $('prompt-later').addEventListener('click', function () {
+      hidePrompt();
+      updateState(function (st) { return SP.snooze(st, Date.now()); });
+    });
+    $('prompt-never').addEventListener('click', function () {
+      hidePrompt();
+      updateState(function (st) { return SP.never(st); });
+    });
+    $('support-prompt').addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        hidePrompt();
+        updateState(function (st) { return SP.snooze(st, Date.now()); });
+      } else if (e.key === 'Tab') { // keep focus inside the note
+        var order = [$('prompt-support'), $('prompt-later'), $('prompt-never')];
+        var i = order.indexOf(document.activeElement);
+        e.preventDefault();
+        order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length].focus();
+      }
+    });
+  }
 
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 

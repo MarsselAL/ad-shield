@@ -1,7 +1,8 @@
 /*
  * Background service worker (classic script).
  *
- *  - settings defaults on install/update (chrome.storage.local "settings");
+ *  - settings defaults on install/update (chrome.storage.local "settings"); the install date for
+ *    the popup's occasional support note ("adbrakeInstalledAt", src/shared/supportprompt.js);
  *  - enables / disables the static DNR rulesets "client_ads" (allow rules that let Twitch's own
  *    client-side ad requests through, on whenever the extension is on) and "trackers";
  *  - per-tab stats in chrome.storage.session, lifetime stats in chrome.storage.local, badge.
@@ -16,7 +17,8 @@
  * Nothing is sent: no telemetry, no remote config.
  */
 /* global importScripts, chrome */
-importScripts('/src/config.js', '/src/shared/settings.js', '/src/shared/logger.js', '/src/shared/stats.js');
+importScripts('/src/config.js', '/src/shared/settings.js', '/src/shared/logger.js', '/src/shared/stats.js',
+  '/src/shared/supportprompt.js');
 // General blocking (all sites). The autoconsent library is optional: if it fails to load,
 // cookie pop-ups are only hidden, never auto-rejected.
 try {
@@ -96,6 +98,16 @@ importScripts('/src/shared/blocking.js', '/src/shared/userfilters.js', '/src/sha
       });
     });
     enqueue(removeLegacyScripts);
+    if (details && details.reason === 'install') {
+      // Install date for the occasional support note in the popup (src/shared/supportprompt.js).
+      var SP = ns.supportPrompt;
+      chrome.storage.local.get(SP.INSTALL_KEY).then(function (r) {
+        if (r[SP.INSTALL_KEY]) return null;
+        var o = {};
+        o[SP.INSTALL_KEY] = Date.now();
+        return chrome.storage.local.set(o);
+      }).catch(function () {});
+    }
     apply();
     log.debug('installed/updated:', details && details.reason);
   });

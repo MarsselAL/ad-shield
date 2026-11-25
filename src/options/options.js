@@ -240,6 +240,23 @@
   $('support-crypto').hidden = !(donate && (donate.usdcErc20 || donate.btc));
   if (!donate || (!donate.url && !donate.usdcErc20 && !donate.btc)) $('support').hidden = true;
 
+  // Occasional support reminders in the popup (src/shared/supportprompt.js); on by default.
+  var SP = ns.supportPrompt;
+  if (SP) {
+    chrome.storage.local.get(SP.STATE_KEY).then(function (r) {
+      var st = SP.normalizeState(r[SP.STATE_KEY]);
+      $('support-reminders').checked = st.reminders && !st.never;
+    }).catch(function () {});
+    $('support-reminders').addEventListener('change', function (e) {
+      var on = e.target.checked;
+      chrome.storage.local.get(SP.STATE_KEY).then(function (r) {
+        var o = {};
+        o[SP.STATE_KEY] = SP.setReminders(r[SP.STATE_KEY], on);
+        return chrome.storage.local.set(o);
+      }).catch(function () {});
+    });
+  }
+
   $('known').textContent = cfg.knownPlayerTypes.join(', ');
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
