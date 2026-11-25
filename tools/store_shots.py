@@ -6,7 +6,7 @@
 1. Launches Chrome headless with a throwaway profile, loads this folder unpacked
    (CDP Extensions.loadUnpacked, the same pipe client as tools/live_test.py).
 2. Opens a real web page (default: a news site), waits for it to load, then opens the popup
-   (popup.html, two panels, 744 px wide) as a background tab in the same window, so the popup reads
+   (popup.html, two panels, 630 px wide) as a background tab in the same window, so the popup reads
    the news tab as "the current tab" and shows its real counts. Captures the popup (light and
    dark) and the settings page (as it is, a store variant, and dark) at 2x. Store variants show
    no third-party names: the page's host reads news.example.com, the popup's tip button (its
@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 import live_test as lt  # noqa: E402
 
 DEFAULT_SITE = "https://www.cnn.com"
-POPUP_W = 744  # src/popup/popup.css: body width
+POPUP_W = 630  # src/popup/popup.css: body width
 
 
 def shot(cdp, sid, path, clip=None, scale=2):
@@ -80,7 +80,7 @@ def capture(out_raw, site):
         cdp.send("Target.activateTarget", {"targetId": news_tid})
 
         # 2. Popup as a background tab of the same window: tabs.query({active, currentWindow}) = news tab.
-        # The popup is two panels side by side (controls | Support AdBrake), 744 px wide.
+        # The popup is two panels side by side (controls | Support AdBrake), 630 px wide.
         # Store variant: the page's host name is shown as news.example.com and the tip button, whose
         # label names payment wallets, is hidden, so the images name no third-party brand
         # (docs/store/review-risks.md). The counts are what the popup really counted on that page.
