@@ -10,15 +10,20 @@
   var cfg = ns.config;
 
   var STORAGE_KEY = 'settings';
+  // twitchAdQuality: what plays during a Twitch stitched ad break. 'low' (default): the first
+  // ad-free stream of any type, a low-quality bridge included, then native quality when the
+  // break ends. 'full': same-resolution backups first, the 360p bridge only as a last resort.
+  var AD_QUALITY_VALUES = ['low', 'full'];
 
   function defaults() {
     return {
       enabled: true,              // master switch: off = hooks pass everything through, rulesets disabled
-      blockClientAds: true,       // VOD pages only: Twitch's client-side ad requests answered with "no ad" (page + worker hooks)
+      blockClientAds: true,       // Twitch's client-side ad requests answered with "no ad" (empty VAST), live and VOD (page + worker hooks)
       blockTrackers: false,       // DNR ruleset "trackers" (off by default)
       hideStandaloneAds: true,    // cosmetic: hide/mute standalone ad <video> elements and display ads beside the player
       preferAvc: true,            // drop HEVC/AV1 variants when AVC exists; prefer AVC backups
       playerTypes: cfg.backupPlayerTypes.slice(),
+      twitchAdQuality: 'low',     // 'low' | 'full' (AD_QUALITY_VALUES)
       noticeOnAd: true,           // small toast in the player when an ad is handled
       debug: false                // verbose [TAS] logging
     };
@@ -75,6 +80,8 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(s.playerTypes);
         out.playerTypes = v.ok && !isPreviousDefault(v.value) ? v.value : d.playerTypes;
+      } else if (k === 'twitchAdQuality') {
+        out[k] = AD_QUALITY_VALUES.indexOf(s[k]) !== -1 ? s[k] : d[k];
       } else if (typeof d[k] === 'boolean') {
         out[k] = typeof s[k] === 'boolean' ? s[k] : d[k];
       } else {
@@ -93,6 +100,10 @@
       if (k === 'playerTypes') {
         var v = validatePlayerTypes(candidate.playerTypes);
         errors = errors.concat(v.errors);
+      } else if (k === 'twitchAdQuality') {
+        if (candidate[k] !== undefined && AD_QUALITY_VALUES.indexOf(candidate[k]) === -1) {
+          errors.push('"twitchAdQuality" must be one of: ' + AD_QUALITY_VALUES.join(', ') + '.');
+        }
       } else if (typeof d[k] === 'boolean' && candidate[k] !== undefined && typeof candidate[k] !== 'boolean') {
         errors.push('"' + k + '" must be true or false.');
       }
@@ -102,6 +113,7 @@
 
   ns.settings = {
     STORAGE_KEY: STORAGE_KEY,
+    AD_QUALITY_VALUES: AD_QUALITY_VALUES,
     defaults: defaults,
     normalize: normalize,
     validate: validate,

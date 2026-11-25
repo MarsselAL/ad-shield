@@ -51,3 +51,13 @@ a.button.primary { background: var(--accent); color: var(--accent-fg); border-co
   min-width: 0;
 }
 .warn-note { color: var(--warn); font-size: 12px; margin: 6px 0 0; }
+select {
+  font: inherit;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  max-width: 50%;
+  flex-shrink: 0;
+}

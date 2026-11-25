@@ -25,7 +25,7 @@
   }
 
   var config = {
-    version: '2.0.0',
+    version: '2.0.1',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -147,9 +147,10 @@
     usherIgnoreSubstrings: ['picture-by-picture'],
 
     // Client-side ad requests (CSAI): the page or its video worker asks Twitch's ad server for
-    // an ad. Answered locally with "no ad" (settings.blockClientAds) on VOD playback only; live
-    // requests always go out (TTV-AB does the same; a failed ad request on a live stream is the
-    // likely trigger of Twitch's "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md).
+    // an ad. Answered locally with a successful "no ad" (empty VAST, 200; settings.blockClientAds) on
+    // live and VOD. 2.0.0 let live requests go out (a *failed* request is the likely trigger of the
+    // "you're running ad block" notice, docs/research-2026-11-22-twitch-wall.md), but then the ad
+    // played (2026-11-22: page fetch edge.ads.twitch.tv/ads -> olv-ad-player -> Amazon mp4).
     // Until 2.0 a DNR ruleset (client_ads) blocked edge.ads.twitch.tv and apstag.js on every page.
     // Source: TTV-AB src/modules/hooks.ts _isClientSideAdRequestUrl (origins and paths).
     clientAdOrigins: ['https://edge.ads.twitch.tv', 'https://vaes.amazon-adsystem.com'],
@@ -179,6 +180,17 @@
     // accepts them at a lower resolution, only after every other type failed, and never pins them.
     // Source: research-technique.md §4.1 (endless loading when autoplay is the committed backup).
     lastResortPlayerTypes: ['autoplay'],
+    // Low-quality bridge types for the "twitchAdQuality: 'low'" setting (the default since
+    // 2026-11-21, 1.x behaviour): during a stitched ad break they are asked together with the HD
+    // types and the first clean answer of any type is served at once (an HD one when both land
+    // in the same turn); a clean HD type found later replaces the bridge, at most once per break.
+    // Taken from here, never from the viewer's playerTypes list. Used at any resolution of the
+    // player's codec family (m3u8.pickVariant anyResolution) and never pinned.
+    // autoplay: 360p, platform android (gql.androidPlatformPlayerTypes; vaft #450).
+    // picture-by-picture: the mini-player type (research-technique.md §4.1, video-swap-new). Our
+    // own backup requests use the worker's unhooked fetch, so usherIgnoreSubstrings (meant for
+    // the page's mini player masters) does not touch them.
+    bridgePlayerTypes: ['autoplay', 'picture-by-picture'],
     maxPlayerTypes: 8,
 
     // Codec prefixes. Source: research-technique.md §4.3 (avc*/av0* vs hev*/hvc*; AV1 is av01).

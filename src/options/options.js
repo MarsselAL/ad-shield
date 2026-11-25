@@ -3,7 +3,8 @@
  * validation. Twitch/master settings live under "settings" (src/shared/settings.js), the
  * all-sites settings and allowlist under "blocking" (src/shared/blocking.js), "My filters" under
  * "userFilters" (src/shared/userfilters.js; the element picker adds to it). "Support Ad Shield"
- * shows the tip link and the USDC and BTC addresses from src/shared/donate.js.
+ * (the first card) shows the tip link and the USDC and BTC addresses from src/shared/donate.js,
+ * set with textContent at runtime.
  */
 (function () {
   'use strict';
@@ -39,6 +40,7 @@
       el.disabled = !settings.enabled;
     });
     $('playerTypes').value = settings.playerTypes.join('\n');
+    $('twitchAdQuality').value = settings.twitchAdQuality;
   }
 
   function renderAllowlist() {
@@ -66,6 +68,10 @@
       next[el.getAttribute('data-key')] = el.checked;
       save(next).then(render, function () { render(); });
     });
+  });
+
+  $('twitchAdQuality').addEventListener('change', function () {
+    save(Object.assign({}, settings, { twitchAdQuality: $('twitchAdQuality').value })).then(render, function () { render(); });
   });
 
   Array.prototype.forEach.call(document.querySelectorAll('input[data-bkey]'), function (el) {

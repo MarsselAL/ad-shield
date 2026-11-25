@@ -1,12 +1,14 @@
 /*
  * Picks the scriptlets of rules/scriptlets.json for the page's host and runs them (MAIN world,
- * document_start, every frame). Bundled by tools/build.py into build/scriptlets-main.js after
- * src/scriptlets/lib.js, inside one function scope, so nothing is left on the page's window.
+ * document_start, every frame whose own URL matches). Bundled by tools/build.py into
+ * build/scriptlets-main.js after src/scriptlets/lib.js, inside one function scope, so nothing is
+ * left on the page's window. Chrome does not inject this file into about:blank / srcdoc frames
+ * (no matchOriginAsFallback, src/shared/blocking.js); same-origin ones are patched from the parent
+ * through lib.protectFrames below.
  *
  * Host matching: a rule's host covers itself and its subdomains ("youtube.com" covers
- * "www.youtube.com" and "m.youtube.com", not "notyoutube.com"). about:blank / srcdoc frames have
- * no hostname of their own; they inherit the creator's origin, read from document.domain or
- * self.origin.
+ * "www.youtube.com" and "m.youtube.com", not "notyoutube.com"). A frame without a hostname of its
+ * own (about:blank / srcdoc) falls back to document.domain or self.origin.
  */
 /* exported asScriptletRunner */
 var asScriptletRunner = (function () {

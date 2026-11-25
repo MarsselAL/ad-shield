@@ -15,6 +15,27 @@
     </label>
   </header>
 
+  <section class="card support" id="support" aria-labelledby="support-title" hidden>
+    <h2 id="support-title">Support Ad Shield</h2>
+    <div class="support-row" id="support-revolut" hidden>
+      <a href="#" id="support-link" target="_blank" rel="noopener noreferrer">☕ Revolut tip</a>
+    </div>
+    <div class="support-row" id="support-btc" hidden>
+      <div class="row">
+        <span class="coin-label">BTC · Bitcoin network</span>
+        <button class="copy" id="btc-copy" aria-label="Copy the Bitcoin address">Copy</button>
+      </div>
+      <code class="address" id="btc-address" aria-label="Bitcoin address"></code>
+    </div>
+    <div class="support-row" id="support-usdc" hidden>
+      <div class="row">
+        <span class="coin-label">USDC · Ethereum (ERC-20) only</span>
+        <button class="copy" id="usdc-copy" aria-label="Copy the USDC address">Copy</button>
+      </div>
+      <code class="address" id="usdc-address" aria-label="USDC address"></code>
+    </div>
+  </section>
+
   <section class="card site">
     <div class="row">
       <div class="site-text">
@@ -69,7 +90,6 @@
 
   <footer class="row">
     <a href="#" id="open-options">Settings</a>
-    <a href="#" id="support" class="support" target="_blank" rel="noopener noreferrer" hidden>☕ Support Ad Shield</a>
     <span class="muted small" id="version"></span>
   </footer>
 

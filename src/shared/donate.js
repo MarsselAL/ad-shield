@@ -1,5 +1,5 @@
 /*
- * Support Ad Shield: the public tip link and the USDC and BTC addresses shown in the popup footer and on the
+ * Support Ad Shield: the public tip link and the USDC and BTC addresses shown at the top of the popup and of the
  * settings page. Same values as docs/donate.txt (used by tools/build.py for the shared builds);
  * tests/test_package.py fails when the two differ. Nothing here is fetched or sent anywhere.
  */

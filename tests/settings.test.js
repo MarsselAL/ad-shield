@@ -34,6 +34,32 @@ test('normalize: blockClientAds keeps its stored value (same key, now VOD-only),
   var stored = S.normalize({ enabled: true, blockClientAds: false, blockTrackers: true, hideStandaloneAds: false });
   assert.deepEqual([stored.blockClientAds, stored.blockTrackers, stored.hideStandaloneAds], [false, true, false]);
 });
+test('twitchAdQuality: defaults to low; normalize keeps low/full, unknown or missing -> low', function () {
+  assert.equal(S.defaults().twitchAdQuality, 'low');
+  assert.deepEqual(S.AD_QUALITY_VALUES, ['low', 'full']);
+  assert.equal(S.normalize({ twitchAdQuality: 'full' }).twitchAdQuality, 'full');
+  assert.equal(S.normalize({ twitchAdQuality: 'low' }).twitchAdQuality, 'low');
+  assert.equal(S.normalize({ twitchAdQuality: 'HD' }).twitchAdQuality, 'low');
+  assert.equal(S.normalize({ twitchAdQuality: true }).twitchAdQuality, 'low');
+  assert.equal(S.normalize({}).twitchAdQuality, 'low', 'settings stored before the key existed');
+});
+test('twitchAdQuality: validate accepts low/full/absent, rejects anything else', function () {
+  var base = S.defaults();
+  assert.ok(S.validate(Object.assign({}, base, { twitchAdQuality: 'full' })).ok);
+  assert.ok(S.validate(Object.assign({}, base, { twitchAdQuality: 'low' })).ok);
+  var noKey = Object.assign({}, base); delete noKey.twitchAdQuality;
+  assert.ok(S.validate(noKey).ok);
+  var bad = S.validate(Object.assign({}, base, { twitchAdQuality: 'max' }));
+  assert.notOk(bad.ok);
+  assert.includes(bad.errors.join(' '), 'twitchAdQuality');
+});
+test('bridgePlayerTypes: autoplay then picture-by-picture, both known; autoplay asks as android', function () {
+  assert.deepEqual(cfg.bridgePlayerTypes, ['autoplay', 'picture-by-picture']);
+  cfg.bridgePlayerTypes.forEach(function (t) { assert.ok(cfg.knownPlayerTypes.indexOf(t) !== -1, t); });
+  assert.equal(G.buildTokenBody(cfg, 'c', 'autoplay').variables.platform, 'android');
+  assert.equal(G.buildTokenBody(cfg, 'c', 'picture-by-picture').variables.platform, 'web');
+  assert.equal(G.buildTokenBody(cfg, 'c', 'picture-by-picture').variables.playerType, 'picture-by-picture');
+});
 test('config is frozen', function () {
   assert.ok(Object.isFrozen(cfg));
   assert.ok(Object.isFrozen(cfg.backupPlayerTypes));

@@ -106,7 +106,9 @@ test('smaller file: source comments and blank lines stripped, only the build not
   });
   assert.equal(body.filter(function (l) { return /^\s*$/.test(l); }).length, 1, 'no blank lines (only the final newline)');
   assert.equal(body.filter(function (l) { return /\s$/.test(l); }).length, 0, 'no trailing whitespace');
-  assert.ok(SRC.length < 150000, 'size ' + SRC.length);
+  // 152000: youtube-playability-recover also guards fetched player responses (JSON.parse / Response.json), 2026-11-22
+  // 158000: Twitch low-quality ad-free bridge during ad breaks (twitchAdQuality, processor.js), 2026-11-23
+  assert.ok(SRC.length < 158000, 'size ' + SRC.length);
   assert.includes(readFile('build/main-world.js'), '\n * ', 'the extension bundle keeps its comments');
 });
 

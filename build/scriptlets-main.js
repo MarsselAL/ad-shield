@@ -1249,26 +1249,63 @@ var asScriptlets = (function () {
 
   // ------------------------------------------------------------------ YouTube blocked-playback screen
   /**
-   * youtube-playability-recover: when the player response in use says playback is blocked for an
-   * ad blocker (playabilityStatus.status ERROR or UNPLAYABLE together with
-   * playabilityStatus.errorScreen.enforcementMessageViewModel or
-   * auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel: YouTube's "Ad blockers violate
-   * YouTube's Terms of Service" screen in place of the player), ask the player for the video
-   * again with #movie_player.loadVideoById(v, t) (uBO reloads on UNPLAYABLE the same way). A fresh
-   * /youtubei/v1/player request in the same session was answered OK, and loadVideoById by hand on
-   * the error screen played the video, measured 2026-11-22.
+   * youtube-playability-recover: YouTube's blocked-playback screen ("Ad blockers violate YouTube's
+   * Terms of Service" in place of the player). Measured 2026-11-22 (Chrome, direct watch-page
+   * loads): the HTML's embedded `var ytInitialPlayerResponse = {...}` (also the source of
+   * ytplayer.bootstrapPlayerResponse) arrives with playabilityStatus OK. YouTube's main app
+   * (kevlar_base yje / kHz / Kgb, i4Q.handleResponse, read 2026-11-22) checks it against
+   * responseContext.mainAppWebResponseContext.trackingParam (an obfuscated list of path / value
+   * pairs) and, for a marked session, about 1.4 s after navigation start replaces
+   * playabilityStatus with an ERROR copy: errorScreen.enforcementMessageViewModel (built by Kgb
+   * from auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel with a displayType ending in
+   * _PLAYER) or errorScreen.playerErrorMessageRenderer with subreason 282054944 (kHz), and sets
+   * videoDetails to undefined. That happens on an untouched response too (not caused by our
+   * pruning).
+   * 1. Guard (from document start): every response object stored in window.ytInitialPlayerResponse
+   *    or window.ytplayer.bootstrapPlayerResponse (ytplayer may be created later; trapPath) that
+   *    is OK gets accessors on playabilityStatus and videoDetails (guardResponse) that ignore
+   *    exactly that swap: a playabilityStatus that is not OK and carries
+   *    errorScreen.enforcementMessageViewModel or a playerErrorMessageRenderer whose subreason
+   *    contains 282054944, and the videoDetails = undefined that follows it. Any other write goes
+   *    through. The trap chains with an accessor already on the property (the youtube rule runs
+   *    prune-on-assign on ytInitialPlayerResponse first): its setter stores the value and the
+   *    guard is applied to what its getter returns, the object the page and the player read.
+   *    Measured: 3 test videos played 2.5 s, 6.1 s and 6.2 s after navigation start with no block
+   *    screen (before: block screen shown, playing at about 8.7 s).
+   *    The main app runs the same check on the player responses of in-page navigation (fetch
+   *    /youtubei/v1/get_watch, an array whose items carry playerResponse; /youtubei/v1/player;
+   *    seen live 2026-11-22: "Something went wrong ... 282054944"), so the same guard is applied
+   *    to every object a JSON.parse (only when the text contains "playabilityStatus") or a
+   *    Response.prototype.json returns: the object, its array items, their .playerResponse and
+   *    endpoint.watchEndpoint.unserializedPrefetchData.playerResponse (resolve_url prefetch); a
+   *    few key lookups, no deep walk. Installed after json-prune / json-prune-fetch-response
+   *    (rule order), so it wraps them and guards the pruned object. Covers fetch bodies read with
+   *    json() or text() + JSON.parse and XHR responseText + JSON.parse; not XHR responseType json.
+   * 2. Reload (the fallback, when the response the player uses is still enforced, isEnforced:
+   *    playabilityStatus.status ERROR or UNPLAYABLE together with the error screen of the swap
+   *    above (isEnforcementSwap: errorScreen.enforcementMessageViewModel, or
+   *    playerErrorMessageRenderer with subreason 282054944, the common case since we prune
+   *    bkaEnforcementMessageViewModel) or auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel): ask the player for the video
+   *    again with #movie_player.loadVideoById(v, t) (uBO reloads on UNPLAYABLE the same way); a
+   *    fresh /youtubei/v1/player request in the same session was answered OK, and loadVideoById
+   *    by hand on the error screen played the video, measured 2026-11-22.
    * The response is read with the player's getPlayerResponse(), which is whatever the player
-   * uses: the page-embedded ytInitialPlayerResponse on a direct load, the get_watch / player
-   * response after in-page navigation or after our reload. Polled every TICK ms from document
-   * start on a /watch?v= page (and again from yt-navigate-finish / yt-player-updated /
-   * DOMContentLoaded, which may not fire on the error screen), for at most MAX_TICKS ticks after
-   * the start or the last reload. The player is only asked once it is ready: getPlayerState() is
-   * 5 (cued) or -1 (unstarted) and the enforced response has been seen on SETTLE_TICKS
-   * consecutive ticks (a call while the player is still initialising is swallowed). Start time:
-   * the URL's t= (90, 90s, 1m30s, 1h2m3s) or 0. A reload that leaves the same response object in
-   * place for RETRY_TICKS ticks while the player is still cued / unstarted counts as a failed
-   * try; a reload answered with the enforcement again is retried too; at most MAX_TRIES reloads
-   * per video for the life of the page, then we give up and leave the screen.
+   * uses: the page-embedded response on a direct load, the get_watch / player response after
+   * in-page navigation or after our reload. Polled every TICK (100) ms from document start on a
+   * /watch?v= page (and again from yt-navigate-finish / yt-player-updated / DOMContentLoaded,
+   * which may not fire on the error screen), for at most MAX_TICKS ticks (20 s) after the start or
+   * the last reload. An OK response seen before the video plays does not end the watch: the swap
+   * above comes after it, so polling goes on until the player is playing (state 1). The player
+   * is only asked once it is ready: the page has loaded (document.readyState 'complete'; a call
+   * while the page is still loading was swallowed, measured 2026-11-22) or the player itself has
+   * reported onStateChange 5 (cued) or -1 (unstarted) to us (subscribed with
+   * player.addEventListener once the element carries the player API), getPlayerState() is 5 or
+   * -1 now, and the enforced response has been seen on SETTLE_TICKS consecutive ticks (0.3 s).
+   * Start time: the URL's t= (90, 90s, 1m30s, 1h2m3s) or 0. A reload that leaves the same
+   * response object in place for RETRY_TICKS ticks (3 s) while the player is still cued /
+   * unstarted counts as a failed try; a reload answered with the enforcement again is retried
+   * too; at most MAX_TRIES reloads per video for the life of the page, then we give up and leave
+   * the screen.
    * Only after a reload whose new response for this video is OK: the stale
    * yt-playability-error-supported-renderers are hidden (display:none !important),
    * ytd-watch-flexy loses its player-unavailable attribute (YouTube leaves both in place after a
@@ -1279,10 +1316,15 @@ var asScriptlets = (function () {
    * LOGIN_REQUIRED) are never touched.
    */
   var RECOVER_MAX_TRIES = 3;
-  var RECOVER_TICK = 500;
-  var RECOVER_MAX_TICKS = 40;   // 20 s
-  var RECOVER_SETTLE_TICKS = 4; // 2 s of a loaded page and ready player with the enforced response
-  var RECOVER_RETRY_TICKS = 6;  // 3 s without a new response after a reload
+  var RECOVER_TICK = 100;
+  // 20 s
+  var RECOVER_MAX_TICKS = 200;
+  // 0.3 s of a loaded (or cued) page and ready player with the enforced response
+  var RECOVER_SETTLE_TICKS = 3;
+  // 3 s without a new response after a reload
+  var RECOVER_RETRY_TICKS = 30;
+  // first check after yt-navigate-start
+  var RECOVER_NAV_DELAY = 1000;
   var RECOVER_RECHECKS = [1000, 3000];
   var ERROR_RENDERERS = 'yt-playability-error-supported-renderers';
 
@@ -1294,7 +1336,7 @@ var asScriptlets = (function () {
   function isEnforced(resp) {
     var ps = playabilityOf(resp);
     if (!ps || (ps.status !== 'ERROR' && ps.status !== 'UNPLAYABLE')) return false;
-    if (isObj(ps.errorScreen) && isObj(ps.errorScreen.enforcementMessageViewModel)) return true;
+    if (isEnforcementSwap(ps)) return true;
     var aux = isObj(resp.auxiliaryUi) ? resp.auxiliaryUi.messageRenderers : null;
     return isObj(aux) && isObj(aux.bkaEnforcementMessageViewModel);
   }
@@ -1316,13 +1358,100 @@ var asScriptlets = (function () {
     return (Number(m[1]) || 0) * 3600 + (Number(m[2]) || 0) * 60 + (Number(m[3]) || 0);
   }
 
+  /** The main app's swap of an OK playabilityStatus for the enforcement one (see above). */
+  function isEnforcementSwap(x) {
+    if (!isObj(x) || x.status === 'OK' || !isObj(x.errorScreen)) return false;
+    if (isObj(x.errorScreen.enforcementMessageViewModel)) return true;
+    var pe = x.errorScreen.playerErrorMessageRenderer;
+    return isObj(pe) && JSON.stringify(pe.subreason || '').indexOf('282054944') >= 0;
+  }
+
   function youtubePlayabilityRecover(win, args, log) {
+    var NAME = 'youtube-playability-recover';
+
+    /** An OK response keeps playabilityStatus and videoDetails through the enforcement swap. */
+    function guardResponse(v) {
+      try {
+        if (!isObj(v) || !isObj(v.playabilityStatus) || v.playabilityStatus.status !== 'OK') return;
+        var dps = getOwnDesc(v, 'playabilityStatus'), dvd = getOwnDesc(v, 'videoDetails');
+        if (!dps || !dps.configurable || dps.get || (dvd && (!dvd.configurable || dvd.get))) return;
+        var ps = v.playabilityStatus, vd = v.videoDetails, blocked = false;
+        defineProperty(v, 'playabilityStatus', { enumerable: true, configurable: true, get: function () { return ps; }, set: function (x) {
+          if (isEnforcementSwap(x)) { blocked = true; log(NAME, 'kept the playable response'); return; }
+          ps = x;
+        } });
+        defineProperty(v, 'videoDetails', { enumerable: dvd ? dvd.enumerable : true, configurable: true, get: function () { return vd; }, set: function (x) {
+          if (x === undefined && blocked) { blocked = false; return; }
+          vd = x;
+        } });
+      } catch (e) { /* leave it */ }
+    }
+
+    /**
+     * trapPath leaf: guard every value stored at owner[key]. An accessor already there (from
+     * prune-on-assign) is chained: its setter stores the value, and the guard is applied to what
+     * its getter returns. Otherwise the value is kept here. A non-configurable property is left.
+     */
+    function guardLeaf(owner, key) {
+      var d = getOwnDesc(owner, key) || {};
+      if (d.configurable === false) return;
+      var acc = d.get || d.set, value = d.value;
+      function stored() {
+        try { return acc ? d.get && reflectApply(d.get, owner, []) : value; } catch (e) { return undefined; }
+      }
+      guardResponse(stored());
+      defineLeaf(owner, key, stored, function (v) {
+        if (!acc) value = v; else if (d.set) reflectApply(d.set, owner, [v]);
+        guardResponse(stored());
+      });
+    }
+
+    // 1. The embedded response.
+    trapPath(win, ['ytInitialPlayerResponse'], guardLeaf);
+    trapPath(win, ['ytplayer', 'bootstrapPlayerResponse'], guardLeaf);
+
+    // ... and fetched ones (after json-prune*, which wrap first): o, o[i], .playerResponse and the
+    // resolve_url prefetch playerResponse. JSON.parse only walks a text with the needle.
+    function guardAll(o) {
+      try {
+        [].concat(o).forEach(function (x) {
+          if (!isObj(x)) return;
+          var e = x.endpoint, u = isObj(e) && isObj(e.watchEndpoint) && e.watchEndpoint.unserializedPrefetchData;
+          [x, x.playerResponse, isObj(u) && u.playerResponse].forEach(guardResponse);
+        });
+      } catch (e) { /* leave it */ }
+    }
+    wrap(win, win.JSON, 'parse', function (t, self, a) {
+      var r = reflectApply(t, self, a);
+      if (typeof a[0] === 'string' && a[0].indexOf('"playabilityStatus"') !== -1) guardAll(r);
+      return r;
+    });
+    wrap(win, typeof win.Response === 'function' ? win.Response.prototype : null, 'json', function (t, self, a) {
+      var p = reflectApply(t, self, a);
+      try { return p.then(function (o) { guardAll(o); return o; }); } catch (e) { return p; }
+    });
+
+    // 2. The reload fallback.
     var doc = win.document;
     if (!doc || typeof doc.addEventListener !== 'function' || typeof win.setTimeout !== 'function') return;
-    var NAME = 'youtube-playability-recover';
-    var tries = {};     // videoId -> loadVideoById calls so far
-    var job = null;     // the watch page being looked after
-    var undo = [];      // functions that give back what clean-up changed
+    // tries: videoId -> loadVideoById calls so far; job: the watch page being looked after;
+    // undo: functions that give back what clean-up changed; heard: players we listen to.
+    var tries = {};
+    var job = null;
+    var undo = [];
+    var heard = new WeakSet();
+
+    /** Subscribe once per player element to its onStateChange: 5 / -1 marks the job cued. */
+    function listen(player) {
+      try {
+        if (!player || heard.has(player)) return;
+        if (typeof player.addEventListener !== 'function' || typeof player.getPlayerState !== 'function') return;
+        heard.add(player);
+        player.addEventListener('onStateChange', function (st) {
+          if ((st === 5 || st === -1) && job) job.cued = true;
+        });
+      } catch (e) { /* poll readyState only */ }
+    }
 
     function currentVideo() {
       var loc = win.location;
@@ -1339,15 +1468,19 @@ var asScriptlets = (function () {
       }
     }
 
+    /** getPlayerState(), or null without a player state (no player, no method, it throws). */
+    function stateOf(player) {
+      try {
+        return player && typeof player.getPlayerState === 'function' ? player.getPlayerState() : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     /** Cued (5) or unstarted (-1): the player shows the error screen and takes a loadVideoById. */
     function ready(player) {
-      try {
-        if (!player || typeof player.loadVideoById !== 'function' || typeof player.getPlayerState !== 'function') return false;
-        var s = player.getPlayerState();
-        return s === 5 || s === -1;
-      } catch (e) {
-        return false;
-      }
+      var s = stateOf(player);
+      return (s === 5 || s === -1) && typeof player.loadVideoById === 'function';
     }
 
     function show(el) {
@@ -1426,6 +1559,7 @@ var asScriptlets = (function () {
         if (currentVideo() !== j.vid) { job = null; return; }
         j.ticks++;
         var player = doc.querySelector('#movie_player');
+        listen(player);
         var resp = responseOf(player);
         var details = isObj(resp) && isObj(resp.videoDetails) ? resp.videoDetails : null;
         var forThis = isObj(resp) && (!details || !details.videoId || details.videoId === j.vid);
@@ -1439,17 +1573,24 @@ var asScriptlets = (function () {
         if (forThis && playabilityOf(resp)) {
           if (isEnforced(resp)) {
             if ((tries[j.vid] || 0) >= RECOVER_MAX_TRIES) { job = null; log(NAME, 'gave up'); return; }
-            // A reload while the page is still loading is swallowed by the player (measured in
-            // Chrome 2026-11-22): wait for the load event, then a settled, ready player.
-            if (doc.readyState !== 'complete' || !ready(player)) { j.seen = 0; j.since = j.ticks; schedule(j); return; }
+            // A reload while the page is still loading was swallowed by the player (measured in
+            // Chrome 2026-11-22): wait for the load event, or for the player to report itself
+            // cued / unstarted, then a settled, ready player.
+            var loaded = doc.readyState === 'complete' || j.cued;
+            if (!loaded || !ready(player)) { j.seen = 0; j.since = j.ticks; schedule(j); return; }
             if (++j.seen >= RECOVER_SETTLE_TICKS) reload(j, player, resp);
             schedule(j);
             return;
           }
-          job = null;
           var ps = playabilityOf(resp);
-          if (j.recovering && ps.status === 'OK') recovered(j, player);
-          return; // OK without our reload, or a playability error of another kind: not ours
+          if (j.recovering && ps.status === 'OK') { job = null; recovered(j, player); return; }
+          // OK without our reload: YouTube can still swap in an enforced response a moment later
+          // (measured 2026-11-22: the page's response is OK, the player's turns ERROR), so keep
+          // watching until the video plays. A playability error of another kind: not ours.
+          if (ps.status !== 'OK' || stateOf(player) === 1) { job = null; return; }
+          j.seen = 0;
+          schedule(j);
+          return;
         }
         schedule(j);
       } catch (e) {
@@ -1464,7 +1605,7 @@ var asScriptlets = (function () {
         if (!job || job.vid !== vid) {
           job = {
             vid: vid, start: startSeconds(urlParam(win.location.search, 't')),
-            ticks: 0, since: 0, seen: 0, blocked: null, recovering: false, timer: false
+            ticks: 0, since: 0, seen: 0, blocked: null, recovering: false, timer: false, cued: false
           };
         }
         schedule(job);
@@ -1479,9 +1620,10 @@ var asScriptlets = (function () {
     doc.addEventListener('yt-navigate-start', function () {
       job = null;
       giveBack();
-      win.setTimeout(check, RECOVER_TICK * 2);
+      win.setTimeout(check, RECOVER_NAV_DELAY);
     }, true);
-    check(); // a direct load: from document start, the events may never come
+    // A direct load: from document start, the events may never come.
+    check();
   }
 
   // ------------------------------------------------------------------ child frames
@@ -1555,13 +1697,15 @@ var asScriptlets = (function () {
 // ---- src/scriptlets/runner.js ----
 /*
  * Picks the scriptlets of rules/scriptlets.json for the page's host and runs them (MAIN world,
- * document_start, every frame). Bundled by tools/build.py into build/scriptlets-main.js after
- * src/scriptlets/lib.js, inside one function scope, so nothing is left on the page's window.
+ * document_start, every frame whose own URL matches). Bundled by tools/build.py into
+ * build/scriptlets-main.js after src/scriptlets/lib.js, inside one function scope, so nothing is
+ * left on the page's window. Chrome does not inject this file into about:blank / srcdoc frames
+ * (no matchOriginAsFallback, src/shared/blocking.js); same-origin ones are patched from the parent
+ * through lib.protectFrames below.
  *
  * Host matching: a rule's host covers itself and its subdomains ("youtube.com" covers
- * "www.youtube.com" and "m.youtube.com", not "notyoutube.com"). about:blank / srcdoc frames have
- * no hostname of their own; they inherit the creator's origin, read from document.domain or
- * self.origin.
+ * "www.youtube.com" and "m.youtube.com", not "notyoutube.com"). A frame without a hostname of its
+ * own (about:blank / srcdoc) falls back to document.domain or self.origin.
  */
 /* exported asScriptletRunner */
 var asScriptletRunner = (function () {
@@ -1636,6 +1780,6 @@ var asScriptletRunner = (function () {
 
 
 try {
-  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prevent-dom-bypass","Node.prototype.appendChild","fetch Request"],["remove-node-text","script","window,\"fetch\""],["youtube-drop-player-event","onAbnormalityDetected"],["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"],["youtube-playability-recover"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
+  asScriptletRunner.run(window, asScriptlets, {"rules":[{"hosts":["youtube.com","youtube-nocookie.com","youtubekids.com"],"scriptlets":[["prevent-dom-bypass","Node.prototype.appendChild","fetch Request"],["remove-node-text","script","window,\"fetch\""],["youtube-drop-player-event","onAbnormalityDetected"],["prune-on-assign","ytInitialPlayerResponse","adPlacements adSlots playerAds auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel"],["prune-on-assign","ytInitialData","..contents.[-].richItemRenderer.content.adSlotRenderer ..continuationItems.[-].richItemRenderer.content.adSlotRenderer ..contents.[-].adSlotRenderer ..continuationItems.[-].adSlotRenderer ..results.[-].adSlotRenderer ..contents.[-].searchPyvRenderer ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune","adPlacements adSlots playerAds auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds entries.[-].command.reelWatchEndpoint.adClientParams.isAd"],["json-prune-fetch-response","adPlacements adSlots playerAds auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["json-prune-xhr-response","adPlacements adSlots playerAds auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.auxiliaryUi.messageRenderers.bkaEnforcementMessageViewModel playerResponse.adPlacements playerResponse.adSlots playerResponse.playerAds [].playerResponse.adPlacements [].playerResponse.adSlots [].playerResponse.playerAds endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adPlacements endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.adSlots endpoint.watchEndpoint.unserializedPrefetchData.playerResponse.playerAds ..entries.[-].command.reelWatchEndpoint.adClientParams.isAd","/\\/youtubei\\/v1\\/(player|get_watch|playlist|(navigation\\/)?resolve_url|reel\\/reel_watch_sequence|reel\\/reel_item_watch)(\\?|$)/"],["edit-request-body","/\\/youtubei\\/v1\\/player(\\?|$)/","attestationRequest","context.client.clientName==\"WEB\"","params=\"oAEBogYBLg\"","playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["edit-request-body","/\\/youtubei\\/v1\\/get_watch(\\?|$)/","playerRequest","context.client.clientName==\"WEB\"","playerRequest.params=\"oAEBogYBLg\"","playerRequest.playbackContext.contentPlaybackContext.referer+=#reloadxhr"],["adjust-setTimeout","[native code]","17000","0.001"],["youtube-playability-recover"]]},{"hosts":["m.youtube.com"],"scriptlets":[["json-prune-fetch-response","..itemSectionRenderer.contents.[-].adSlotRenderer","/\\/youtubei\\/v1\\/get_watch(\\?|$)/"]]},{"hosts":["youtube.com"],"scriptlets":[["youtube-ad-skip"],["youtube-enforcement-dismiss"]]}]});
 } catch (e) { /* never break the page */ }
 })();
