@@ -1,7 +1,8 @@
 /*
- * Popup: two panels side by side (Chrome allows popups up to 800x600; this one is about 744 wide).
- * Left: master switch, per-site switch (allowlist), counts for the current page, quick actions and
- * the Twitch status/counts on Twitch tabs. Right: "Support AdBrake", always fully visible.
+ * Popup: two panels side by side (Chrome allows popups up to 800x600; this one is 630 wide).
+ * Left: master switch, per-site switch (allowlist), counts for the current page, quick actions and,
+ * on Twitch tabs, one compact Twitch row (status, Reload button; counts in its tooltip and for
+ * screen readers). Right: "Support AdBrake", always fully visible.
  * Counts: chrome.declarativeNetRequest.getMatchedRules({tabId, minTimeStamp}) (needs the
  * declarativeNetRequestFeedback permission) gives the DNR matches of this tab since the page
  * started (the page script reports performance.timeOrigin); "banners handled" adds the page's
@@ -10,9 +11,10 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * Support panel: the tip link from src/shared/donate.js with its QR code ("Pay with phone"), and
- * a "Crypto" switch between the USDC and BTC addresses from donate.js (QR code, shortened address,
- * Copy copies the full address, the network warning). Hidden when donate.js sets nothing.
+ * Support panel: the tip button (link from src/shared/donate.js), then one QR code at a time picked
+ * with a "Phone | USDC | BTC" control (arrow keys, Home and End move between them): Phone is the tip
+ * link's QR code; USDC and BTC show the address's QR code, the shortened address (Copy copies the
+ * full one) and the network warning. Hidden when donate.js sets nothing.
  * Occasional support note (src/shared/supportprompt.js): when due, the support panel glows once
  * and shows a short thank-you line; nothing covers the popup.
  * Layout, left panel: header (icon, name, Settings button), the big power button (#enabled, the
@@ -122,11 +124,19 @@
     $('status-detail').textContent = st.detail;
     $('status-dot').className = 'dot ' + st.level;
     $('reload').hidden = !st.reload;
+    var tip = [st.detail];
     if (state) {
       setTwitchCounts('t', state.tab.stats);
       setTwitchCounts('l', state.lifetime);
       $('last-event').textContent = state.tab.lastEvent ? fmtTime(state.tab.lastEvent.at) + ' – ' + state.tab.lastEvent.text : 'No events yet.';
+      var n = Number(state.tab.stats.detected) || 0;
+      $('twitch-count').textContent = n + (n === 1 ? ' ad' : ' ads');
+      $('twitch-count').hidden = st.key !== 'active';
+      tip.push('Ads on this tab: ' + n + ' · lifetime: ' + (Number(state.lifetime.detected) || 0), $('last-event').textContent);
+    } else {
+      $('twitch-count').hidden = true;
     }
+    $('status-card').title = tip.filter(Boolean).join('\n');
   }
 
   function refreshTwitch() {
@@ -219,15 +229,40 @@
   ].filter(function (c) { return !!c.address; });
   var copyTimers = {};
 
-  function selectCoin(id, focus) {
-    coins.forEach(function (c) {
-      var on = c.id === id;
-      $('tab-' + c.id).setAttribute('aria-selected', on ? 'true' : 'false');
-      $('tab-' + c.id).tabIndex = on ? 0 : -1;
-      $('coin-' + c.id).hidden = !on;
+  // The Phone | USDC | BTC control: one view at a time, in this order, for what donate.js sets.
+  var views = (donate.url ? [{ key: 'phone', panel: 'support-phone' }] : []).concat(coins.map(function (c) {
+    return { key: c.id, panel: 'coin-' + c.id };
+  }));
+
+  function selectView(key, focus) {
+    views.forEach(function (v, i) {
+      var on = v.key === key;
+      $('tab-' + v.key).setAttribute('aria-selected', on ? 'true' : 'false');
+      $('tab-' + v.key).tabIndex = on ? 0 : -1;
+      $(v.panel).hidden = !on;
+      if (on) {
+        var seg = $('support-tabs');
+        if (seg && seg.style) { seg.style.setProperty('--seg-i', String(i)); seg.style.setProperty('--seg-n', String(views.length)); }
+      }
     });
-    if (focus) { try { $('tab-' + id).focus(); } catch (e) {} }
+    if (focus) { try { $('tab-' + key).focus(); } catch (e) {} }
   }
+
+  views.forEach(function (v, i) {
+    var tab = $('tab-' + v.key);
+    tab.hidden = false;
+    tab.addEventListener('click', function () { selectView(v.key, false); });
+    tab.addEventListener('keydown', function (e) {
+      var to = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') to = (i + 1) % views.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') to = (i - 1 + views.length) % views.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = views.length - 1;
+      if (to < 0) return;
+      e.preventDefault();
+      selectView(views[to].key, true);
+    });
+  });
 
   function copyAddress(c) {
     var label = $(c.id + '-copy-label');
@@ -248,25 +283,15 @@
     });
   }
 
-  coins.forEach(function (c, i) {
+  coins.forEach(function (c) {
     $(c.id + '-address').textContent = shortAddress(c.address);
     $(c.id + '-address').title = c.address;
     $(c.id + '-address').setAttribute('aria-label', c.name + ' address ' + c.address);
     $(c.id + '-note').textContent = c.note || '';
-    $('tab-' + c.id).hidden = false;
-    $('tab-' + c.id).addEventListener('click', function () { selectCoin(c.id, false); });
-    $('tab-' + c.id).addEventListener('keydown', function (e) {
-      var step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0);
-      if (!step) return;
-      e.preventDefault();
-      selectCoin(coins[(i + step + coins.length) % coins.length].id, true);
-    });
     $(c.id + '-copy').addEventListener('click', function () { copyAddress(c); });
   });
-  if (coins.length) {
-    selectCoin(coins[0].id, false);
-    $('support-crypto').hidden = false;
-  }
+  $('support-crypto').hidden = !coins.length;
+  if (views.length) selectView(views[0].key, false);
 
   if (donate.url) {
     $('support-link').href = donate.url;

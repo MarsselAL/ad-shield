@@ -157,7 +157,7 @@ test('support: popup has the tip link, the phone QR inline and both coins with t
   var html = readFile('src/popup/popup.html');
   assert.includes(html, 'Card · Apple Pay · Google Pay');
   ['../assets/qr/revolut.svg', '../assets/qr/usdc.svg', '../assets/qr/btc.svg'].forEach(function (s) { assert.includes(html, s); });
-  ['tab-usdc', 'tab-btc', 'coin-usdc', 'coin-btc', 'usdc-address', 'btc-address', 'usdc-copy', 'btc-copy',
+  ['tab-phone', 'tab-usdc', 'tab-btc', 'coin-usdc', 'coin-btc', 'usdc-address', 'btc-address', 'usdc-copy', 'btc-copy',
     'usdc-note', 'btc-note'].forEach(function (id) { assert.includes(html, 'id="' + id + '"', id); });
   assert.includes(html, 'role="tablist"');
   ['qr-sheet', 'qr-open', 'prompt-later', 'prompt-support', 'sheet-backdrop'].forEach(function (s) {
@@ -208,25 +208,85 @@ test('support: popup shows both addresses shortened from donate.js, full in the 
   return settle();
 });
 
-test('support: popup crypto tabs show one coin at a time (click and arrow keys)', function () {
+var VIEW_OF = { phone: 'support-phone', usdc: 'coin-usdc', btc: 'coin-btc' };
+
+/** Exactly one support view shown (`key`), its tab selected and focusable, the others not. */
+function assertView(e, key, msg) {
+  Object.keys(VIEW_OF).forEach(function (k) {
+    var on = k === key;
+    assert.equal(e[VIEW_OF[k]].hidden, !on, (msg || '') + ' ' + k + (on ? ' shown' : ' hidden'));
+    assert.equal(e['tab-' + k].getAttribute('aria-selected'), on ? 'true' : 'false', (msg || '') + ' tab-' + k + ' selected');
+    assert.equal(e['tab-' + k].tabIndex, on ? 0 : -1, (msg || '') + ' tab-' + k + ' tabIndex');
+  });
+}
+
+function arrow(el, key) {
+  var ev = { type: 'keydown', key: key, target: el, preventDefault: function () { this.p = true; } };
+  el.listeners.keydown.forEach(function (fn) { fn(ev); });
+  return ev;
+}
+
+test('support: popup Phone | USDC | BTC control shows one QR code at a time (click and arrow keys)', function () {
   var env = runPopup(REAL_DONATE);
   var e = env.els;
-  assert.equal(e['coin-usdc'].hidden, false, 'USDC first');
-  assert.equal(e['coin-btc'].hidden, true);
-  assert.equal(e['tab-usdc'].getAttribute('aria-selected'), 'true');
-  assert.equal(e['tab-btc'].getAttribute('aria-selected'), 'false');
+  ['phone', 'usdc', 'btc'].forEach(function (k) { assert.equal(e['tab-' + k].hidden, false, 'tab-' + k + ' shown'); });
+  assert.includes(readFile('src/popup/popup.html'), 'aria-controls="support-phone"');
+  assertView(e, 'phone', 'Phone first:');
   e['tab-btc'].fire('click');
-  assert.equal(e['coin-btc'].hidden, false, 'BTC after click');
-  assert.equal(e['coin-usdc'].hidden, true);
-  assert.equal(e['tab-btc'].getAttribute('aria-selected'), 'true');
-  assert.equal(e['tab-btc'].tabIndex, 0);
-  assert.equal(e['tab-usdc'].tabIndex, -1);
-  var ev = { type: 'keydown', key: 'ArrowRight', target: e['tab-btc'], preventDefault: function () { this.p = true; } };
-  e['tab-btc'].listeners.keydown.forEach(function (fn) { fn(ev); });
-  assert.ok(ev.p, 'arrow handled');
-  assert.equal(e['coin-usdc'].hidden, false, 'ArrowRight wraps to USDC');
-  assert.equal(e['coin-btc'].hidden, true);
+  assertView(e, 'btc', 'after a click on BTC:');
+  e['tab-usdc'].fire('click');
+  assertView(e, 'usdc', 'after a click on USDC:');
+  assert.ok(arrow(e['tab-usdc'], 'ArrowRight').p, 'arrow handled');
+  assertView(e, 'btc', 'ArrowRight:');
+  arrow(e['tab-btc'], 'ArrowRight');
+  assertView(e, 'phone', 'ArrowRight wraps:');
+  arrow(e['tab-phone'], 'ArrowLeft');
+  assertView(e, 'btc', 'ArrowLeft wraps back:');
+  arrow(e['tab-btc'], 'Home');
+  assertView(e, 'phone', 'Home:');
+  arrow(e['tab-phone'], 'End');
+  assertView(e, 'btc', 'End:');
+  var other = arrow(e['tab-btc'], 'a');
+  assert.notOk(other.p, 'other keys left alone');
   return settle();
+});
+
+/** Runs popup.js on a Twitch channel tab with the page script loaded (the Twitch row shows). */
+function runPopupOnTwitch(donate) {
+  var env = installPage('src/popup/popup.html');
+  var tw = { detected: 2, backup: 1, stripped: 1, standalone: 0, failures: 0 };
+  chrome.tabs.query = function () { return Promise.resolve([{ id: 9, url: 'https://www.twitch.tv/somechannel' }]); };
+  chrome.tabs.sendMessage = function (id, msg, o, cb) { cb({ pageHooked: true, degraded: [] }); };
+  chrome.runtime.sendMessage = function (m) {
+    return Promise.resolve(m && m.type === 'popup-get-state' ? { tab: { stats: tw, degraded: false, lastEvent: null }, lifetime: tw } : null);
+  };
+  __TAS__.donate = donate;
+  try { load('src/popup/popup.js'); } finally { __TAS__.donate = REAL_DONATE; }
+  return env;
+}
+
+// 2.0.3 on Twitch: the crypto part of the support panel was cut off below the popup (a CSS
+// height problem; tests/test_popup_layout.py checks the rendered layout). Here: on a Twitch tab
+// every support view is still in the page and reachable from the Phone | USDC | BTC control.
+test('support: on a Twitch tab the Twitch row shows and Phone, USDC and BTC stay present and reachable', function () {
+  var env = runPopupOnTwitch(REAL_DONATE);
+  var e = env.els;
+  return settle().then(settle).then(function () {
+    assert.equal(e['twitch'].hidden, false, 'Twitch row shown');
+    assert.equal(e['status-text'].textContent, 'Active on this tab');
+    assert.equal(e['support'].hidden, false, 'support panel shown');
+    assert.equal(e['support-crypto'].hidden, false, 'crypto views present');
+    assert.equal(e['support-revolut'].hidden, false, 'card button present');
+    ['phone', 'usdc', 'btc'].forEach(function (k) {
+      assert.equal(e['tab-' + k].hidden, false, 'tab-' + k + ' shown on Twitch');
+      e['tab-' + k].fire('click');
+      assertView(e, k, 'on Twitch, ' + k + ':');
+    });
+    assert.equal(e['usdc-address'].title, REAL_DONATE.usdcErc20);
+    assert.equal(e['btc-address'].title, REAL_DONATE.btc);
+    arrow(e['tab-btc'], 'ArrowRight');
+    assertView(e, 'phone', 'on Twitch, arrows wrap:');
+  });
 });
 
 test('support: popup Copy copies the full donate.js address and says "Copied ✓" for 1.5 s', function () {
@@ -271,7 +331,15 @@ test('support: popup panel follows donate.js: crypto alone shows it, nothing set
   assert.equal(env.els['support'].hidden, false, 'panel shown for crypto');
   assert.equal(env.els['support-revolut'].hidden, true, 'no tip link row');
   assert.equal(env.els['tab-btc'].hidden, true, 'no BTC tab without an address');
-  assert.equal(env.els['coin-usdc'].hidden, false);
+  assert.equal(env.els['tab-phone'].hidden, true, 'no Phone tab without a link');
+  assert.equal(env.els['support-phone'].hidden, true, 'no phone QR without a link');
+  assert.equal(env.els['coin-usdc'].hidden, false, 'USDC shown first');
+  assert.equal(env.els['tab-usdc'].getAttribute('aria-selected'), 'true');
+  var link = runPopup({ url: REAL_DONATE.url, usdcErc20: '', btc: '' });
+  assert.equal(link.els['support-crypto'].hidden, true, 'no crypto views without addresses');
+  assert.equal(link.els['tab-usdc'].hidden, true);
+  assert.equal(link.els['support-phone'].hidden, false, 'phone QR shown');
+  assert.equal(link.els['tab-phone'].getAttribute('aria-selected'), 'true');
   var none = runPopup({ url: '', usdcErc20: '', btc: '' });
   assert.equal(none.els['support'].hidden, true, 'hidden when nothing is set');
   assert.equal(none.els['support-crypto'].hidden, true);

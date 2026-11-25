@@ -3,7 +3,9 @@
 # JavaScriptCore (offline, synthetic fixtures only; tests/bundle.test.js loads the bundles),
 # then runs tests/test_rules.py (filter converter + every generated DNR rule against the schema),
 # tests/test_package.py (the shareable zip: INSTALL.txt in, development files out), tests/test_qr.py
-# (the support QR codes match src/shared/donate.js) and
+# (the support QR codes match src/shared/donate.js), tests/test_popup_layout.py (the popup rendered
+# in headless Chrome: nothing scrolls or is cut off, every support view reachable; skipped without
+# Google Chrome) and
 # validates manifest.json and the DNR rulesets. Exits non-zero on any failure.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -26,7 +28,7 @@ for t in tests/*.test.js; do
   fi
 done
 
-for py in tests/test_rules.py tests/test_package.py tests/test_qr.py; do
+for py in tests/test_rules.py tests/test_package.py tests/test_qr.py tests/test_popup_layout.py; do
   echo "== $py"
   files=$((files + 1))
   out="$(python3 -I "$py" 2>&1)"; code=$?
