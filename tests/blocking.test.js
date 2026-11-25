@@ -151,12 +151,12 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(B.hostPatterns('bad_host.com'), []);
   assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), []);
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-popunder', 'as-css-cookies', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
   assert.deepEqual(plan[0].css, ['rules/cosmetic/ads_generic.css']);
   assert.deepEqual(plan[0].excludeMatches, ['*://*.off.com/*', '*://*.exc.org/*']);
   assert.equal(plan[0].allFrames, true);
-  assert.deepEqual(plan[2].excludeMatches, ['*://*.off.com/*'], 'page script: allowlist only');
-  assert.equal(plan[2].allFrames, false);
+  assert.deepEqual(plan[3].excludeMatches, ['*://*.off.com/*'], 'page script: allowlist only');
+  assert.equal(plan[3].allFrames, false);
   plan.forEach(function (s) { assert.equal(s.id.indexOf(B.SCRIPT_PREFIX), 0); assert.equal(s.runAt, 'document_start'); });
   var ac = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, autoRejectCookies: true }), []);
   assert.deepEqual(ac.map(function (s) { return s.id; }), ['as-autoconsent']);
@@ -168,8 +168,8 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
   assert.deepEqual(hosts, ['m.youtube.com', 'youtube-nocookie.com', 'youtube.com', 'youtubekids.com'], 'm.youtube.com (rule youtube-mobile) is also inside youtube.com');
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-cookies', 'as-site', 'as-css-youtube', 'as-scriptlets']);
-  var css = plan[3], sl = plan[4];
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-popunder', 'as-css-cookies', 'as-site', 'as-css-youtube', 'as-scriptlets']);
+  var css = plan[4], sl = plan[5];
   assert.deepEqual(css.css, ['rules/cosmetic/youtube.css']);
   assert.deepEqual(css.matches, ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(css.excludeMatches, ['*://*.off.com/*'], 'YouTube CSS: allowlist only');
@@ -192,6 +192,73 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   assert.equal(ids(B.contentScriptPlan(true, B.defaults(), [], [])).indexOf('as-scriptlets'), -1, 'no hosts (rules not loaded): nothing registered');
   assert.deepEqual(B.scriptletHosts({ rules: [{ hosts: ['A.com', 'b.com', 'b.com', 'bad host', 5] }, null, { hosts: 'x' }] }), ['b.com']);
   assert.deepEqual(B.scriptletHosts(null), []);
+});
+
+test('contentScriptPlan: pop-under CSS on every site while Ads is on, allowlist excluded but not the exception hosts', function () {
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
+  var pu = plan.filter(function (s) { return s.id === 'as-css-popunder'; })[0];
+  assert.ok(pu, 'registered with Ads on');
+  assert.equal(plan[1], pu, 'right after as-css-ads');
+  assert.deepEqual(pu.css, ['rules/cosmetic/popunder.css']);
+  assert.equal(pu.js, undefined);
+  assert.deepEqual(pu.matches, ['http://*/*', 'https://*/*']);
+  assert.equal(pu.allFrames, true);
+  assert.equal(pu.runAt, 'document_start');
+  assert.equal(pu.persistAcrossSessions, true);
+  assert.deepEqual(pu.excludeMatches, ['*://*.off.com/*'], 'allowlist only: our own rule, EasyList generic-hiding exceptions do not apply');
+  assert.equal(pu.excludeMatches.indexOf('*://*.exc.org/*'), -1);
+  var noAllow = B.contentScriptPlan(true, B.defaults(), ['exc.org']).filter(function (s) { return s.id === 'as-css-popunder'; })[0];
+  assert.equal(noAllow.excludeMatches, undefined, 'no allowlist: nothing excluded');
+  var ids = function (p) { return p.map(function (s) { return s.id; }); };
+  assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false }), ['exc.org'])).indexOf('as-css-popunder'), -1, 'Ads off');
+  assert.deepEqual(B.contentScriptPlan(false, B.defaults(), ['exc.org']), [], 'master switch off');
+});
+
+/* rules/cosmetic/popunder.css: [{ sel, decl }] with comments stripped. */
+function popunderRules() {
+  var text = readFile('rules/cosmetic/popunder.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  var out = [], re = /([^{}]+)\{([^{}]*)\}/g, m;
+  while ((m = re.exec(text))) out.push({ sel: m[1].trim(), decl: m[2].trim() });
+  assert.equal(text.replace(re, '').trim(), '', 'nothing but plain rules (no at-rules, no stray text)');
+  return out;
+}
+/* Evaluates one of these selectors (div:empty + [style*="..."] only) against an element description. */
+function popunderMatches(sel, tag, empty, style) {
+  var m = /^div:empty((?:\[style\*="[^"]*"\])+)$/.exec(sel);
+  if (!m) throw new Error('selector outside the supported subset: ' + sel);
+  if (tag !== 'div' || !empty) return false;
+  var subs = m[1].match(/\[style\*="[^"]*"\]/g).map(function (a) { return a.slice(9, -2); });
+  return subs.every(function (s) { return style.indexOf(s) !== -1; });
+}
+
+test('popunder.css: two rules, empty fixed max-z transparent divs only, display and pointer-events off', function () {
+  var rules = popunderRules();
+  assert.equal(rules.length, 2);
+  rules.forEach(function (r) {
+    assert.equal(r.sel.indexOf(','), -1, 'one selector per rule: ' + r.sel);
+    assert.equal(r.sel.indexOf('div:empty['), 0, r.sel);
+    assert.ok(r.sel.indexOf('[style*="position: fixed"]') !== -1, r.sel);
+    assert.ok(r.sel.indexOf('[style*="z-index: 2147483647"]') !== -1, r.sel);
+    assert.ok(r.sel.indexOf('[style*="background-color: transparent"]') !== -1 || r.sel.indexOf('[style*="background: transparent"]') !== -1, r.sel);
+    assert.equal(r.decl.replace(/\s+/g, ''), 'display:none!important;pointer-events:none!important', r.sel);
+  });
+  assert.ok(rules.some(function (r) { return r.sel.indexOf('background-color: transparent') !== -1; }), 'longhand');
+  assert.ok(rules.some(function (r) { return r.sel.indexOf('[style*="background: transparent"]') !== -1; }), 'shorthand');
+});
+
+test('popunder.css: matches the live click-catchers, not modals, widgets or ordinary overlays', function () {
+  var sels = popunderRules().map(function (r) { return r.sel; });
+  function hit(tag, empty, style) { return sels.some(function (s) { return popunderMatches(s, tag, empty, style); }); }
+  var aclib = 'top: 0px; left: 0px; width: 1024px; height: 768px; position: fixed; z-index: 2147483647; background-color: transparent;';
+  var hagoromo = 'position: fixed; inset: 0px; z-index: 2147483647; background-color: transparent; pointer-events: auto; cursor: auto; margin: 0px; padding: 0px; display: block; width: 1199px; height: 674px;';
+  assert.ok(hit('div', true, aclib), 'Adcash aclib overlay');
+  assert.ok(hit('div', true, hagoromo), 'Hagoromo overlay');
+  assert.ok(hit('div', true, 'position: fixed; inset: 0px; z-index: 2147483647; background: transparent;'), 'shorthand background');
+  assert.notOk(hit('div', false, aclib), 'non-empty div (e.g. a chat widget container)');
+  assert.notOk(hit('span', true, aclib), 'not a div');
+  assert.notOk(hit('div', true, 'position: fixed; inset: 0px; z-index: 2147483647; background-color: rgba(0, 0, 0, 0.5);'), 'modal backdrop');
+  assert.notOk(hit('div', true, 'position: fixed; inset: 0px; z-index: 1000; background-color: transparent;'), 'ordinary z-index');
+  assert.notOk(hit('div', true, 'position: absolute; inset: 0px; z-index: 2147483647; background-color: transparent;'), 'absolutely positioned');
 });
 
 var SITE = {

@@ -744,6 +744,12 @@
       plan.push(o);
     }
     if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css');
+    // Own file: ads_generic.css is regenerated from EasyList and skipped on generic-hiding exception hosts.
+    if (b.ads) {
+      var pu = { id: 'as-css-popunder', css: ['rules/cosmetic/popunder.css'], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
+      if (allow.length) pu.excludeMatches = allow.slice();
+      plan.push(pu);
+    }
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
     var userMatches = patternsFor(userHosts);
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);

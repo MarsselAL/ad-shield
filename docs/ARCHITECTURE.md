@@ -30,6 +30,7 @@ Ad Shield has two independent parts: the **general blocker** (all sites; first s
 | `youtube.json` (hand-written) | static DNR ruleset `youtube`: blocks `\|\|youtube.com/pagead/` and `\|\|youtube.com/youtubei/v1/player/ad_break` (research-v2 B.5; never `/api/stats/` or `get_drm_license`). EasyList has both too; ours stays when the weekly update replaces `ads_N`. Toggled by Ads, counted as ads, last in the manifest; `tools/build_rules.py` keeps it (`HAND_RULESETS`), `tests/validate_manifest.py` pins its rules. Also adds `pp=oAEBogYBLg` to `www.youtube.com/watch` page loads (redirect, rule 3, not counted; an allow rule, 500001, for URLs that already have it stops a loop): uBO's "oaeb" player params, so the page's player response has no ad data and YouTube's stream skips its 4-9 s ad backoff (docs/DESIGN-v2.md). |
 | `removeparams.txt` -> `removeparam.json` | our own tracking-parameter list (MIT, 46 names: UTM tags, ad click ids, e-mail tracking ids; each commented). Static ruleset `removeparam`, toggled by "Remove tracking parameters from links" (`stripTrackingParams`, default on), never counted in the popup. Two rules per name (`urlFilter` `?name=` and `&name=`, case-sensitive), each a `redirect` with `transform.queryTransform.removeParams` = all 46 names, `resourceTypes` `main_frame` + `sub_frame`, `excludedRequestDomains` `doubleclick.net`, `googleadservices.com` (click redirectors that pass the id on). A rule fires only when a listed name is present, so the redirect always changes the URL (no loop). Priority 50: above every list rule (1..4, so list `@@` exceptions do not stop it), below the allowlist rule (100). urlFilters instead of one alternation regex: Chrome compiles each `regexFilter` under a 2 KB RE2 memory limit. `tests/validate_manifest.py` allows redirect rules only here and checks this exact shape (`dnr_schema.removeparam_ruleset_errors`). |
 | `cosmetic/youtube.css` (hand-written) | YouTube hiding, registered for YouTube hosts only (below) |
+| `cosmetic/popunder.css` (hand-written) | pop-under click-catchers: empty `div` with inline `position: fixed`, `z-index: 2147483647` and a transparent background, hidden on every site (below) |
 | `scriptlets.json` (hand-written) | our scriptlet rules (below) |
 | `build-info.json` | list versions, rule counts, skipped filters by reason, `curated` host counts |
 
@@ -58,6 +59,7 @@ Registered content scripts (ids start with `as-`; the Twitch ones stay in `manif
 | Id | What | Frames | Excluded |
 |---|---|---|---|
 | `as-css-ads` | `rules/cosmetic/ads_generic.css` | all | allowlist + exception hosts |
+| `as-css-popunder` | `rules/cosmetic/popunder.css` (our own rule, so EasyList's generic-hiding exceptions do not apply) | all | allowlist |
 | `as-css-cookies` | `rules/cosmetic/cookies_generic.css` | all | allowlist + exception hosts |
 | `as-site` | `src/content/general.js` (all sites while Ads or Cookie banners (hide) is on; otherwise only the hosts that have "My filters") | top | allowlist |
 | `as-autoconsent` | `vendor/autoconsent/content.bundle.js` (`matchOriginAsFallback`) | all | allowlist |

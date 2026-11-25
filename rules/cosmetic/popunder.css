@@ -1,0 +1,14 @@
+/*
+ * Ad Shield: pop-under click-catchers (hand-written, MIT; registered as content-script CSS on every
+ * http(s) site and in every frame while Ads is on; see docs/ARCHITECTURE.md).
+ * Pop-under scripts (seen live: Adcash "aclib" on the page, a self-hosted loader inside a video
+ * embed iframe) lay an invisible div over the whole viewport, so the first click on the player
+ * opens an ad tab instead. These rules hide only such a div: an EMPTY div whose inline style has
+ * position: fixed, z-index: 2147483647 (the maximum) and a transparent background. An empty,
+ * transparent element shows nothing, so hiding it can never hide visible content; a modal
+ * backdrop (coloured) or a widget container (has children) does not match. Generic on all sites
+ * because the embed hosts rotate their domains. One rule per selector, so a selector Chrome does
+ * not understand drops only itself. The second rule covers the shorthand "background: transparent".
+ */
+div:empty[style*="position: fixed"][style*="z-index: 2147483647"][style*="background-color: transparent"]{display:none!important;pointer-events:none!important}
+div:empty[style*="position: fixed"][style*="z-index: 2147483647"][style*="background: transparent"]{display:none!important;pointer-events:none!important}

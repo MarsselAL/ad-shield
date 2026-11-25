@@ -100,7 +100,7 @@ test('startup: enables the generated rulesets, registers CSS and page script, ba
     var last = calls.rulesets[calls.rulesets.length - 1];
     assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'youtube']);
     assert.deepEqual(last.disableRulesetIds, []);
-    assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
+    assert.deepEqual(ids(), ['as-css-ads', 'as-css-cookies', 'as-css-popunder', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var sl = registered.filter(function (s) { return s.id === 'as-scriptlets'; })[0];
     assert.equal(sl.world, 'MAIN');
     assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*'], 'hosts from rules/scriptlets.json (m. is redundant with *.youtube.com)');
@@ -120,7 +120,7 @@ test('same settings again: no re-registration', function () {
 
 test('auto-reject on registers autoconsent; allowlist adds the dynamic rule and exclusions', function () {
   return setBlocking({ autoRejectCookies: true, allowlist: ['off.example'] }).then(function () {
-    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
+    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-cookies', 'as-css-popunder', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var ac = registered.filter(function (s) { return s.id === 'as-autoconsent'; })[0];
     assert.deepEqual(ac.js, ['vendor/autoconsent/content.bundle.js']);
     assert.deepEqual(ac.excludeMatches, ['*://*.off.example/*']);
