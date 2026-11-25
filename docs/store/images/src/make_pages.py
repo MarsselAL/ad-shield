@@ -91,7 +91,7 @@ page("shot-3-filters-1280x800.html", '<div class="wrap">' + text(
     ["Point and click to hide an element", "Allow a site with one switch", "Edit your own rules any time"]) +
     '<div class="stage"><div class="stack" style="width:640px;height:%dpx">' % (34 + (y1 - y0) * s3 + 70) +
     '<div style="position:absolute;right:0;top:0">' + crop("options-store-light.png", y0, y1, s3, bar="AdBrake settings") + '</div>'
-    '<div style="position:absolute;left:-30px;bottom:0">' + pcrop("popup-light.png", 16, 286, 334, 406, 1.1) + '</div>'
+    '<div style="position:absolute;left:-30px;bottom:0">' + pcrop("popup-light.png", 16, 308, 334, 462, 1.1) + '</div>'
     '</div></div></div>' + NOTE)
 
 # 4. Privacy, in dark mode: the popup as the dark theme shows it.
@@ -107,7 +107,7 @@ page("shot-5-support-1280x800.html", '<div class="wrap">' + text(
     "Every feature is free, with no ads of its own and no upsell. If it saves you time, an optional tip helps keep it going.",
     ["Nothing is locked behind a payment", "Tips are optional; reminders can be turned off",
      "Filter lists update by themselves"]) +
-    '<div class="stage">' + pcrop("popup-light-usdc.png", 346, 6, 624, 419, 1.38) + '</div></div>' + NOTE)
+    '<div class="stage">' + pcrop("popup-light-usdc.png", 346, 6, 624, 467, 1.24) + '</div></div>' + NOTE)
 
 # 440x280 small promo tile
 page("promo-small-440x280.html", '<div style="position:absolute;inset:0;background:linear-gradient(150deg,#e5222e,#a5121c);'

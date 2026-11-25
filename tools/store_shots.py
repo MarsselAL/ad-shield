@@ -9,8 +9,9 @@
    (popup.html, two panels, 630 px wide) as a background tab in the same window, so the popup reads
    the news tab as "the current tab" and shows its real counts. Captures the popup (light and
    dark) and the settings page (as it is, a store variant, and dark) at 2x. Store variants show
-   no third-party names: the page's host reads news.example.com, the popup's tip button (its
-   label names payment wallets) and settings rows naming other companies are hidden.
+   no third-party names: the page's host reads news.example.com, the popup's tip button reads
+   "Support AdBrake" (its real label names payment wallets) and settings rows naming other
+   companies are hidden.
 3. Writes the composition pages (docs/store/images/src/make_pages.py) and renders them into
    1280x800 screenshots, a 440x280 small promo tile and a 1400x560 marquee (same Chrome).
    --compose-only skips step 1-2 and reuses the captures in <out>/raw/.
@@ -84,8 +85,8 @@ def capture(out_raw, site):
 
         # 2. Popup as a background tab of the same window: tabs.query({active, currentWindow}) = news tab.
         # The popup is two panels side by side (controls | Support AdBrake), 630 px wide.
-        # Store variant: the page's host name is shown as news.example.com and the tip button, whose
-        # label names payment wallets, is hidden with its row, so the images name no third-party brand
+        # Store variant: the page's host name is shown as news.example.com and the tip button's label,
+        # which names payment wallets, reads "Support AdBrake ↗" instead, so the images name no third-party brand
         # (docs/store/review-risks.md). The counts are what the popup really counted on that page.
         for dark in (False, True):
             tid = cdp.send("Target.createTarget", {"url": "about:blank", "background": True})["targetId"]
@@ -98,12 +99,10 @@ def capture(out_raw, site):
             info = cdp.evaluate(sid, "['g-ads','g-trackers','g-banners','g-cookies','site-host']"
                                      ".map(id => id + '=' + document.getElementById(id).textContent)")
             print("popup", "dark" if dark else "light", info)
-            # Hide the whole tip-button row (not just the button), so the panel closes up with no gap.
+            # Keep the tip button (same card icon) but give it a brand-free label in the captures only.
             cdp.evaluate(sid, """(() => {
                 document.getElementById('site-host').textContent = 'news.example.com';
-                const s = document.createElement('style');
-                s.textContent = '#support-revolut { display: none !important; }';
-                document.head.appendChild(s);
+                document.querySelector('#support-link span').textContent = 'Support AdBrake \u2197';
             })()""")
             time.sleep(0.8)
             box = cdp.evaluate(sid, "(() => { const r = document.body.getBoundingClientRect();"
