@@ -1,6 +1,6 @@
-<p align="center"><img src="icons/icon128.png" width="96" height="96" alt="Ad Shield logo"></p>
+<p align="center"><img src="icons/icon128.png" width="96" height="96" alt="AdBrake logo"></p>
 
-<h1 align="center">Ad Shield</h1>
+<h1 align="center">AdBrake</h1>
 
 <p align="center"><strong>A free, open-source ad, tracker and cookie-banner blocker for Chrome, Edge, Opera and Brave.</strong><br>
 No telemetry. No accounts. No remote configuration.</p>
@@ -20,7 +20,7 @@ No telemetry. No accounts. No remote configuration.</p>
   <a href="https://marsselal.github.io/ad-shield/store/privacy-policy.html">Privacy policy</a>
 </p>
 
-![Ad Shield popup on a news page: 10 ads, 3 trackers and 1 cookie banner blocked](docs/store/images/shot-1-popup.png)
+![AdBrake popup on a news page: 10 ads, 3 trackers and 1 cookie banner blocked](docs/store/images/shot-1-popup.png)
 
 ### Highlights
 
@@ -35,7 +35,7 @@ No telemetry. No accounts. No remote configuration.</p>
 - **Private by design**: settings stay in your browser; the only downloads are the three public
   filter lists, once a week ([privacy policy](https://marsselal.github.io/ad-shield/store/privacy-policy.html)).
 
-Ad Shield is not a perfect blocker: Chrome's rule system cannot express everything that
+AdBrake is not a perfect blocker: Chrome's rule system cannot express everything that
 uBlock Origin can, so some ads get through. Do not run two ad blockers at once.
 
 <table>
@@ -79,11 +79,24 @@ configuration.
   youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
 - **Tracking parameters** (option "Remove tracking parameters from links (utm_*, fbclid,
-  gclid…)", on by default): when a page or frame opens with one of 46 known tracking parameters
+  gclid…)", on by default): when a page or frame opens with one of 102 known tracking parameters
   in its address (UTM tags, ad click ids such as `fbclid`, `gclid`, `msclkid`, e-mail tracking
   such as `mc_eid`, `_hsenc`), Chrome loads it without them; other parameters are kept. Our own
   list (`rules/removeparams.txt`, MIT), one static redirect ruleset (`removeparam`). Generic
   names (`ref`, `si`, `source`, ...) and Marketo's `mkt_tok` (unsubscribe links) are left alone.
+  The same option unwraps links: a page opened through Google AMP (`google.<tld>/amp/s/<page>`),
+  an AMP cache (`<name>.cdn.ampproject.org/c/s/<page>`), Yandex Turbo pages or the `y2u.be`
+  shortener goes straight to the real `https://` address (ruleset `unwrap`, our own
+  `rules/unwrap.txt`; patterns from DuckDuckGo's AMP list and Brave's debounce list). Redirectors
+  that hide the address percent-encoded or base64-encoded are not handled (DNR cannot decode).
+- **Global Privacy Control** (on by default): sends `Sec-GPC: 1` when a page loads and sets
+  `navigator.globalPrivacyControl` to `true` in every frame where the browser has no such
+  property (Chrome has none). Off on allowlisted sites.
+- **Surrogate scripts**: when Ads / Trackers block Google Publisher Tag, AdSense, the IMA video-ad
+  SDK, Google Analytics or Google Tag Manager, the page gets a small built-in stand-in
+  (`src/surrogates/`) instead of a failed request, so sites that call `googletag.cmd.push`,
+  `adsbygoogle.push`, `google.ima.*`, `ga()`, `gtag()` or wait for a `dataLayer` callback keep
+  working. Nothing is sent; the stand-ins only release the page's callbacks.
 - **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
   "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
   kept under **My filters** on the options page (`example.com##.selector`, editable there) and
@@ -123,14 +136,14 @@ The built files in `build/` are committed. To rebuild them: `python3 tools/build
 
 ## Share a build / install on another computer (no store)
 
-1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
-   `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
+1. Run `python3 -I tools/package.py`. It makes `dist/adbrake-<version>.zip` with one folder
+   `adbrake/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
    Tests, tools, docs and test results are left out. It also makes
-   `dist/ad-shield-<version>-store.zip` (`manifest.json` at the zip root, no `INSTALL.txt`) for
+   `dist/adbrake-<version>-store.zip` (`manifest.json` at the zip root, no `INSTALL.txt`) for
    uploading to the browser stores.
 2. Send the zip (USB stick, cloud drive, e-mail).
 3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
-   `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `ad-shield`
+   `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `adbrake`
    folder. It also covers macOS, the "developer mode extensions" message at browser start
    (expected; close it, do not disable), pinning the icon, the settings, weekly list updates,
    updating to a new zip and uninstalling.
@@ -191,7 +204,10 @@ Twitch:
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
-| `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
+| `removeparam` | 204 (102 names) | 0 | `rules/removeparams.txt` (ours) |
+| `unwrap` | 4 | 4 | `rules/unwrap.txt` (ours): AMP / redirect-hop unwrapping (regex redirects on page loads) |
+| `gpc` | 1 | 0 | `rules/gpc.json` (ours, hand-written): `Sec-GPC: 1` header on page loads |
+| `ads_surrogates`, `privacy_surrogates` | 6 + 5 | 0 | hand-written: redirects of blocked Google scripts to `src/surrogates/` (Ads / Trackers) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours; `client_ads` = 2 allow rules) |
 
 Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
@@ -264,12 +280,13 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Fix YouTube ads and anti-adblock walls (page scripts) | on | MAIN-world scriptlets on YouTube hosts (`build/scriptlets-main.js`); only while Ads is on. |
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
-| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 46 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Not counted in the popup. |
+| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 102 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Also ruleset `unwrap` (built from `rules/unwrap.txt` by `tools/unwrap.py`): 4 `regexSubstitution` redirects on page loads (`main_frame`) from Google AMP, AMP-cache, Yandex Turbo and `y2u.be` links to the real `https://` page, priority 55. Not counted in the popup. |
+| Global Privacy Control | on | Ruleset `gpc` (one `modifyHeaders` rule, priority 60: sets `Sec-GPC: 1` on `main_frame` requests; the allowlist's `allowAllRequests` rule, priority 100, outranks it) + `src/content/gpc.js` (MAIN world, all frames, document_start), which defines `navigator.globalPrivacyControl = true` on `Navigator.prototype` only if `'globalPrivacyControl' in navigator` is false. Page loads only, not sub-resources: Chrome adds every `modifyHeaders` match to the toolbar badge count. Not counted in the popup. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
-| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever Ad Shield is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
+| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever AdBrake is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
 | Block client-side ad requests on videos (VODs) | on | On `twitch.tv/videos/…` (and the embedded player with `?video=`) only, the page and its video worker answer Twitch's client-side ad requests (`edge.ads.twitch.tv`, `vaes.amazon-adsystem.com` ad paths, GET) locally with "no ad". Live streams are never touched: a failed ad request there is the likely trigger of Twitch's "you're running ad block" notice, so the always-on ruleset `client_ads` holds two allow rules (priority 5) that let these requests from twitch.tv pages through although EasyList blocks `edge.ads.twitch.tv`. Up to 2.0 `client_ads` blocked them on every page. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host, and hides the display ads beside / below the player (`[data-test-selector="display-ad"]`, `[data-test-selector="ad-banner"]`, `[data-a-target="ads-banner"]`, `iframe[title="Stream Display Ad"]`, `.stream-display-ad`), muting and pausing any `<video>` in them; never a container that holds the stream's player. |
@@ -359,7 +376,7 @@ See [docs/TESTING.md](docs/TESTING.md) for results.
 
 ## Support
 
-Ad Shield is free. If it saves you time, an optional tip is welcome:
+AdBrake is free. If it saves you time, an optional tip is welcome:
 
 - Revolut: https://revolut.me/marsel951u
 - Crypto: USDC, `0xD26B379f952D9a3008eB5a8C908d335F5715b18A` – **USDC on Ethereum (ERC-20)

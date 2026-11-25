@@ -1,6 +1,8 @@
 /*
- * Popup: master switch, per-site switch (allowlist), counts for the current page, and the Twitch
- * status/counts on Twitch tabs.
+ * Popup: two panels side by side (Chrome allows popups up to 800x600; this one is 630 wide).
+ * Left: master switch, per-site switch (allowlist), counts for the current page, quick actions and,
+ * on Twitch tabs, one compact Twitch row (status, Reload button; counts in its tooltip and for
+ * screen readers). Right: "Support AdBrake", always fully visible.
  * Counts: chrome.declarativeNetRequest.getMatchedRules({tabId, minTimeStamp}) (needs the
  * declarativeNetRequestFeedback permission) gives the DNR matches of this tab since the page
  * started (the page script reports performance.timeOrigin); "banners handled" adds the page's
@@ -9,10 +11,16 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * "Support Ad Shield" card under the header: the tip link and the BTC and USDC addresses with
- * Copy buttons, all taken from src/shared/donate.js at runtime (textContent only). Rows without a
- * value stay hidden; the card stays hidden when none is set.
- * Footer: Settings, version.
+ * Support panel: the tip button (link from src/shared/donate.js), then one QR code at a time picked
+ * with a "Phone | USDC | BTC" control (arrow keys, Home and End move between them): Phone is the tip
+ * link's QR code; USDC and BTC show the address's QR code, the shortened address (Copy copies the
+ * full one) and the network warning. Hidden when donate.js sets nothing.
+ * Occasional support note (src/shared/supportprompt.js): when due, the support panel glows once
+ * and shows a short thank-you line; nothing covers the popup.
+ * Layout, left panel: header (icon, name, Settings button), the big power button (#enabled, the
+ * master switch) with the "Ad Blocking On/Off/Paused" line, the page counts, the "This website"
+ * card (its chevron opens the per-site switch #site-on), quick actions ("Hide an element" and
+ * "Allowlist site" / "Remove from allowlist", which flips the same allowlist entry as #site-on).
  */
 (function () {
   'use strict';
@@ -41,6 +49,17 @@
     $('site-on').checked = site.on;
     $('site-on').disabled = !site.web || !settings.enabled;
     $('pick').hidden = !(site.web && site.on && settings.enabled);
+    // Status line and quick actions
+    var word = !settings.enabled ? 'Off' : (site.web && !site.on ? 'Paused' : 'On');
+    $('state-word').textContent = word;
+    $('state-word').className = 'state-word ' + (word === 'On' ? 'on' : 'off');
+    $('site-ico').className = 'site-ico ' + (site.on && settings.enabled ? 'on' : 'off');
+    var canAllow = site.web && settings.enabled;
+    $('allow-toggle').hidden = !canAllow;
+    $('allow-label').textContent = site.on ? 'Allowlist site' : 'Remove from allowlist';
+    $('allow-toggle').title = site.on ? 'Turn blocking off on this site' : 'Turn blocking back on for this site';
+    $('allow-icon').setAttribute('href', site.on ? '#i-list-plus' : '#i-list-minus');
+    $('actions').hidden = $('pick').hidden && $('allow-toggle').hidden;
   }
 
   function setCount(id, n) { $(id).textContent = typeof n === 'number' ? String(n) : '–'; }
@@ -65,6 +84,7 @@
         setCount('g-cookies', c.cookies);
         setCount('g-banners', c.banners + (page.hidden || 0) + (page.rejected || 0));
         $('counts-note').textContent = '';
+        supportNote(c.ads, page.t);
       }, function () {
         ['g-ads', 'g-trackers', 'g-cookies'].forEach(function (id) { setCount(id, null); });
         setCount('g-banners', (page.hidden || 0) + (page.rejected || 0));
@@ -104,11 +124,19 @@
     $('status-detail').textContent = st.detail;
     $('status-dot').className = 'dot ' + st.level;
     $('reload').hidden = !st.reload;
+    var tip = [st.detail];
     if (state) {
       setTwitchCounts('t', state.tab.stats);
       setTwitchCounts('l', state.lifetime);
       $('last-event').textContent = state.tab.lastEvent ? fmtTime(state.tab.lastEvent.at) + ' – ' + state.tab.lastEvent.text : 'No events yet.';
+      var n = Number(state.tab.stats.detected) || 0;
+      $('twitch-count').textContent = n + (n === 1 ? ' ad' : ' ads');
+      $('twitch-count').hidden = st.key !== 'active';
+      tip.push('Ads on this tab: ' + n + ' · lifetime: ' + (Number(state.lifetime.detected) || 0), $('last-event').textContent);
+    } else {
+      $('twitch-count').hidden = true;
     }
+    $('status-card').title = tip.filter(Boolean).join('\n');
   }
 
   function refreshTwitch() {
@@ -139,12 +167,26 @@
     chrome.storage.local.set(o);
   });
 
-  $('site-on').addEventListener('change', function (e) {
+  /** Blocking on (true) or off (false) for the current site: edits the allowlist. */
+  function setSiteBlocking(on) {
     var host = B.popupSite({ url: tabUrl() }).hostname;
-    var next = Object.assign({}, blocking, { allowlist: B.setSiteAllowed(blocking.allowlist, host, !e.target.checked) });
+    var next = Object.assign({}, blocking, { allowlist: B.setSiteAllowed(blocking.allowlist, host, !on) });
     var o = {};
     o[B.STORAGE_KEY] = next;
     chrome.storage.local.set(o).then(function () { $('site-reload').hidden = false; });
+  }
+
+  $('site-on').addEventListener('change', function (e) { setSiteBlocking(e.target.checked); });
+
+  $('allow-toggle').addEventListener('click', function () {
+    var site = B.popupSite({ url: tabUrl(), enabled: settings.enabled, allowlist: blocking.allowlist });
+    if (site.web) setSiteBlocking(!site.on);
+  });
+
+  $('site-toggle').addEventListener('click', function () {
+    var open = $('site-panel').hidden;
+    $('site-panel').hidden = !open;
+    $('site-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
   function reloadTab() {
@@ -171,41 +213,85 @@
   });
 
   // ---------------------------------------------------------------- support
+  // The tip link from src/shared/donate.js with its QR code, and the USDC / BTC addresses with
+  // theirs (static SVGs made by tools/make_qr.py). Values are set at runtime from donate.js only.
   var donate = ns.donate || {};
+
+  /** "0xD26B…b18A": the start and end people compare; the full address is copied and in the title. */
+  function shortAddress(a) {
+    a = String(a || '');
+    return a.length > 14 ? a.slice(0, 6) + '…' + a.slice(-4) : a;
+  }
+
+  var coins = [
+    { id: 'usdc', name: 'USDC', address: donate.usdcErc20, note: donate.usdcNote },
+    { id: 'btc', name: 'Bitcoin', address: donate.btc, note: donate.btcNote }
+  ].filter(function (c) { return !!c.address; });
   var copyTimers = {};
 
-  function copyLabel(btn, text) {
-    btn.textContent = text;
-    clearTimeout(copyTimers[btn.id]);
-    copyTimers[btn.id] = setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
-  }
+  // The Phone | USDC | BTC control: one view at a time, in this order, for what donate.js sets.
+  var views = (donate.url ? [{ key: 'phone', panel: 'support-phone' }] : []).concat(coins.map(function (c) {
+    return { key: c.id, panel: 'coin-' + c.id };
+  }));
 
-  /** Selects the address text so it can be copied by hand when the clipboard is unavailable. */
-  function selectText(el) {
-    try {
-      var range = document.createRange();
-      range.selectNodeContents(el);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch (e) {}
-  }
-
-  function showAddress(id, address, note) {
-    if (!address) return false;
-    var el = $(id + '-address');
-    var btn = $(id + '-copy');
-    el.textContent = address;
-    if (note) $('support-' + id).title = note;
-    $('support-' + id).hidden = false;
-    btn.addEventListener('click', function () {
-      function fallback() { selectText(el); copyLabel(btn, 'Selected'); }
-      try {
-        navigator.clipboard.writeText(address).then(function () { copyLabel(btn, 'Copied'); }, fallback);
-      } catch (e) { fallback(); }
+  function selectView(key, focus) {
+    views.forEach(function (v, i) {
+      var on = v.key === key;
+      $('tab-' + v.key).setAttribute('aria-selected', on ? 'true' : 'false');
+      $('tab-' + v.key).tabIndex = on ? 0 : -1;
+      $(v.panel).hidden = !on;
+      if (on) {
+        var seg = $('support-tabs');
+        if (seg && seg.style) { seg.style.setProperty('--seg-i', String(i)); seg.style.setProperty('--seg-n', String(views.length)); }
+      }
     });
-    return true;
+    if (focus) { try { $('tab-' + key).focus(); } catch (e) {} }
   }
+
+  views.forEach(function (v, i) {
+    var tab = $('tab-' + v.key);
+    tab.hidden = false;
+    tab.addEventListener('click', function () { selectView(v.key, false); });
+    tab.addEventListener('keydown', function (e) {
+      var to = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') to = (i + 1) % views.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') to = (i - 1 + views.length) % views.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = views.length - 1;
+      if (to < 0) return;
+      e.preventDefault();
+      selectView(views[to].key, true);
+    });
+  });
+
+  function copyAddress(c) {
+    var label = $(c.id + '-copy-label');
+    var btn = $(c.id + '-copy');
+    return navigator.clipboard.writeText(c.address).then(function () {
+      label.textContent = 'Copied ✓';
+      btn.className = 'copy copied';
+    }, function () {
+      label.textContent = 'Select it';
+      btn.className = 'copy';
+    }).then(function () {
+      if (copyTimers[c.id]) clearTimeout(copyTimers[c.id]);
+      copyTimers[c.id] = setTimeout(function () {
+        copyTimers[c.id] = null;
+        label.textContent = 'Copy';
+        btn.className = 'copy';
+      }, 1500);
+    });
+  }
+
+  coins.forEach(function (c) {
+    $(c.id + '-address').textContent = shortAddress(c.address);
+    $(c.id + '-address').title = c.address;
+    $(c.id + '-address').setAttribute('aria-label', c.name + ' address ' + c.address);
+    $(c.id + '-note').textContent = c.note || '';
+    $(c.id + '-copy').addEventListener('click', function () { copyAddress(c); });
+  });
+  $('support-crypto').hidden = !coins.length;
+  if (views.length) selectView(views[0].key, false);
 
   if (donate.url) {
     $('support-link').href = donate.url;
@@ -215,9 +301,65 @@
       chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
     });
   }
-  var btcShown = showAddress('btc', donate.btc, donate.btcNote);
-  var usdcShown = showAddress('usdc', donate.usdcErc20, donate.usdcNote);
-  $('support').hidden = !(donate.url || btcShown || usdcShown);
+  var hasSupport = !!(donate.url || coins.length);
+  $('support').hidden = !hasSupport;
+  $('layout').className = hasSupport ? 'layout' : 'layout single';
+
+  // ---------------------------------------------------------------- occasional support note
+  // src/shared/supportprompt.js decides; this adds the page's ads count to a lower-bound total
+  // (no extra getMatchedRules calls). When due, the support panel glows once and shows a short
+  // thank-you line; "Don't remind me" turns the note off (as the settings switch does).
+  var SP = ns.supportPrompt;
+  var promptChecked = false;
+
+  function updateState(fn) {
+    return chrome.storage.local.get(SP.STATE_KEY).then(function (r) {
+      var o = {};
+      o[SP.STATE_KEY] = fn(r[SP.STATE_KEY]);
+      return chrome.storage.local.set(o);
+    }).catch(function () {});
+  }
+
+  function highlightSupport(count) {
+    $('prompt-text').textContent = SP.thanks(count);
+    $('support-prompt').hidden = false;
+    $('support').className = 'panel support highlight';
+  }
+
+  function supportNote(ads, loadedAt) {
+    if (!SP || !activeTab || typeof activeTab.id !== 'number') return Promise.resolve();
+    var key = SP.pageKey(activeTab.id, tabUrl(), loadedAt);
+    return chrome.storage.local.get([SP.SEEN_KEY, SP.INSTALL_KEY, SP.STATE_KEY]).then(function (r) {
+      var now = Date.now();
+      var seen = SP.accumulate(r[SP.SEEN_KEY], key, ads);
+      var o = {};
+      o[SP.SEEN_KEY] = seen;
+      var installedAt = r[SP.INSTALL_KEY];
+      if (!installedAt) { installedAt = now; o[SP.INSTALL_KEY] = now; } // installed before this key existed
+      if (!promptChecked) {
+        promptChecked = true;
+        var version = chrome.runtime.getManifest().version;
+        var d = SP.decide({ now: now, installedAt: installedAt, seen: seen, state: r[SP.STATE_KEY],
+          version: version, hasLink: !!donate.url });
+        var st = SP.normalizeState(r[SP.STATE_KEY]);
+        st.version = version;
+        if (d.show) {
+          st = SP.shown(st, now, d.milestone);
+          highlightSupport(d.count);
+        }
+        o[SP.STATE_KEY] = st;
+      }
+      return chrome.storage.local.set(o);
+    }).catch(function () {});
+  }
+
+  if (SP) {
+    $('prompt-never').addEventListener('click', function () {
+      $('support-prompt').hidden = true;
+      $('support').className = 'panel support';
+      updateState(function (st) { return SP.never(st); });
+    });
+  }
 
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 

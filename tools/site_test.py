@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run https://superadblocktest.com/ in a throwaway Chrome, with and/or without Ad Shield.
+"""Run https://superadblocktest.com/ in a throwaway Chrome, with and/or without AdBrake.
 
 Usage:
     python3 -I tools/site_test.py                 # with the extension, then without
@@ -118,7 +118,7 @@ def write_md(outdir, runs):
     for run in runs:
         s = run["score"]
         lines.append("## %s: page score %s%%, raw %s%% (recomputed %s%% / %s%%, %d/%d blocked)" % (
-            "With Ad Shield" if run["withExtension"] else "Without extension",
+            "With AdBrake" if run["withExtension"] else "Without extension",
             run["pageScore"], run["pageRaw"], s["weighted"], s["raw"], s["blocked"], s["total"]))
         lines.append("")
         lines.append("| Module | Blocked | Score | Weight |")

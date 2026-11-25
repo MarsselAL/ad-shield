@@ -72,7 +72,9 @@ globalThis.fetch = function (url, opts) {
   url = String(url);
   if (url.indexOf(BASE) === 0) {
     var path = url.slice(BASE.length);
-    var body = path === 'rules/build-info.json' ? buildInfo : path === 'rules/cosmetic/generic.json' ? { ads: ['.old-generic'], cookies: [] } : null;
+    var body = path === 'rules/build-info.json' ? buildInfo
+      : path === 'rules/cosmetic/generic.json' ? { ads: ['.old-generic', '.ad-banner', '.generic-excepted2'], cookies: [] }
+      : path === 'rules/cosmetic/generic_excepted.json' ? { ads: ['.ad-banner'], cookies: [] } : null;
     return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(JSON.stringify(body))); } });
   }
   fetches.push({ url: url, opts: opts });
@@ -146,6 +148,8 @@ test('Update now: fetches exactly the three list URLs (no credentials, no cache)
     });
     assert.ok(d.rules.ads.some(function (x) { return x.id > 1500000; }), 'allow rules in the allow range');
     assert.equal(d.site.v, 1);
+    assert.ok(d.site.genericExceptionHosts.indexOf('e.example') !== -1, 'excepts a packaged generic selector');
+    assert.deepEqual(d.site.genericFullHosts, ['e.example'], '.generic-excepted2 is in a big packaged file; a.com only excepts .ad-banner, which is in the excepted file');
     assert.equal(local.lists.source, 'updated');
     assert.equal(local.lists.lists.easylist.version, '202611100000');
     assert.equal(local.lists.lists.easylist.rules, d.rules.ads.length);

@@ -9,6 +9,8 @@ List (converter: tools/filterlist.py, our own code).
     python3 -I tools/build_rules.py --curated-only  only rebuild the curated rulesets from
                                                     rules/curated_hosts.txt and the tracking-
                                                     parameter ruleset from rules/removeparams.txt
+                                                    and the link-unwrapping ruleset from
+                                                    rules/unwrap.txt
                                                     (no download; the other generated files stay
                                                     as they are)
 
@@ -19,8 +21,13 @@ Writes (all committed, so the extension works offline and needs no remote config
                                                                    rules/curated_hosts.txt (tools/curated.py)
     rules/removeparam.json                                         DNR redirect ruleset (queryTransform) from
                                                                    our own rules/removeparams.txt (tools/removeparam.py)
-    rules/cosmetic/ads_generic.css, rules/cosmetic/cookies_generic.css
-    rules/cosmetic/generic.json, rules/cosmetic/site.json          cosmetic data for the worker
+    rules/unwrap.json                                              DNR redirect ruleset (regexSubstitution) from
+                                                                   our own rules/unwrap.txt (tools/unwrap.py)
+    rules/cosmetic/ads_generic.css (core, every frame), ads_generic_top.css (top frame),
+    rules/cosmetic/cookies_generic.css (top frame), ads_excepted.css, cookies_excepted.css
+                                                                   generic hiding (tools/cosmetic.py)
+    rules/cosmetic/site/index.json + site/00..7f.json, generic.json, generic_excepted.json
+                                                                   cosmetic data for the worker
     rules/build-info.json                                          list versions, counts, skips
 and updates declarative_net_request.rule_resources in manifest.json.
 The list data is used under CC BY-SA 3.0 (EasyList, EasyPrivacy) and CC BY 3.0 (cookie list);
@@ -36,9 +43,11 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cosmetic as CO  # noqa: E402
 import curated as C  # noqa: E402
 import filterlist as F  # noqa: E402
 import removeparam as R  # noqa: E402
+import unwrap as U  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LISTS = [
@@ -56,14 +65,20 @@ TWITCH_RULESETS = [
 # (full or --curated-only) but never deleted by the cleanup.
 GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
 CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
-_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5, "gpc": 6,
+           "ads_surrogates": 7, "privacy_surrogates": 8, "unwrap": 9}
 # Hand-written rulesets (not generated, never deleted): kept in the manifest by every build.
-HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"}]
+# gpc: the Global Privacy Control request header (Sec-GPC: 1 on page loads).
+# ads_surrogates / privacy_surrogates: redirects of blocked Google scripts to src/surrogates/.
+HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"},
+                 {"id": "gpc", "enabled": True, "path": "rules/gpc.json"},
+                 {"id": "ads_surrogates", "enabled": True, "path": "rules/ads_surrogates.json"},
+                 {"id": "privacy_surrogates", "enabled": True, "path": "rules/privacy_surrogates.json"}]
 
 
 def ruleset_order_key(rid):
     """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip,
-    youtube, removeparam."""
+    youtube, removeparam, gpc, ads_surrogates, privacy_surrogates, unwrap."""
     if rid in _GROUPS:
         return (_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -96,6 +111,10 @@ def write_curated(root=ROOT):
     rp_entry, rp_meta, _ = R.write(root)
     entries.append(rp_entry)
     metas[R.RULESET_ID] = rp_meta
+    # And the link-unwrapping ruleset (AMP caches, redirect hops) from rules/unwrap.txt.
+    uw_entry, uw_meta, _ = U.write(root)
+    entries.append(uw_entry)
+    metas[U.RULESET_ID] = uw_meta
     return entries, metas, cinfo
 
 
@@ -103,6 +122,7 @@ def add_curated_info(info, metas, cinfo):
     info.setdefault("rulesets", {}).update(metas)
     info["curated"] = cinfo
     info["removeparam"] = {"params": metas.get(R.RULESET_ID, {}).get("params", 0)}
+    info["unwrap"] = {"rules": metas.get(U.RULESET_ID, {}).get("rules", 0)}
     info["totalStaticRules"] = sum(v["rules"] for v in info["rulesets"].values())
     return info
 
@@ -118,12 +138,13 @@ def curated_only(root=ROOT):
     rules/build-info.json. Nothing is downloaded; the other generated files are not touched."""
     read_curated(root)  # fail before writing anything
     R.read(root)
+    U.read(root)
     with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
         current = json.load(fh).get("declarative_net_request", {}).get("rule_resources", [])
     twitch = {r["id"] for r in TWITCH_RULESETS}
     hand = {r["id"] for r in HAND_RULESETS}
     keep = [r for r in current if r.get("id") not in twitch and r.get("id") not in CURATED_IDS and r.get("id") not in hand
-            and r.get("id") != R.RULESET_ID]
+            and r.get("id") not in (R.RULESET_ID, U.RULESET_ID)]
     entries, metas, cinfo = write_curated(root)
     info_path = os.path.join(root, "rules", "build-info.json")
     info = {}
@@ -162,7 +183,7 @@ def convert_texts(texts):
     """Pure conversion of the three lists. texts: {list key: file text}. Returns a dict:
     lists      {key: build-info entry without url, plus "rules" (block ids from 1, allow ids
                from ALLOW_ID_BASE + 1, before splitting into rulesets)}
-    site       the rules/cosmetic/site.json object
+    site       the site-specific cosmetic object (tools/cosmetic.py shards it into rules/cosmetic/site/)
     generic    {"ads": [...], "cookies": [...]} generic selectors (rules/cosmetic/generic.json)
     cosmetic   {"ads": CosmeticCollector, "cookies": CosmeticCollector} (finished)
     exceptions {host: set(selectors)}; cookieDomains: EasyPrivacy ||host^$third-party hosts.
@@ -274,26 +295,17 @@ def convert(lists_dir, root=ROOT):
     info["rulesets"]["cookie_strip"] = {"rules": len(strip), "block": len(strip), "allow": 0, "regex": 0}
     info["cookieStrip"] = {"candidates": len(set(cookie_domains)), "cap": COOKIE_STRIP_CAP, "domains": n_strip}
 
-    # Cosmetic data
+    # Cosmetic data (tools/cosmetic.py: generic tiers, site data)
     cosmetic = conv["cosmetic"]
     site = conv["site"]
-    cdir = os.path.join(root, "rules", "cosmetic")
-    os.makedirs(cdir, exist_ok=True)
-    for cat, c in cosmetic.items():
-        with open(os.path.join(cdir, "%s_generic.css" % cat), "w", encoding="utf-8") as fh:
-            fh.write("/* GENERATED by tools/build_rules.py from %s; see rules/NOTICE.md */\n" %
-                     ("EasyList" if cat == "ads" else "the EasyList Cookie List"))
-            fh.write(F.generic_css(c.generic))
-    with open(os.path.join(cdir, "generic.json"), "w", encoding="utf-8") as fh:
-        json.dump(conv["generic"], fh, separators=(",", ":"), ensure_ascii=False)
-    with open(os.path.join(cdir, "site.json"), "w", encoding="utf-8") as fh:
-        json.dump(site, fh, separators=(",", ":"), ensure_ascii=False)
+    tiers = CO.write_cosmetic(os.path.join(root, "rules", "cosmetic"), conv["generic"], site)
     for cat, c in cosmetic.items():
         info["cosmetic"][cat] = {
             "generic": len(c.generic),
             "siteHosts": len(c.site),
             "siteSelectors": sum(len(v) for v in c.site.values()),
         }
+    info["cosmetic"]["files"] = tiers
     info["cosmetic"]["exceptionHosts"] = len(conv["exceptions"])
     info["cosmetic"]["genericExceptionHosts"] = len(site["genericExceptionHosts"])
     info["cosmetic"]["generichide"] = len(site["generichide"])
@@ -326,6 +338,7 @@ def print_summary(info, changed):
     print("curated          ads %d hosts (%d excluded), trackers %d hosts (%d excluded), never %d" % (
         c["ads"]["hosts"], c["ads"]["exclusions"], c["trackers"]["hosts"], c["trackers"]["exclusions"], c["never"]))
     print("removeparam      %d parameter names" % info["removeparam"]["params"])
+    print("unwrap           %d link-unwrapping rules" % info.get("unwrap", {}).get("rules", 0))
     print("total static rules", info["totalStaticRules"], "| manifest", "updated" if changed else "unchanged")
 
 
@@ -334,7 +347,7 @@ def main(argv):
     if len(argv) == 2 and argv[1] == "--curated-only":
         try:
             info, changed = curated_only()
-        except (C.CuratedError, R.RemoveparamError) as e:
+        except (C.CuratedError, R.RemoveparamError, U.UnwrapError) as e:
             print("ERROR", e)
             return 1
         print_summary(info, changed)
@@ -347,7 +360,8 @@ def main(argv):
     try:
         read_curated()  # fail before downloading or deleting anything
         R.read()
-    except (C.CuratedError, R.RemoveparamError) as e:
+        U.read()
+    except (C.CuratedError, R.RemoveparamError, U.UnwrapError) as e:
         print("ERROR", e)
         return 1
     if lists_dir is None:

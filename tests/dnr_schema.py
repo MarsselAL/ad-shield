@@ -17,8 +17,17 @@ ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allo
 # Rulesets built from our own rules/curated_hosts.txt (tools/curated.py), in manifest order.
 CURATED_RULESETS = ("ads_curated", "privacy_curated")
 # Every general (non-Twitch) ruleset id the build may produce.
-GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$|^removeparam$")
-_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+GENERATED_RULESET_RE = re.compile(
+    r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_(curated|surrogates)$|^cookie_strip$|^youtube$|^removeparam$|^gpc$|^unwrap$")
+_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5, "gpc": 6,
+                 "ads_surrogates": 7, "privacy_surrogates": 8, "unwrap": 9}
+# Hand-written surrogate redirect rulesets (rules/ads_surrogates.json, rules/privacy_surrogates.json).
+SURROGATE_RULESETS = ("ads_surrogates", "privacy_surrogates")
+SURROGATE_DIR = "/src/surrogates/"
+# Hand-written Global Privacy Control ruleset (rules/gpc.json).
+GPC_RULESET = "gpc"
+# Link-unwrapping redirects (rules/unwrap.json from rules/unwrap.txt, tools/unwrap.py).
+UNWRAP_RULESET = "unwrap"
 # The only ruleset allowed to contain redirect rules (tools/removeparam.py).
 REMOVEPARAM_RULESET = "removeparam"
 ALLOWLIST_PRIORITY = 100  # src/shared/blocking.js: the per-site allowlist rule must outrank everything
@@ -177,7 +186,8 @@ def regex_count(rules):
 
 def general_order_key(rid):
     """Required manifest order of the general rulesets: ads_1.., ads_curated, privacy_1..,
-    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written), removeparam."""
+    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written), removeparam, gpc,
+    ads_surrogates, privacy_surrogates (hand-written)."""
     if rid in _ORDER_GROUPS:
         return (_ORDER_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -282,3 +292,164 @@ def removeparam_ruleset_errors(rules, name="removeparam ruleset"):
         if not m or m.group(1) not in params:
             e.append("%s: urlFilter must be ?name= or &name= of a removed name (else the redirect could loop)" % where)
     return e
+
+
+GPC_HEADER = {"header": "Sec-GPC", "operation": "set", "value": "1"}
+
+
+def gpc_ruleset_errors(rules, name="gpc ruleset"):
+    """Problems with rules/gpc.json: exactly one modifyHeaders rule that only sets Sec-GPC: 1 on
+    main_frame requests, with no other condition, priority above every list rule (1..4, so a list
+    @@ exception does not stop it) and below the per-site allowlist (allowAllRequests, 100), which
+    therefore turns it off on allowlisted sites. Main frame only: Chrome adds every modifyHeaders
+    match to the toolbar badge count, so a rule on all requests would count every request."""
+    if not isinstance(rules, list) or len(rules) != 1 or not isinstance(rules[0], dict):
+        return ["%s must hold exactly one rule" % name]
+    r = rules[0]
+    e = ["%s: %s" % (name, m) for m in rule_errors(r)]
+    if set(r) != {"id", "priority", "action", "condition"}:
+        e.append("%s: rule keys must be id, priority, action, condition" % name)
+    if not isinstance(r.get("id"), int) or not 1 <= r["id"] < ALLOW_ID_BASE:
+        e.append("%s: id must be in the block range" % name)
+    if not isinstance(r.get("priority"), int) or not 4 < r["priority"] < ALLOWLIST_PRIORITY:
+        e.append("%s: priority must be above 4 and below %d" % (name, ALLOWLIST_PRIORITY))
+    if r.get("action") != {"type": "modifyHeaders", "requestHeaders": [GPC_HEADER]}:
+        e.append("%s: action must only set the request header Sec-GPC: 1" % name)
+    if r.get("condition") != {"resourceTypes": ["main_frame"]}:
+        e.append("%s: condition must be exactly resourceTypes [main_frame]" % name)
+    return e
+
+
+UNWRAP_HOST_GROUP = "([a-z0-9-]+(?:\\.[a-z0-9-]+)+"
+
+
+def unwrap_ruleset_errors(rules, name="unwrap ruleset"):
+    """Problems with rules/unwrap.json (tools/unwrap.py): every rule is a redirect.regexSubstitution
+    to an https:// URL, on main_frame only, with a regexFilter anchored at ^https?:// and $.
+    A substitution that starts with a group (https://\\1) must take group 1 from the host-name
+    pattern, so the page always lands on https://<host name>. Priority above every list rule (1..4)
+    and below the per-site allowlist (100), which therefore turns unwrapping off there."""
+    if not isinstance(rules, list) or not rules:
+        return ["%s must be a non-empty list" % name]
+    e = ruleset_errors(rules, name)
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        where = "%s rule %s" % (name, r.get("id"))
+        if set(r) != {"id", "priority", "action", "condition"}:
+            e.append("%s: rule keys must be id, priority, action, condition" % where)
+        if not isinstance(r.get("id"), int) or not 1 <= r["id"] < ALLOW_ID_BASE:
+            e.append("%s: id must be in the block range" % where)
+        if not isinstance(r.get("priority"), int) or not 4 < r["priority"] < ALLOWLIST_PRIORITY:
+            e.append("%s: priority must be above 4 and below %d" % (where, ALLOWLIST_PRIORITY))
+        a = r.get("action") or {}
+        sub = (a.get("redirect") or {}).get("regexSubstitution")
+        if a.get("type") != "redirect" or set(a.get("redirect") or {}) != {"regexSubstitution"} or not isinstance(sub, str) \
+                or not sub.startswith("https://"):
+            e.append("%s: action must be redirect.regexSubstitution to https://..." % where)
+            continue
+        c = r.get("condition") or {}
+        if set(c) - {"regexFilter", "resourceTypes", "excludedInitiatorDomains"} or "regexFilter" not in c:
+            e.append("%s: condition must be regexFilter + resourceTypes (+ excludedInitiatorDomains)" % where)
+        if c.get("resourceTypes") != ["main_frame"]:
+            e.append("%s: resourceTypes must be [main_frame]" % where)
+        rx = c.get("regexFilter")
+        if not isinstance(rx, str) or not rx.startswith("^https?://") or not rx.endswith("$"):
+            e.append("%s: regexFilter must start with ^https?:// and end with $" % where)
+            continue
+        if sub.startswith("https://\\"):
+            first = re.search(r"(?<!\\)\((?!\?)", rx)
+            if not sub.startswith("https://\\1") or not first or not rx.startswith(UNWRAP_HOST_GROUP, first.start()):
+                e.append("%s: https://\\1 needs group 1 to start with the host pattern %s" % (where, UNWRAP_HOST_GROUP))
+        elif not re.match(r"^https://[a-z0-9-]+(\.[a-z0-9-]+)+/", sub):
+            e.append("%s: regexSubstitution must be https://<host>/... or https://\\1..." % where)
+    return e
+
+
+SURROGATE_PRIORITY = 2  # tools/filterlist.py: block rules 1, list exceptions (allow) 2
+
+
+def surrogate_ruleset_errors(rules, name="surrogate ruleset", exists=None):
+    """Problems with a surrogate ruleset: every rule redirects one script URL (urlFilter starting
+    with ||, resourceTypes exactly [script], nothing else) to a .js file under /src/surrogates/
+    (exists(path) checks it is there, when given). Priority exactly 2: above the list block rules
+    (1), so the stand-in replaces a block; equal to the list exceptions (allow, 2), which win a tie
+    over redirect, so a site the lists except still gets the real script; the allowlist (100) and
+    $important blocks (3) also win."""
+    if not isinstance(rules, list) or not rules:
+        return ["%s must be a non-empty list" % name]
+    e = ruleset_errors(rules, name)
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        where = "%s rule %s" % (name, r.get("id"))
+        if set(r) != {"id", "priority", "action", "condition"}:
+            e.append("%s: rule keys must be id, priority, action, condition" % where)
+        if not isinstance(r.get("id"), int) or not 1 <= r["id"] < ALLOW_ID_BASE:
+            e.append("%s: id must be in the block range (counted like the block it replaces)" % where)
+        if r.get("priority") != SURROGATE_PRIORITY:
+            e.append("%s: priority must be %d" % (where, SURROGATE_PRIORITY))
+        a = r.get("action") or {}
+        path = (a.get("redirect") or {}).get("extensionPath")
+        if a.get("type") != "redirect" or set(a.get("redirect") or {}) != {"extensionPath"} or not isinstance(path, str) \
+                or not re.match(r"^/src/surrogates/[a-z0-9_-]+\.js$", path):
+            e.append("%s: action must be redirect.extensionPath to %s<name>.js" % (where, SURROGATE_DIR))
+        elif exists is not None and not exists(path):
+            e.append("%s: %s does not exist" % (where, path))
+        c = r.get("condition") or {}
+        if set(c) != {"urlFilter", "resourceTypes"}:
+            e.append("%s: condition must be exactly urlFilter + resourceTypes" % where)
+        if c.get("resourceTypes") != ["script"]:
+            e.append("%s: resourceTypes must be [script]" % where)
+        uf = c.get("urlFilter")
+        if not isinstance(uf, str) or not re.match(r"^\|\|[a-z0-9.-]+\.[a-z]+/", uf):
+            e.append("%s: urlFilter must start with ||host/" % where)
+    return e
+
+
+# ---------------------------------------------------------------- tiny matcher (tests only)
+def _url_filter_regex(pattern):
+    """DNR urlFilter -> Python regex: || (domain anchor), | (start / end), * and ^ (separator or end)."""
+    rx = ""
+    if pattern.startswith("||"):
+        rx, pattern = r"^[a-z][a-z0-9+.-]*://([^/?#]*\.)?", pattern[2:]
+    elif pattern.startswith("|"):
+        rx, pattern = "^", pattern[1:]
+    end = ""
+    if pattern.endswith("|"):
+        end, pattern = "$", pattern[:-1]
+    for ch in pattern:
+        rx += ".*" if ch == "*" else r"(?:[^A-Za-z0-9_.%-]|$)" if ch == "^" else re.escape(ch)
+    return rx + end
+
+
+def _host_in(host, domains):
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def rule_matches(rule, url, resource_type, initiator_host=None):
+    """Whether a static rule's condition matches a request (enough of DNR for our tests: domains,
+    url / regex filters, resource types; domainType and request methods are ignored)."""
+    c = rule.get("condition", {})
+    host = re.match(r"^[a-z]+://([^/:?#]*)", url).group(1)
+    if "requestDomains" in c and not _host_in(host, c["requestDomains"]):
+        return False
+    if "excludedRequestDomains" in c and _host_in(host, c["excludedRequestDomains"]):
+        return False
+    if "initiatorDomains" in c and not (initiator_host and _host_in(initiator_host, c["initiatorDomains"])):
+        return False
+    if "excludedInitiatorDomains" in c and initiator_host and _host_in(initiator_host, c["excludedInitiatorDomains"]):
+        return False
+    types = c.get("resourceTypes")
+    if types is not None and resource_type not in types:
+        return False
+    if types is None and resource_type == "main_frame":
+        return False
+    if resource_type in c.get("excludedResourceTypes", []):
+        return False
+    flags = 0 if c.get("isUrlFilterCaseSensitive") else re.I
+    if "urlFilter" in c and not re.search(_url_filter_regex(c["urlFilter"]), url, flags):
+        return False
+    if "regexFilter" in c and not re.search(c["regexFilter"], url, flags):
+        return False
+    return True

@@ -25,8 +25,8 @@ import tarfile
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "17.2.0"  # published 2026-10-31
-INTEGRITY = "sha512-16K0g9pLMIyMkK+vkzSlZROAtD6SgelRd7ZI6wo7y0PaKDM11F3DmOogDvXESHKAm9/z9gTizDXXgTazxZU0pw=="
+VERSION = "18.11.0"  # published 2026-11-25
+INTEGRITY = "sha512-kaIyKo5mRGbCqH5yP8IYfj81uo2p9f4koWTfc7TVuZirIsSQIXKQ0Q+oooLGa14VIlajeR3iV5lywpQIALDA2w=="
 TARBALL = "https://registry.npmjs.org/@duckduckgo/autoconsent/-/autoconsent-%s.tgz" % VERSION
 FILES = {
     "package/dist/addon-mv3/content.bundle.js": "content.bundle.js",

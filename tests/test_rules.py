@@ -18,9 +18,11 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import dnr_schema  # noqa: E402
 import filterlist as F  # noqa: E402
 import build_rules  # noqa: E402
+import cosmetic as CO  # noqa: E402
 import curated as C  # noqa: E402
 import make_golden  # noqa: E402
 import removeparam as R  # noqa: E402
+import unwrap as U  # noqa: E402
 import build  # noqa: E402
 
 
@@ -328,12 +330,15 @@ class CuratedBuild(unittest.TestCase):
             fh.write(CuratedHosts.BASIC)
         with open(os.path.join(root, "rules", "removeparams.txt"), "w", encoding="utf-8") as fh:
             fh.write("utm_source\nfbclid  # comment\n")
+        with open(os.path.join(root, "rules", "unwrap.txt"), "w", encoding="utf-8") as fh:
+            fh.write(Unwrap.ONE)
         build_rules.curated_only(root)
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
                          ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
-                          "youtube", "removeparam"], "youtube is always kept; removeparam rebuilt and last")
+                          "youtube", "removeparam", "gpc", "ads_surrogates", "privacy_surrogates", "unwrap"],
+                         "hand-written rulesets (youtube, gpc, surrogates) are always kept; removeparam and unwrap rebuilt")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])
@@ -344,8 +349,12 @@ class CuratedBuild(unittest.TestCase):
         self.assertEqual(info["lists"], old_info["lists"])
         self.assertEqual(info["curated"]["trackers"], {"hosts": 2, "exclusions": 1})
         self.assertEqual(info["rulesets"]["ads_curated"]["rules"], 1)
-        self.assertEqual(info["totalStaticRules"], 14)
+        self.assertEqual(info["totalStaticRules"], 15)
         self.assertEqual(info["removeparam"], {"params": 2})
+        self.assertEqual(info["unwrap"], {"rules": 1})
+        self.assertEqual(info["rulesets"]["unwrap"]["regex"], 1)
+        with open(os.path.join(root, "rules", "unwrap.json"), encoding="utf-8") as fh:
+            self.assertEqual(dnr_schema.unwrap_ruleset_errors(json.load(fh)), [])
         with open(os.path.join(root, "rules", "removeparam.json"), encoding="utf-8") as fh:
             self.assertEqual(len(json.load(fh)), 4)
         for rid in ("ads_curated", "privacy_curated"):
@@ -422,6 +431,111 @@ class Removeparam(unittest.TestCase):
         for n in ("si", "ref", "mkt_tok", "source", "id"):
             self.assertNotIn(n, names)
 
+    def test_names_from_brave_and_duckduckgo(self):
+        """Names taken from Brave's query-filter.json (MPL-2.0) and DuckDuckGo's
+        tracking-parameters.json (Apache-2.0) are in the built ruleset; the short or site-scoped
+        names those lists use only for one site (or that carry page state) are not."""
+        with open(os.path.join(ROOT, R.OUTPUT), encoding="utf-8") as fh:
+            built = json.load(fh)[0]["action"]["redirect"]["transform"]["queryTransform"]["removeParams"]
+        for n in ("_gl", "mtm_cid", "pk_cid", "sfmc_id", "sfmc_activityid", "_branch_match_id", "irclickid",
+                  "oft_id", "ml_subscriber_hash", "fb_action_ids", "ga_campaign", "hmb_source"):
+            self.assertIn(n, built)
+        for n in ("s", "t", "a", "si", "ref_src", "ref_url", "stkn", "__s", "fb_comment_id", "mkt_tok", "ref", "source"):
+            self.assertNotIn(n, built)
+
+
+class Unwrap(unittest.TestCase):
+    ONE = ("# c\nrule amp\nsource test\n"
+           "regex ^https?://cdn\\.ampproject\\.org/c/s/([a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:[/?#].*)?)$\n"
+           "target https://\\1\nexclude a.example\n"
+           "test https://cdn.ampproject.org/c/s/x.example/a?b => https://x.example/a?b\n"
+           "miss https://cdn.ampproject.org/c/s/x.example:81/\n")
+
+    def test_parse_and_rule_shape(self):
+        entries = U.parse(self.ONE)
+        rules = U.build_rules(entries)
+        self.assertEqual(dnr_schema.unwrap_ruleset_errors(rules), [])
+        self.assertEqual(rules, [{"id": 1, "priority": U.PRIORITY, "action": {"type": "redirect", "redirect": {"regexSubstitution": "https://\\1"}},
+                                  "condition": {"regexFilter": entries[0]["regex"], "resourceTypes": ["main_frame"],
+                                                "excludedInitiatorDomains": ["a.example"]}}])
+        self.assertTrue(R.PRIORITY < U.PRIORITY < 100, "after removeparam's redirect would be pointless; below the allowlist")
+
+    def test_refuses_unsafe_or_wrong_entries(self):
+        one = self.ONE
+        cases = [
+            (one.replace("target https://\\1", "target http://\\1"), "https://"),
+            (one.replace("target https://\\1", "target \\1"), "https://"),
+            (one.replace("target https://\\1", "target https://\\2"), "group"),
+            (one.replace("target https://\\1", "target https://\\0"), "group"),
+            (one.replace("target https://\\1", "target https://$1"), "only use"),
+            (one.replace("([a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:[/?#].*)?)", "(.+)"), "host pattern"),
+            (one.replace("(?:[/?#].*)?)$", ".*)$"), "host pattern"),
+            (one.replace("regex ^https?://", "regex https?://"), "^https?://"),
+            (one.replace("(?:[/?#].*)?)$\n", "(?:[/?#].*)?)\n"), "end with $"),
+            (one.replace("=> https://x.example/a?b", "=> https://x.example/a"), "expected"),
+            (one.replace("miss https://cdn.ampproject.org/c/s/x.example:81/", "miss https://cdn.ampproject.org/c/s/x.example/"), "miss"),
+            (one.replace("exclude a.example", "exclude a_b"), "not a domain"),
+            (one + "rule amp\nsource x\nregex ^https?://x$\ntarget https://y.example/\ntest https://x => https://y.example/\n", "duplicate"),
+            ("source x\n", "before the first rule"),
+            ("# only comments\n", "empty"),
+            ("rule x\nsource s\nregex ^https?://a\\.example/(.*)$\ntarget https://b.example/\\1\n", "test line"),
+        ]
+        for text, why in cases:
+            with self.assertRaises(U.UnwrapError, msg=why) as cm:
+                U.parse(text)
+            self.assertIn(why, str(cm.exception), text)
+
+    def test_loops_are_refused(self):
+        loop = ("rule a\nsource s\nregex ^https?://a\\.example/(.*)$\ntarget https://b.example/\\1\n"
+                "test https://a.example/x => https://b.example/x\n"
+                "rule b\nsource s\nregex ^https?://b\\.example/(.*)$\ntarget https://a.example/\\1\n"
+                "test https://b.example/x => https://a.example/x\n")
+        with self.assertRaises(U.UnwrapError) as cm:
+            U.parse(loop)
+        self.assertIn("loop", str(cm.exception))
+
+    def test_committed_ruleset_matches_the_list(self):
+        entries = U.read(ROOT)
+        with open(os.path.join(ROOT, U.OUTPUT), encoding="utf-8") as fh:
+            committed = json.load(fh)
+        self.assertEqual(committed, U.build_rules(entries), "run python3 -I tools/build_rules.py --curated-only")
+        self.assertEqual(dnr_schema.unwrap_ruleset_errors(committed), [])
+        self.assertEqual([e["name"] for e in entries], ["google-amp", "ampproject-cache", "yandex-turbo", "y2u-shortener"])
+        self.assertTrue(all(len(e["tests"]) >= 2 and e["misses"] for e in entries))
+
+    def test_matcher_agrees_with_the_tool(self):
+        """dnr_schema.rule_matches (the DNR stand-in) fires on every test URL, never on a miss URL,
+        only for page loads, and not when the page that opened the link is an excluded site."""
+        entries = U.read(ROOT)
+        rules = U.build_rules(entries)
+        for e, r in zip(entries, rules):
+            for src, _ in e["tests"]:
+                self.assertTrue(dnr_schema.rule_matches(r, src, "main_frame"), src)
+                self.assertFalse(dnr_schema.rule_matches(r, src, "sub_frame"), src)
+                for d in e["exclude"]:
+                    self.assertFalse(dnr_schema.rule_matches(r, src, "main_frame", "www." + d), src)
+            for src in e["misses"]:
+                self.assertFalse(any(dnr_schema.rule_matches(x, src, "main_frame") for x in rules), src)
+
+    def test_shape_check_rejects_deviations(self):
+        good = U.build_rules(U.parse(self.ONE))[0]
+        changes = [
+            lambda r: r.update(priority=100),
+            lambda r: r.update(priority=3),
+            lambda r: r["action"]["redirect"].update(regexSubstitution="http://\\1"),
+            lambda r: r["action"].update(redirect={"url": "https://x.example/"}),
+            lambda r: r["condition"].update(resourceTypes=["main_frame", "sub_frame"]),
+            lambda r: r["condition"].update(regexFilter="^https?://cdn\\.ampproject\\.org/c/s/(.*)$"),
+            lambda r: r["condition"].update(regexFilter="cdn\\.ampproject\\.org/c/s/(.*)"),
+            lambda r: r["condition"].update(requestDomains=["a.example"]),
+            lambda r: r.update(id=500001),
+        ]
+        for i, change in enumerate(changes):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.unwrap_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.unwrap_ruleset_errors([]))
+
 
 class Schema(unittest.TestCase):
     def test_schema_rejects_bad_rules(self):
@@ -471,12 +585,95 @@ class Schema(unittest.TestCase):
         self.assertTrue(dnr_schema.curated_ruleset_errors([]))
 
     def test_general_ruleset_ids_and_order(self):
-        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam"):
+        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam", "gpc",
+                    "ads_surrogates", "privacy_surrogates", "unwrap"):
             self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
             self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
-        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip"]
+        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip", "youtube", "removeparam", "gpc",
+               "ads_surrogates", "privacy_surrogates", "unwrap"]
         self.assertEqual(sorted(reversed(ids), key=dnr_schema.general_order_key), ids)
+        self.assertEqual(sorted(reversed(ids), key=build_rules.ruleset_order_key), ids)
+
+    def test_gpc_ruleset_shape(self):
+        with open(os.path.join(ROOT, "rules", "gpc.json"), encoding="utf-8") as fh:
+            rules = json.load(fh)
+        self.assertEqual(dnr_schema.gpc_ruleset_errors(rules), [])
+        good = rules[0]
+        bad = [
+            lambda r: r.update(priority=2),     # a list @@ exception (priority 2) would drop the header
+            lambda r: r.update(priority=100),   # must stay below the allowlist (allowAllRequests, 100)
+            lambda r: r["condition"].update(resourceTypes=["main_frame", "script"]),  # badge would count every request
+            lambda r: r["condition"].update(requestDomains=["a.com"]),
+            lambda r: r["action"]["requestHeaders"][0].update(value="0"),
+            lambda r: r["action"]["requestHeaders"].append({"header": "DNT", "operation": "set", "value": "1"}),
+            lambda r: r["action"].update(responseHeaders=[{"header": "x", "operation": "remove"}]),
+        ]
+        for i, change in enumerate(bad):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.gpc_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.gpc_ruleset_errors([good, dict(good, id=2)]))
+
+    def test_surrogate_shape_check_rejects_deviations(self):
+        good = {"id": 1, "priority": 2, "action": {"type": "redirect", "redirect": {"extensionPath": "/src/surrogates/gtm.js"}},
+                "condition": {"urlFilter": "||googletagmanager.com/gtm.js^", "resourceTypes": ["script"]}}
+        self.assertEqual(dnr_schema.surrogate_ruleset_errors([good]), [])
+        bad = [
+            lambda r: r.update(priority=1),     # a block (1) at the same priority would win the tie
+            lambda r: r.update(priority=3),     # would override the lists' exceptions (allow, 2)
+            lambda r: r.update(id=500001),
+            lambda r: r["action"]["redirect"].update(extensionPath="/src/popup/popup.js"),
+            lambda r: r["action"].update(redirect={"url": "https://example.com/x.js"}),
+            lambda r: r["condition"].update(resourceTypes=["script", "main_frame"]),
+            lambda r: r["condition"].update(initiatorDomains=["a.com"]),
+            lambda r: r["condition"].update(urlFilter="/gtm.js"),
+        ]
+        for i, change in enumerate(bad):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.surrogate_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.surrogate_ruleset_errors([good], exists=lambda p: False))
+        self.assertTrue(dnr_schema.surrogate_ruleset_errors([]))
+
+    def test_url_filter_matcher(self):
+        m = dnr_schema.rule_matches
+        r = {"condition": {"urlFilter": "||google-analytics.com/analytics.js^", "resourceTypes": ["script"]}}
+        self.assertTrue(m(r, "https://www.google-analytics.com/analytics.js", "script"))
+        self.assertTrue(m(r, "https://google-analytics.com/analytics.js?x=1", "script"))
+        self.assertFalse(m(r, "https://www.google-analytics.com/analytics.jsx", "script"))
+        self.assertFalse(m(r, "https://notgoogle-analytics.com/analytics.js", "script"))
+        self.assertFalse(m(r, "https://www.google-analytics.com/analytics.js", "xmlhttprequest"))
+        self.assertTrue(m({"condition": {"requestDomains": ["a.com"]}}, "https://x.a.com/p", "image"))
+        self.assertFalse(m({"condition": {"requestDomains": ["a.com"]}}, "https://x.a.com/p", "main_frame"))
+        self.assertFalse(m({"condition": {"urlFilter": "/x", "initiatorDomains": ["b.com"]}}, "https://a.com/x", "script", "c.com"))
+
+
+# Requests the surrogate rulesets must turn into their stand-in (and the list category whose
+# block they replace). Each must also be blocked by that category's packaged lists today.
+SURROGATE_SAMPLES = [
+    ("ads", "https://securepubads.g.doubleclick.net/tag/js/gpt.js", "gpt.js"),
+    ("ads", "https://www.googletagservices.com/tag/js/gpt.js?network=1", "gpt.js"),
+    ("ads", "https://securepubads.g.doubleclick.net/pagead/managed/js/gpt/m202511200101/pubads_impl.js", "noop.js"),
+    ("ads", "https://securepubads.g.doubleclick.net/gpt/pubads_impl_2024103101.js", "noop.js"),
+    ("ads", "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1", "adsbygoogle.js"),
+    ("ads", "https://imasdk.googleapis.com/js/sdkloader/ima3.js", "ima3.js"),
+    ("trackers", "https://www.google-analytics.com/analytics.js", "analytics.js"),
+    ("trackers", "https://ssl.google-analytics.com/ga.js", "ga.js"),
+    ("trackers", "https://www.googletagmanager.com/gtm.js?id=GTM-ABC1", "gtm.js"),
+    ("trackers", "https://www.googletagmanager.com/gtag/js?id=G-ABC123", "gtm.js"),
+    ("trackers", "https://www.googletagmanager.com/gtag/js?id=AW-123", "gtm.js"),
+    ("trackers", "https://www.google-analytics.com/gtm/js?id=GTM-1", "gtm.js"),
+]
+# Look-alikes no surrogate rule may touch.
+SURROGATE_MISSES = [
+    ("https://www.google-analytics.com/analytics.jsx", "script"),
+    ("https://www.google-analytics.com/analytics.js", "xmlhttprequest"),
+    ("https://www.googletagmanager.com/gtm.js?id=GTM-1", "main_frame"),
+    ("https://imasdk.googleapis.com/js/sdkloader/ima3_dai.js", "script"),
+    ("https://example.com/gtm.js", "script"),
+    ("https://www.google-analytics.com/g/collect?v=2", "script"),
+]
 
 
 class GeneratedData(unittest.TestCase):
@@ -551,6 +748,33 @@ class GeneratedData(unittest.TestCase):
                 for w in words:
                     self.assertNotIn(w, c.get("urlFilter") or c.get("regexFilter") or "", (rid, r["id"]))
 
+    def test_surrogate_rulesets(self):
+        cat = {"ads": "ads_surrogates", "trackers": "privacy_surrogates"}
+        lists = {"ads": [i for i in self.rulesets if re.match(r"^ads_(\d+|curated)$", i)],
+                 "trackers": [i for i in self.rulesets if re.match(r"^privacy_(\d+|curated)$", i)]}
+        for rid in cat.values():
+            self.assertEqual(dnr_schema.surrogate_ruleset_errors(
+                self.rulesets[rid], rid, lambda p: os.path.isfile(os.path.join(ROOT, p.lstrip("/")))), [], rid)
+        used = set()
+        for c, url, target in SURROGATE_SAMPLES:
+            hits = [(rid, r["id"]) for rid in cat.values() for r in self.rulesets[rid] if dnr_schema.rule_matches(r, url, "script", "example.org")]
+            self.assertEqual(len(hits), 1, (url, hits))
+            rid, rule_id = hits[0]
+            self.assertEqual(rid, cat[c], url)
+            rule = [r for r in self.rulesets[rid] if r["id"] == rule_id][0]
+            self.assertEqual(rule["action"]["redirect"]["extensionPath"], "/src/surrogates/" + target, url)
+            used.add((rid, rule_id))
+            blocks = [(i, r["id"]) for i in lists[c] for r in self.rulesets[i]
+                      if r["action"]["type"] == "block" and "initiatorDomains" not in r["condition"]
+                      and dnr_schema.rule_matches(r, url, "script", "example.org")]
+            self.assertTrue(blocks, "%s: the %s lists no longer block it, so its surrogate would replace a working script" % (url, c))
+        every = {(rid, r["id"]) for rid in cat.values() for r in self.rulesets[rid]}
+        self.assertEqual(used, every, "every surrogate rule has a sample URL")
+        for url, rtype in SURROGATE_MISSES:
+            for rid in cat.values():
+                for r in self.rulesets[rid]:
+                    self.assertFalse(dnr_schema.rule_matches(r, url, rtype, "example.org"), (url, rtype, rid, r["id"]))
+
     def test_curated_rulesets(self):
         ids = [r["id"] for r in self.manifest["declarative_net_request"]["rule_resources"]]
         for rid in dnr_schema.CURATED_RULESETS:
@@ -563,19 +787,20 @@ class GeneratedData(unittest.TestCase):
 
     def test_cosmetic_files(self):
         cdir = os.path.join(ROOT, "rules", "cosmetic")
-        with open(os.path.join(cdir, "site.json"), encoding="utf-8") as fh:
-            site = json.load(fh)
+        self.assertFalse(os.path.exists(os.path.join(cdir, "site.json")), "replaced by site/ shards")
+        site = CO.read_site(cdir)
         with open(os.path.join(cdir, "generic.json"), encoding="utf-8") as fh:
             generic = json.load(fh)
         self.assertEqual(site["v"], 1)
-        for k in ("ads", "cookies", "exceptions", "genericExceptionHosts", "generichide", "elemhide"):
+        for k in ("ads", "cookies", "exceptions", "genericExceptionHosts", "generichide", "elemhide", "genericFullHosts"):
             self.assertIn(k, site)
+        self.assertGreater(len(site["ads"]), 5000)
         self.assertGreater(len(generic["ads"]), 1000)
         self.assertGreater(len(generic["cookies"]), 1000)
         for h in site["genericExceptionHosts"] + site["generichide"] + site["elemhide"]:
             self.assertIn(".", h, "a single-label host would exclude a whole TLD from generic hiding")
-        for cat in ("ads", "cookies"):
-            with open(os.path.join(cdir, "%s_generic.css" % cat), encoding="utf-8") as fh:
+        for name in ("ads_generic.css", "ads_generic_top.css", "cookies_generic.css", "ads_excepted.css", "cookies_excepted.css"):
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
                 css = fh.read()
             self.assertEqual(css.count("{display:none!important}"), css.count("\n") - 1)
             for line in css.split("\n")[1:]:
@@ -603,12 +828,132 @@ class EndToEnd(unittest.TestCase):
         for r in rulesets:
             with open(os.path.join(out, r["path"]), encoding="utf-8") as fh:
                 self.assertEqual(dnr_schema.ruleset_errors(json.load(fh)), [])
-        with open(os.path.join(out, "rules", "cosmetic", "site.json"), encoding="utf-8") as fh:
-            site = json.load(fh)
+        site = CO.read_site(os.path.join(out, "rules", "cosmetic"))
         self.assertEqual(site["ads"], {"a.com": [".side-ad"]})
         self.assertEqual(site["cookies"], {"b.com": [".consent"]})
         self.assertEqual(site["genericExceptionHosts"], ["a.com"])
         self.assertEqual(site["generichide"], ["good.example"])
+        self.assertEqual(site["genericFullHosts"], [])
+        cdir = os.path.join(out, "rules", "cosmetic")
+        with open(os.path.join(cdir, "ads_excepted.css"), encoding="utf-8") as fh:
+            self.assertIn(".ad{display:none!important}", fh.read(), "a.com#@#.ad: in the excepted file")
+        with open(os.path.join(cdir, "ads_generic.css"), encoding="utf-8") as fh:
+            self.assertNotIn(".ad{", fh.read())
+        with open(os.path.join(cdir, "cookies_generic.css"), encoding="utf-8") as fh:
+            self.assertIn(".cookie-bar{display:none!important}", fh.read())
+        self.assertTrue(os.path.isfile(os.path.join(cdir, "ads_generic_top.css")))
+        self.assertEqual(len([f for f in os.listdir(os.path.join(cdir, "site")) if f.endswith(".json")]), CO.SITE_SHARDS + 1)
+        self.assertEqual(info["cosmetic"]["files"]["adsCore"], 0)
+        self.assertEqual(info["cosmetic"]["files"]["adsExcepted"], 1)
+
+
+class GenericTiers(unittest.TestCase):
+    """tools/cosmetic.py: generic ad selectors split into a core (every frame) and the rest
+    (top frame); cookie-banner generic CSS top frame only."""
+
+    def test_core_rule(self):
+        for sel in (".ad-banner", "#ad-top", 'div[id^="ad-"]', ".sponsored > .label", '[id^="div-gpt-ad"]',
+                    "ins.adsbygoogle[data-ad-client]", "AMP-AD", "#AdSkyscraper", ".ad-300x250", "#adsense"):
+            self.assertTrue(CO.is_core_candidate(sel), sel)
+        for sel in (".widget_wpstealthads_widget", "#rightrail_pos1_ddb_0", 'a[href^="https://glersakr.com/"]',
+                    ".generic-excepted", ".banner", "#top-sidebar", ".adv-top-right-side-box-wrapper", ".anyClipWrapper"):
+            self.assertFalse(CO.is_core_candidate(sel), sel)
+
+    def test_split_keeps_every_selector_once_and_respects_the_budget(self):
+        sels = [".ad", ".ads-box", ".foo", "#ad-top-banner-wrapper", ".adv", ".bar-ad"]
+        core, top = CO.split_ad_tiers(sels, budget=12)
+        self.assertEqual(core, [".ad", ".adv"], "fewest words, then shortest, until the budget is used")
+        self.assertEqual(top, [".ads-box", ".foo", "#ad-top-banner-wrapper", ".bar-ad"])
+        core, top = CO.split_ad_tiers(sels)
+        self.assertEqual(sorted(core + top), sorted(sels))
+        self.assertEqual(top, [".foo"])
+
+    def test_golden_generic_coverage(self):
+        """Fixture lists: the top frame keeps every generic selector; sub-frames keep the ad-slot ones."""
+        g = make_golden.golden()["generic"]
+        core, top = CO.split_ad_tiers(g["ads"])
+        self.assertEqual(sorted(core + top), sorted(g["ads"]))
+        self.assertEqual(core, [".ad-banner", "#ad-top", 'div[id^="ad-"]', ".sponsored > .label"])
+        self.assertEqual(top, [".generic-excepted", ".generic-excepted2", ".generic-with-neg"])
+
+    def test_committed_tiers(self):
+        cdir = os.path.join(ROOT, "rules", "cosmetic")
+        generic, site = CO.read_committed()
+        excepted = CO.excepted_selectors(generic, site)
+        skip = set(excepted["ads"]) | set(excepted["cookies"])
+        core, top = CO.split_ad_tiers([s for s in generic["ads"] if s not in skip])
+        self.assertLessEqual(sum(len(s) + 1 for s in core), CO.CORE_MAX_BYTES)
+        self.assertGreater(len(core), 2000)
+        every_frame = set(core) | set(excepted["ads"])
+        for sel in ('[id^="div-gpt-ad"]', '[id^="google_ads_iframe_"]', "ins.adsbygoogle[data-ad-client]", "AMP-AD"):
+            self.assertIn(sel, every_frame)
+        want = {"ads_generic.css": (core, "EasyList (generic core, every frame)"),
+                "ads_generic_top.css": (top, "EasyList (other generic, top frame)"),
+                "cookies_generic.css": ([s for s in generic["cookies"] if s not in skip], "the EasyList Cookie List (top frame)"),
+                "ads_excepted.css": (excepted["ads"], "EasyList (generic, excepted on some sites)"),
+                "cookies_excepted.css": (excepted["cookies"], "the EasyList Cookie List (generic, excepted on some sites)")}
+        for name, (sels, source) in want.items():
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), CO.css_file(sels, source), "run python3 -I tools/cosmetic.py: " + name)
+        size = 0
+        for name in ("ads_generic.css", "ads_excepted.css"):
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
+                size += len(fh.read())
+        self.assertLess(size, 56 * 1024, "the CSS every frame parses stays small")
+        with open(os.path.join(cdir, "generic_excepted.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), excepted)
+        self.assertGreater(len(excepted["ads"]) + len(excepted["cookies"]), 100)
+        self.assertEqual(site["genericFullHosts"], [], "packaged: every excepted selector is in the excepted files")
+        self.assertEqual(CO.full_generic_hosts(site, generic, excepted), [])
+
+
+class SiteShards(unittest.TestCase):
+    """tools/cosmetic.py site/ shards (same functions as src/shared/blocking.js; parity is checked
+    in tests/blocking.test.js against these files)."""
+
+    def test_shard_key_keeps_parents_together(self):
+        self.assertEqual(CO.shard_key("a.b.example.com"), "example.com")
+        self.assertEqual(CO.shard_key("www.bbc.co.uk"), "bbc.co.uk")
+        self.assertEqual(CO.shard_key("example.com"), "example.com")
+        self.assertTrue(CO.is_global_host("co.uk") and CO.is_global_host("uk") and CO.is_global_host("gov.uk"))
+        self.assertFalse(CO.is_global_host("example.com"))
+        for host in ("www.bbc.co.uk", "a.b.c.example.org", "x.y.gov.pl", "10.0.0.1", "deep.sub.site.com.au"):
+            labels = host.split(".")
+            for i in range(len(labels)):
+                parent = ".".join(labels[i:])
+                if not CO.is_global_host(parent):
+                    self.assertEqual(CO.shard_of(parent), CO.shard_of(host), (host, parent))
+        self.assertEqual(CO.fnv1a(""), 0x811C9DC5)
+        self.assertEqual(CO.fnv1a("a"), 0xE40C292C)
+
+    def test_split_merge_round_trip(self):
+        site = dict(make_golden.golden()["site"])
+        site["genericFullHosts"] = []
+        index, shards = CO.split_site(site)
+        self.assertEqual(len(shards), CO.SITE_SHARDS)
+        self.assertEqual(index["genericExceptionHosts"], site["genericExceptionHosts"])
+        self.assertEqual(CO.merge_site(index, shards), site)
+
+    def test_committed_shards(self):
+        sdir = os.path.join(ROOT, "rules", "cosmetic", "site")
+        names = sorted(f for f in os.listdir(sdir) if f.endswith(".json"))
+        self.assertEqual(names, sorted(["index.json"] + ["%02x.json" % i for i in range(CO.SITE_SHARDS)]))
+        with open(os.path.join(ROOT, "src", "shared", "blocking.js"), encoding="utf-8") as fh:
+            self.assertEqual(int(re.search(r"var SITE_SHARDS = (\d+);", fh.read()).group(1)), CO.SITE_SHARDS)
+        biggest = 0
+        for i in range(CO.SITE_SHARDS):
+            path = os.path.join(sdir, CO.shard_name(i) + ".json")
+            biggest = max(biggest, os.path.getsize(path))
+            with open(path, encoding="utf-8") as fh:
+                sh = json.load(fh)
+            for k in CO.SITE_MAPS:
+                for h in sh[k]:
+                    self.assertTrue(CO.is_global_host(h) or CO.shard_of(h) == i, (i, h))
+        self.assertLess(biggest, 32 * 1024, "a page reads one small shard")
+        generic, site = CO.read_committed()
+        index, shards = CO.split_site(site)
+        with open(os.path.join(sdir, "index.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), index)
 
 
 class Golden(unittest.TestCase):

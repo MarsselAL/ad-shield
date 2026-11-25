@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Build the two zips of Ad Shield: one to share by hand, one to upload to an extension store.
+"""Build the two zips of AdBrake: one to share by hand, one to upload to an extension store.
 
-    python3 -I tools/package.py        ->  dist/ad-shield-<version>.zip
-                                           dist/ad-shield-<version>-store.zip
+    python3 -I tools/package.py        ->  dist/adbrake-<version>.zip
+                                           dist/adbrake-<version>-store.zip
 
 Rebuilds the bundles first (tools/build.py), then zips only what the browser needs at run time:
 manifest.json, build/, src/, rules/, vendor/, icons/, LICENSE, NOTICE.md.
 
-ad-shield-<version>.zip (to share): everything under one top folder "ad-shield/", plus INSTALL.txt
+adbrake-<version>.zip (to share): everything under one top folder "adbrake/", plus INSTALL.txt
 (copied from docs/INSTALL.txt: install, update and uninstall steps for Chrome, Edge and Brave on
 Windows and macOS), with the optional support lines from docs/donate.txt appended.
 
-ad-shield-<version>-store.zip (for store upload): the same run-time files with manifest.json at the
+adbrake-<version>-store.zip (for store upload): the same run-time files with manifest.json at the
 zip root (no top folder) and no INSTALL.txt.
 
 Never included in either: tests/, tools/, results/, dist/, the rest of docs/, _metadata/,
-dotfiles, Python caches.
+icons/source/ (the icon artwork), dotfiles, Python caches.
 """
 import json
 import os
@@ -24,11 +24,13 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOP = "ad-shield"
+TOP = "adbrake"
 INCLUDE = ["manifest.json", "LICENSE", "NOTICE.md", "build", "src", "rules", "vendor", "icons"]
 # (source in the repo, name in the zip root)
 EXTRA = [("docs/INSTALL.txt", "INSTALL.txt")]
 SKIP_DIRS = {"tests", "tools", "results", "dist", "docs", "__pycache__", "_metadata", ".git", ".claude"}
+# Paths under INCLUDE that the browser never needs: the full-size artwork tools/make_icons.py reads.
+SKIP_PATHS = {"icons/source"}
 
 
 def files_to_zip(root=ROOT):
@@ -40,7 +42,9 @@ def files_to_zip(root=ROOT):
             out.append((path, TOP + "/" + item))
             continue
         for d, dirs, files in os.walk(path):
-            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+            rel = os.path.relpath(d, root).replace(os.sep, "/")
+            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith(".")
+                             and rel + "/" + x not in SKIP_PATHS)
             for f in sorted(files):
                 if f.startswith(".") or f.endswith(".pyc"):
                     continue
@@ -79,7 +83,7 @@ def support_text(info):
         lines.append("  BTC on the Bitcoin network only: " + info["btc"])
     if not lines:
         return ""
-    text = "Like Ad Shield? Optional support:\n" + "\n".join(lines) + "\n"
+    text = "Like AdBrake? Optional support:\n" + "\n".join(lines) + "\n"
     if info.get("usdc_erc20") or info.get("btc"):
         text += "Sending other coins or using other networks will lose the funds.\n"
     return text
@@ -103,7 +107,7 @@ def _write_zip(out, entries, root, install_name=None):
 
 
 def build_zip(out, root=ROOT):
-    """Write the zip to share (top folder "ad-shield/", with INSTALL.txt) to `out`; returns the
+    """Write the zip to share (top folder "adbrake/", with INSTALL.txt) to `out`; returns the
     number of files."""
     return _write_zip(out, files_to_zip(root), root, install_name=TOP + "/INSTALL.txt")
 
@@ -118,10 +122,10 @@ def main():
     subprocess.check_call([sys.executable, "-I", os.path.join(ROOT, "tools", "build.py")])
     with open(os.path.join(ROOT, "manifest.json"), encoding="utf-8") as fh:
         version = json.load(fh)["version"]
-    out = os.path.join(ROOT, "dist", "ad-shield-%s.zip" % version)
+    out = os.path.join(ROOT, "dist", "adbrake-%s.zip" % version)
     count = build_zip(out)
     print("wrote %s (%d files); share it with %s/INSTALL.txt inside" % (os.path.relpath(out, ROOT), count, TOP))
-    store = os.path.join(ROOT, "dist", "ad-shield-%s-store.zip" % version)
+    store = os.path.join(ROOT, "dist", "adbrake-%s-store.zip" % version)
     count = build_store_zip(store)
     print("wrote %s (%d files); upload it to the extension store" % (os.path.relpath(store, ROOT), count))
     return 0

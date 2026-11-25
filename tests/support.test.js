@@ -1,12 +1,13 @@
 /*
- * "Support Ad Shield" in the popup (card under the header) and on the settings page (first card):
+ * "Support AdBrake" in the popup (the right-hand panel: tip link, its QR code, and the USDC / BTC
+ * addresses behind a "Crypto" switch) and on the settings page (first card):
  * popup.js and options.js run against a small DOM built from the ids in their HTML files and must
  * show the tip link and the BTC and USDC addresses exactly as src/shared/donate.js holds them,
  * which must equal docs/donate.txt. Copy buttons must copy the exact value. No address or link is
  * written in this file: every expected value is read from donate.js or docs/donate.txt.
  */
 loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/blocking.js', 'src/shared/stats.js',
-  'src/shared/userfilters.js', 'src/shared/lists.js', 'src/shared/donate.js');
+  'src/shared/userfilters.js', 'src/shared/lists.js', 'src/shared/donate.js', 'src/shared/supportprompt.js');
 
 var REAL_DONATE = __TAS__.donate;
 
@@ -140,21 +141,29 @@ test('support: no address or link is written into the popup or settings page sou
 
 // ------------------------------------------------------------------------------ layout
 
-test('support: popup card sits under the header, before the site card; no footer link', function () {
+test('support: popup support panel sits beside the main panel; no footer link', function () {
   var html = readFile('src/popup/popup.html');
-  var card = html.indexOf('id="support"');
-  assert.ok(card > html.indexOf('</header>'), 'after the header');
-  assert.ok(card < html.indexOf('class="card site"'), 'before the site card');
-  assert.equal(html.indexOf('id="support"', card + 1), -1, 'one support element only');
+  var panel = html.indexOf('id="support"');
+  assert.ok(panel > html.indexOf('</header>'), 'after the header');
+  assert.ok(panel > html.indexOf('class="card site"'), 'after the site card');
+  assert.ok(html.indexOf('class="panel main-panel"') < panel, 'main panel first (left)');
+  assert.includes(html.slice(html.lastIndexOf('<', panel), panel), '<aside class="panel support"', 'support is its own panel');
+  assert.equal(html.indexOf('id="support"', panel + 1), -1, 'one support element only');
   var footer = html.slice(html.indexOf('<footer'), html.indexOf('</footer>'));
   assert.notIncludes(footer, 'support', 'footer has no support link');
 });
 
-test('support: popup labels name the networks', function () {
+test('support: popup has the tip link, the phone QR inline and both coins with their QR codes', function () {
   var html = readFile('src/popup/popup.html');
-  assert.includes(html, 'BTC · Bitcoin network');
-  assert.includes(html, 'USDC · Ethereum (ERC-20) only');
-  assert.includes(html, 'Revolut tip');
+  assert.includes(html, 'Card · Apple Pay · Google Pay');
+  ['../assets/qr/revolut.svg', '../assets/qr/usdc.svg', '../assets/qr/btc.svg'].forEach(function (s) { assert.includes(html, s); });
+  ['tab-phone', 'tab-usdc', 'tab-btc', 'coin-usdc', 'coin-btc', 'usdc-address', 'btc-address', 'usdc-copy', 'btc-copy',
+    'usdc-note', 'btc-note'].forEach(function (id) { assert.includes(html, 'id="' + id + '"', id); });
+  assert.includes(html, 'role="tablist"');
+  ['qr-sheet', 'qr-open', 'prompt-later', 'prompt-support', 'sheet-backdrop'].forEach(function (s) {
+    assert.notIncludes(html, s, 'old sheet markup gone: ' + s);
+  });
+  assert.notIncludes(html, 'Revolut', 'no payment-provider name in the popup UI');
 });
 
 test('support: settings page shows #support as the first card', function () {
@@ -170,45 +179,142 @@ test('support: settings page shows #support as the first card', function () {
 
 // ------------------------------------------------------------------------------ popup.js
 
-test('support: popup shows the link and both addresses exactly as donate.js and donate.txt', function () {
+test('support: popup shows the tip link exactly as donate.js and donate.txt', function () {
   var env = runPopup(REAL_DONATE);
-  var txt = donateTxt();
   var e = env.els;
   assert.equal(e['support'].hidden, false, 'card shown');
-  assert.equal(e['support-revolut'].hidden, false, 'revolut row');
-  assert.equal(e['support-btc'].hidden, false, 'btc row');
-  assert.equal(e['support-usdc'].hidden, false, 'usdc row');
+  assert.equal(e['support-revolut'].hidden, false, 'link row');
   assert.equal(e['support-link'].href, REAL_DONATE.url);
-  assert.equal(e['btc-address'].textContent, REAL_DONATE.btc);
-  assert.equal(e['usdc-address'].textContent, REAL_DONATE.usdcErc20);
-  assert.equal(e['support-link'].href, txt.url);
-  assert.equal(e['btc-address'].textContent, txt.btc);
-  assert.equal(e['usdc-address'].textContent, txt.usdcErc20);
+  assert.equal(e['support-link'].href, donateTxt().url);
+  assert.equal(e['support-phone'].hidden, false, 'Pay with phone shown inline');
+  assert.equal(e['layout'].className, 'layout', 'two panels');
   return settle();
 });
 
-test('support: popup copy buttons copy the exact address and show "Copied"', function () {
+test('support: popup shows both addresses shortened from donate.js, full in the title, with the notes', function () {
   var env = runPopup(REAL_DONATE);
-  var btn = env.els['btc-copy'];
-  btn.fire('click');
-  env.els['usdc-copy'].fire('click');
-  assert.deepEqual(env.copied, [REAL_DONATE.btc, REAL_DONATE.usdcErc20]);
-  assert.deepEqual(env.copied, [donateTxt().btc, donateTxt().usdcErc20]);
-  return settle().then(function () {
-    assert.equal(btn.textContent, 'Copied');
-    assert.equal(env.els['usdc-copy'].textContent, 'Copied');
-    __advanceTimers(5000);
-    assert.equal(btn.textContent, 'Copy', 'label restored');
+  var e = env.els;
+  assert.equal(e['support-crypto'].hidden, false, 'crypto shown');
+  [['usdc', REAL_DONATE.usdcErc20, REAL_DONATE.usdcNote], ['btc', REAL_DONATE.btc, REAL_DONATE.btcNote]].forEach(function (c) {
+    var shown = e[c[0] + '-address'].textContent;
+    assert.equal(shown, c[1].slice(0, 6) + '…' + c[1].slice(-4), c[0] + ' shortened');
+    assert.equal(e[c[0] + '-address'].title, c[1], c[0] + ' full address in the title');
+    assert.includes(e[c[0] + '-address'].getAttribute('aria-label'), c[1]);
+    assert.equal(e[c[0] + '-note'].textContent, c[2], c[0] + ' network warning');
+    assert.equal(e['tab-' + c[0]].hidden, false, c[0] + ' tab shown');
+  });
+  assert.equal(e['usdc-address'].title, donateTxt().usdcErc20);
+  assert.equal(e['btc-address'].title, donateTxt().btc);
+  return settle();
+});
+
+var VIEW_OF = { phone: 'support-phone', usdc: 'coin-usdc', btc: 'coin-btc' };
+
+/** Exactly one support view shown (`key`), its tab selected and focusable, the others not. */
+function assertView(e, key, msg) {
+  Object.keys(VIEW_OF).forEach(function (k) {
+    var on = k === key;
+    assert.equal(e[VIEW_OF[k]].hidden, !on, (msg || '') + ' ' + k + (on ? ' shown' : ' hidden'));
+    assert.equal(e['tab-' + k].getAttribute('aria-selected'), on ? 'true' : 'false', (msg || '') + ' tab-' + k + ' selected');
+    assert.equal(e['tab-' + k].tabIndex, on ? 0 : -1, (msg || '') + ' tab-' + k + ' tabIndex');
+  });
+}
+
+function arrow(el, key) {
+  var ev = { type: 'keydown', key: key, target: el, preventDefault: function () { this.p = true; } };
+  el.listeners.keydown.forEach(function (fn) { fn(ev); });
+  return ev;
+}
+
+test('support: popup Phone | USDC | BTC control shows one QR code at a time (click and arrow keys)', function () {
+  var env = runPopup(REAL_DONATE);
+  var e = env.els;
+  ['phone', 'usdc', 'btc'].forEach(function (k) { assert.equal(e['tab-' + k].hidden, false, 'tab-' + k + ' shown'); });
+  assert.includes(readFile('src/popup/popup.html'), 'aria-controls="support-phone"');
+  assertView(e, 'phone', 'Phone first:');
+  e['tab-btc'].fire('click');
+  assertView(e, 'btc', 'after a click on BTC:');
+  e['tab-usdc'].fire('click');
+  assertView(e, 'usdc', 'after a click on USDC:');
+  assert.ok(arrow(e['tab-usdc'], 'ArrowRight').p, 'arrow handled');
+  assertView(e, 'btc', 'ArrowRight:');
+  arrow(e['tab-btc'], 'ArrowRight');
+  assertView(e, 'phone', 'ArrowRight wraps:');
+  arrow(e['tab-phone'], 'ArrowLeft');
+  assertView(e, 'btc', 'ArrowLeft wraps back:');
+  arrow(e['tab-btc'], 'Home');
+  assertView(e, 'phone', 'Home:');
+  arrow(e['tab-phone'], 'End');
+  assertView(e, 'btc', 'End:');
+  var other = arrow(e['tab-btc'], 'a');
+  assert.notOk(other.p, 'other keys left alone');
+  return settle();
+});
+
+/** Runs popup.js on a Twitch channel tab with the page script loaded (the Twitch row shows). */
+function runPopupOnTwitch(donate) {
+  var env = installPage('src/popup/popup.html');
+  var tw = { detected: 2, backup: 1, stripped: 1, standalone: 0, failures: 0 };
+  chrome.tabs.query = function () { return Promise.resolve([{ id: 9, url: 'https://www.twitch.tv/somechannel' }]); };
+  chrome.tabs.sendMessage = function (id, msg, o, cb) { cb({ pageHooked: true, degraded: [] }); };
+  chrome.runtime.sendMessage = function (m) {
+    return Promise.resolve(m && m.type === 'popup-get-state' ? { tab: { stats: tw, degraded: false, lastEvent: null }, lifetime: tw } : null);
+  };
+  __TAS__.donate = donate;
+  try { load('src/popup/popup.js'); } finally { __TAS__.donate = REAL_DONATE; }
+  return env;
+}
+
+// 2.0.3 on Twitch: the crypto part of the support panel was cut off below the popup (a CSS
+// height problem; tests/test_popup_layout.py checks the rendered layout). Here: on a Twitch tab
+// every support view is still in the page and reachable from the Phone | USDC | BTC control.
+test('support: on a Twitch tab the Twitch row shows and Phone, USDC and BTC stay present and reachable', function () {
+  var env = runPopupOnTwitch(REAL_DONATE);
+  var e = env.els;
+  return settle().then(settle).then(function () {
+    assert.equal(e['twitch'].hidden, false, 'Twitch row shown');
+    assert.equal(e['status-text'].textContent, 'Active on this tab');
+    assert.equal(e['support'].hidden, false, 'support panel shown');
+    assert.equal(e['support-crypto'].hidden, false, 'crypto views present');
+    assert.equal(e['support-revolut'].hidden, false, 'card button present');
+    ['phone', 'usdc', 'btc'].forEach(function (k) {
+      assert.equal(e['tab-' + k].hidden, false, 'tab-' + k + ' shown on Twitch');
+      e['tab-' + k].fire('click');
+      assertView(e, k, 'on Twitch, ' + k + ':');
+    });
+    assert.equal(e['usdc-address'].title, REAL_DONATE.usdcErc20);
+    assert.equal(e['btc-address'].title, REAL_DONATE.btc);
+    arrow(e['tab-btc'], 'ArrowRight');
+    assertView(e, 'phone', 'on Twitch, arrows wrap:');
   });
 });
 
-test('support: popup copy falls back to selecting the address', function () {
-  var env = runPopup(REAL_DONATE, { clipboardFails: true });
-  env.els['usdc-copy'].fire('click');
+test('support: popup Copy copies the full donate.js address and says "Copied ✓" for 1.5 s', function () {
+  var env = runPopup(REAL_DONATE);
+  var e = env.els;
+  e['usdc-copy'].fire('click');
+  e['btc-copy'].fire('click');
+  assert.deepEqual(env.copied, [REAL_DONATE.usdcErc20, REAL_DONATE.btc]);
+  assert.deepEqual(env.copied, [donateTxt().usdcErc20, donateTxt().btc]);
   return settle().then(function () {
-    assert.equal(env.selected, env.els['usdc-address'], 'address selected');
-    assert.notIncludes(env.els['usdc-copy'].textContent, 'Copied');
-    __advanceTimers(5000);
+    assert.equal(e['usdc-copy-label'].textContent, 'Copied ✓');
+    assert.equal(e['btc-copy-label'].textContent, 'Copied ✓');
+    __advanceTimers(1400);
+    assert.equal(e['usdc-copy-label'].textContent, 'Copied ✓', 'still shown before 1.5 s');
+    __advanceTimers(200);
+    assert.equal(e['usdc-copy-label'].textContent, 'Copy', 'back after 1.5 s');
+    assert.equal(e['btc-copy-label'].textContent, 'Copy');
+  });
+});
+
+test('support: popup Copy failure does not claim success', function () {
+  var env = runPopup(REAL_DONATE, { clipboardFails: true });
+  env.els['btc-copy'].fire('click');
+  assert.deepEqual(env.copied, [REAL_DONATE.btc]);
+  return settle().then(function () {
+    assert.ok(env.els['btc-copy-label'].textContent !== 'Copied ✓');
+    __advanceTimers(2000);
+    assert.equal(env.els['btc-copy-label'].textContent, 'Copy');
   });
 });
 
@@ -220,16 +326,26 @@ test('support: popup tip link opens a new tab with the donate.js link and closes
   return settle().then(function () { assert.equal(env.closed, 1, 'popup closed'); });
 });
 
-test('support: popup hides rows without a value, and the card when none is set', function () {
-  var env = runPopup({ url: '', usdcErc20: '', btc: REAL_DONATE.btc, btcNote: REAL_DONATE.btcNote, usdcNote: '' });
-  assert.equal(env.els['support'].hidden, false, 'card shown');
-  assert.equal(env.els['support-revolut'].hidden, true, 'no revolut row');
-  assert.equal(env.els['support-usdc'].hidden, true, 'no usdc row');
-  assert.equal(env.els['support-btc'].hidden, false, 'btc row');
+test('support: popup panel follows donate.js: crypto alone shows it, nothing set hides it', function () {
+  var env = runPopup({ url: '', usdcErc20: REAL_DONATE.usdcErc20, btc: '' });
+  assert.equal(env.els['support'].hidden, false, 'panel shown for crypto');
+  assert.equal(env.els['support-revolut'].hidden, true, 'no tip link row');
+  assert.equal(env.els['tab-btc'].hidden, true, 'no BTC tab without an address');
+  assert.equal(env.els['tab-phone'].hidden, true, 'no Phone tab without a link');
+  assert.equal(env.els['support-phone'].hidden, true, 'no phone QR without a link');
+  assert.equal(env.els['coin-usdc'].hidden, false, 'USDC shown first');
+  assert.equal(env.els['tab-usdc'].getAttribute('aria-selected'), 'true');
+  var link = runPopup({ url: REAL_DONATE.url, usdcErc20: '', btc: '' });
+  assert.equal(link.els['support-crypto'].hidden, true, 'no crypto views without addresses');
+  assert.equal(link.els['tab-usdc'].hidden, true);
+  assert.equal(link.els['support-phone'].hidden, false, 'phone QR shown');
+  assert.equal(link.els['tab-phone'].getAttribute('aria-selected'), 'true');
   var none = runPopup({ url: '', usdcErc20: '', btc: '' });
-  assert.equal(none.els['support'].hidden, true, 'card hidden');
+  assert.equal(none.els['support'].hidden, true, 'hidden when nothing is set');
+  assert.equal(none.els['support-crypto'].hidden, true);
+  assert.equal(none.els['layout'].className, 'layout single', 'one column');
   var missing = runPopup(undefined);
-  assert.equal(missing.els['support'].hidden, true, 'card hidden without donate.js');
+  assert.equal(missing.els['support'].hidden, true, 'panel hidden without donate.js');
   return settle();
 });
 
@@ -254,6 +370,26 @@ test('support: settings page shows the link and both addresses exactly as donate
   return settle();
 });
 
+test('support: settings page shows addresses shortened, keeps the full text, toggles the QR codes', function () {
+  var env = runOptions(REAL_DONATE);
+  var e = env.els;
+  assert.equal(e['support-crypto'].hidden, false, 'crypto section');
+  ['btc', 'usdc'].forEach(function (id) {
+    var full = id === 'btc' ? REAL_DONATE.btc : REAL_DONATE.usdcErc20;
+    var short = e[id + '-address'].getAttribute('data-short');
+    assert.ok(short.length < full.length && short.indexOf('…') > 0, id + ' shortened');
+    assert.equal(short.slice(0, 8), full.slice(0, 8));
+    assert.equal(short.slice(-6), full.slice(-6));
+    assert.equal(e[id + '-qr'].hidden, true, id + ' QR hidden at first');
+    e[id + '-qr-toggle'].fire('click');
+    assert.equal(e[id + '-qr'].hidden, false, id + ' QR shown');
+    assert.equal(e[id + '-qr-toggle'].getAttribute('aria-expanded'), 'true');
+    e[id + '-qr-toggle'].fire('click');
+    assert.equal(e[id + '-qr'].hidden, true, id + ' QR hidden again');
+  });
+  return settle();
+});
+
 test('support: settings page copy buttons copy the exact address', function () {
   var env = runOptions(REAL_DONATE);
   env.els['btc-copy'].fire('click');
@@ -261,7 +397,7 @@ test('support: settings page copy buttons copy the exact address', function () {
   assert.deepEqual(env.copied, [REAL_DONATE.btc, REAL_DONATE.usdcErc20]);
   assert.deepEqual(env.copied, [donateTxt().btc, donateTxt().usdcErc20]);
   return settle().then(function () {
-    assert.equal(env.els['btc-copied'].textContent, 'Copied.');
+    assert.equal(env.els['btc-copied'].textContent, 'Copied ✓');
     __advanceTimers(5000);
   });
 });
@@ -270,4 +406,84 @@ test('support: settings page hides the card when nothing is set', function () {
   var env = runOptions({ url: '', usdcErc20: '', btc: '' });
   assert.equal(env.els['support'].hidden, true);
   return settle();
+});
+
+// ------------------------------------------------------------------------------ support note (popup)
+
+/** Runs popup.js on a web tab with `ads` blocked on the page and `store` as chrome.storage.local. */
+function runPopupWithTab(store, ads) {
+  var env = installPage('src/popup/popup.html');
+  env.store = store;
+  chrome.runtime.getManifest = function () { return { version: '2.0.3' }; };
+  chrome.tabs.query = function () { return Promise.resolve([{ id: 7, url: 'https://news.example/' }]); };
+  chrome.storage.local.get = function (keys) {
+    var out = {};
+    [].concat(keys).forEach(function (k) { if (k in store) out[k] = JSON.parse(JSON.stringify(store[k])); });
+    return Promise.resolve(out);
+  };
+  chrome.storage.local.set = function (o) { Object.keys(o).forEach(function (k) { store[k] = o[k]; }); return Promise.resolve(); };
+  chrome.storage.session.get = function () { return Promise.resolve({ 'page:7': { t: 1234 } }); };
+  chrome.declarativeNetRequest.getMatchedRules = function () {
+    var infos = [];
+    for (var i = 0; i < ads; i++) infos.push({ rule: { ruleId: 10 + i, rulesetId: 'ads_1' } });
+    return Promise.resolve({ rulesMatchedInfo: infos });
+  };
+  __TAS__.donate = REAL_DONATE;
+  load('src/popup/popup.js');
+  return env;
+}
+
+test('support note: at the first milestone the support panel glows once with "at least" the counted ads', function () {
+  var SP = __TAS__.supportPrompt;
+  var store = {};
+  store[SP.INSTALL_KEY] = Date.now() - 30 * SP.DAY;
+  store[SP.SEEN_KEY] = { total: 990, lastKey: 'old', lastCount: 4 };
+  store[SP.STATE_KEY] = { version: '2.0.3' };
+  var env = runPopupWithTab(store, 20);
+  return settle().then(settle).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, false, 'thank-you line shown');
+    assert.equal(env.els['support'].className, 'panel support highlight', 'panel highlighted');
+    assert.includes(env.els['prompt-text'].textContent, 'at least 1,010 ads');
+    assert.equal(env.els['prompt-text'].textContent, SP.thanks(1010));
+    assert.equal(store[SP.SEEN_KEY].total, 1010);
+    assert.equal(store[SP.STATE_KEY].lastMilestone, 1000, 'milestone used up');
+    assert.ok(store[SP.STATE_KEY].lastShownAt > 0, 'shown time stored');
+    assert.deepEqual(env.tabsCreated, [], 'no tab opened by itself');
+    env.els['prompt-never'].fire('click');
+    return settle();
+  }).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, true, 'Don\u2019t remind me hides the line');
+    assert.equal(env.els['support'].className, 'panel support', 'glow removed');
+    assert.equal(store[SP.STATE_KEY].never, true, 'turned off');
+    assert.equal(store[SP.STATE_KEY].reminders, false);
+  });
+});
+
+test('support note: below the milestone the panel is not highlighted', function () {
+  var SP = __TAS__.supportPrompt;
+  var store = {};
+  store[SP.INSTALL_KEY] = Date.now() - 30 * SP.DAY;
+  store[SP.SEEN_KEY] = { total: 100 };
+  store[SP.STATE_KEY] = { version: '2.0.3' };
+  var env = runPopupWithTab(store, 5);
+  return settle().then(settle).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, true, 'no line');
+    assert.ok(env.els['support'].className !== 'panel support highlight', 'no glow');
+    assert.equal(store[SP.SEEN_KEY].total, 105);
+  });
+});
+
+test('support note: not on the first popup open after an update; older installs get an install date', function () {
+  var SP = __TAS__.supportPrompt;
+  var store = {};
+  store[SP.SEEN_KEY] = { total: 50000 };
+  store[SP.STATE_KEY] = { version: '2.0.2' };
+  var env = runPopupWithTab(store, 3);
+  return settle().then(settle).then(function () {
+    assert.equal(env.els['support-prompt'].hidden, true, 'not shown');
+    assert.ok(env.els['support'].className !== 'panel support highlight', 'no glow');
+    assert.equal(store[SP.STATE_KEY].version, '2.0.3', 'version noted');
+    assert.ok(store[SP.INSTALL_KEY] > 0, 'install date set now');
+    assert.equal(store[SP.SEEN_KEY].total, 50003);
+  });
 });

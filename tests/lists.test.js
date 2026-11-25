@@ -95,6 +95,25 @@ test('addPackagedGenericExceptions keeps hosts that except packaged generic sele
   assert.deepEqual(L.addPackagedGenericExceptions(site, null).genericExceptionHosts, ['a.com']);
 });
 
+test('addPackagedGenericExceptions: genericFullHosts are the hosts excepting a selector outside the excepted files', function () {
+  var site = { v: 1, exceptions: { 'a.com': ['.x'], 'b.com': ['.old-generic'], 'c.com': ['.site-only'], 'd.com': ['.big'] }, genericExceptionHosts: ['a.com'] };
+  var gen = { ads: ['.old-generic', '.big'], cookies: [] };
+  var out = L.addPackagedGenericExceptions(site, gen, { ads: ['.old-generic'], cookies: [] });
+  assert.deepEqual(out.genericExceptionHosts, ['a.com', 'b.com', 'd.com']);
+  assert.deepEqual(out.genericFullHosts, ['d.com'], '.big sits in a big generic file');
+  assert.deepEqual(L.addPackagedGenericExceptions(site, gen, null).genericFullHosts, ['b.com', 'd.com'], 'excepted files unknown: whole list for all');
+  assert.equal(site.genericFullHosts, undefined, 'input not modified');
+});
+
+test('legacySite: whole site data stored by an older version sends its exception hosts to the whole generic list', function () {
+  var old = { v: 1, ads: {}, genericExceptionHosts: ['a.com'] };
+  assert.deepEqual(L.legacySite(old).genericFullHosts, ['a.com']);
+  assert.equal(old.genericFullHosts, undefined);
+  assert.deepEqual(L.legacySite({ v: 1, genericExceptionHosts: ['a.com'], genericFullHosts: [] }).genericFullHosts, []);
+  assert.equal(L.siteShardStorageKey('0a'), 'listSite/0a');
+  assert.equal(L.SITE_INDEX_KEY, 'listSite/index');
+});
+
 test('metadata helpers and status rows', function () {
   var conv = { lists: { easylist: { version: 'v1' }, easyprivacy: { version: 'v2' }, 'easylist-cookie': { version: 'v3' } } };
   var m = L.successMeta(conv, { ads: 10, trackers: 20, hideCookieBanners: 30 }, 1000);

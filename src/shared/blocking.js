@@ -37,6 +37,7 @@
       autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
       scriptlets: true,          // our page scripts (rules/scriptlets.json, e.g. YouTube); needs ads on
       stripTrackingParams: true, // remove utm_*, fbclid, gclid ... from page / frame URLs (rules/removeparam.json)
+      gpc: true,                 // Global Privacy Control: Sec-GPC: 1 on page loads (rules/gpc.json) + navigator.globalPrivacyControl
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -140,11 +141,20 @@
    * pp=oAEBogYBLg redirect and its loop-guard allow rule), part of Ads.
    * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
    * frames to the same URL without tracking parameters; never counted in the popup.
+   * unwrap (rules/unwrap.json, from our rules/unwrap.txt) sends a page opened through an AMP cache
+   * (google.<tld>/amp/s/, <name>.cdn.ampproject.org) or a redirect hop that carries the plain address
+   * straight to that address; same switch as removeparam (both clean the links you open, both by
+   * main-frame redirect), never counted.
+   * gpc (rules/gpc.json) sets the Global Privacy Control request header; never counted.
+   * ads_surrogates / privacy_surrogates (hand-written) redirect a few blocked Google scripts (GPT,
+   * AdSense, IMA / Analytics, Tag Manager) to no-op stand-ins in src/surrogates/; they follow Ads /
+   * Trackers and count there, since each redirect replaces a block.
    */
   function rulesetFeature(id) {
-    if (id === 'removeparam') return 'stripTrackingParams';
-    if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
-    if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
+    if (id === 'removeparam' || id === 'unwrap') return 'stripTrackingParams';
+    if (id === 'gpc') return 'gpc';
+    if (/^ads_(\d+|curated|surrogates)$/.test(id) || id === 'youtube') return 'ads';
+    if (/^privacy_(\d+|curated|surrogates)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
     if (id === 'cookie_strip') return 'stripCookies';
     return null;
@@ -210,7 +220,8 @@
   var YOUTUBE_UNCOUNTED_RULE_IDS = [3];
 
   /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
-   * Tracking-parameter redirects (removeparam) and the YouTube pp rules are not counted. */
+   * Tracking-parameter redirects (removeparam), link unwrapping (unwrap), the GPC header (gpc) and
+   * the YouTube pp rules are not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {
@@ -267,8 +278,10 @@
 
   /**
    * Content scripts to register (chrome.scripting.registerContentScripts format).
-   * cosmeticExcludeHosts: hosts with generic-hiding exceptions; they get the generic CSS from the
-   * background instead (minus the exceptions), so the static CSS file skips them.
+   * excl: cosmeticExcludeHosts(site) = { main, excepted }: hosts the generic CSS files skip.
+   * main (generichide, elemhide, genericFullHosts) skip every generic file; excepted (those plus
+   * genericExceptionHosts) also skip the files of excepted selectors, which the background
+   * injects for them minus their exceptions. A plain array is used for both.
    * slHosts: scriptletHosts(rules/scriptlets.json); build/scriptlets-main.js runs only there
    * (MAIN world, every frame whose URL matches), while Ads and Page scripts are both on. No
    * matchOriginAsFallback: YouTube appends a sandboxed about:blank iframe (sandbox="allow-same-origin",
@@ -277,15 +290,21 @@
    * protectFrames (src/scriptlets/runner.js) and prevent-dom-bypass.
    * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
    * background for their CSS, so with Ads and Cookie banners both off it still runs there.
+   * gpc: src/content/gpc.js (MAIN world, every frame, document_start) defines
+   * navigator.globalPrivacyControl = true where the browser has no such property; no
+   * matchOriginAsFallback, for the same sandboxed about:blank reason as the scriptlets.
    */
-  function contentScriptPlan(masterEnabled, b, cosmeticExcludeHosts, slHosts, userHosts) {
+  function contentScriptPlan(masterEnabled, b, excl, slHosts, userHosts) {
     if (!masterEnabled) return [];
     var allow = patternsFor(b.allowlist);
-    var cssExclude = allow.concat(patternsFor(cosmeticExcludeHosts));
+    var ex = Array.isArray(excl) ? { main: excl, excepted: excl } : (excl || {});
+    var mainExclude = allow.concat(patternsFor(ex.main));
+    var excExclude = allow.concat(patternsFor(ex.excepted));
     var plan = [];
-    function css(id, file) {
-      var o = { id: id, css: [file], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
-      if (cssExclude.length) o.excludeMatches = cssExclude.slice();
+    function css(id, file, allFrames, exclude) {
+      var o = { id: id, css: [file], matches: WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
+      exclude = exclude || mainExclude;
+      if (exclude.length) o.excludeMatches = exclude.slice();
       plan.push(o);
     }
     function js(id, file, allFrames, matches) {
@@ -294,7 +313,12 @@
       if (allow.length) o.excludeMatches = allow.slice();
       plan.push(o);
     }
-    if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css');
+    // Generic hiding (tools/cosmetic.py): the small core of generic ad selectors in every frame,
+    // the rest of the generic ad selectors and the cookie-banner ones in the top frame only;
+    // selectors some site excepts in their own files, which skip those sites.
+    if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css', true);
+    if (b.ads) css('as-css-ads-top', 'rules/cosmetic/ads_generic_top.css', false);
+    if (b.ads) css('as-css-ads-exc', 'rules/cosmetic/ads_excepted.css', true, excExclude);
     // Own file: ads_generic.css is regenerated from EasyList and skipped on generic-hiding exception hosts.
     if (b.ads) {
       var pu = { id: 'as-css-popunder', css: ['rules/cosmetic/popunder.css'], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
@@ -303,7 +327,8 @@
       // The CSS catches known inline forms; this catches the other invisible full-viewport layers by computed style.
       js('as-clickguard', 'src/content/clickguard.js', true);
     }
-    if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
+    if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css', false);
+    if (b.hideCookieBanners) css('as-css-cookies-exc', 'rules/cosmetic/cookies_excepted.css', false, excExclude);
     var userMatches = patternsFor(userHosts);
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);
     else if (userMatches.length) js('as-site', 'src/content/general.js', false, userMatches);
@@ -321,6 +346,14 @@
       };
       if (allow.length) sl.excludeMatches = allow.slice();
       plan.push(sl);
+    }
+    if (b.gpc) {
+      var gpc = {
+        id: 'as-gpc', js: ['src/content/gpc.js'], matches: WEB.slice(), world: 'MAIN', allFrames: true,
+        runAt: 'document_start', persistAcrossSessions: true
+      };
+      if (allow.length) gpc.excludeMatches = allow.slice();
+      plan.push(gpc);
     }
     return plan;
   }
@@ -343,8 +376,9 @@
 
   /**
    * CSS the background injects into a page of `host`.
-   * site: rules/cosmetic/site.json; generic: rules/cosmetic/generic.json or null (only needed
-   * when needsGeneric() is true); on: { ads, cookies } feature switches.
+   * site: the site data (whole, or the shard of this host: siteShard / splitSite); generic: the
+   * generic selectors genericSource() names (rules/cosmetic/generic.json for 'full',
+   * generic_excepted.json for 'excepted') or null; on: { ads, cookies } feature switches.
    * Returns { css, selectors, cookieSelectors } (cookieSelectors: site-specific cookie selectors,
    * for the one-time "banner hidden" check in the page).
    */
@@ -378,21 +412,97 @@
     };
   }
 
-  /** True when the static generic CSS skips this host and the background must inject it. */
-  function needsGeneric(host, site) {
+  /**
+   * Which generic selectors the background injects for `host`: 'full' (genericFullHosts: every
+   * static generic file skips it, rules/cosmetic/generic.json), 'excepted' (genericExceptionHosts:
+   * only the files of excepted selectors skip it, rules/cosmetic/generic_excepted.json) or null.
+   */
+  function genericSource(host, site) {
     var cands = hostCandidates(host);
-    if (!site || anyIn(cands, site.generichide) || anyIn(cands, site.elemhide)) return false;
-    return anyIn(cands, site.genericExceptionHosts);
+    if (!site || anyIn(cands, site.generichide) || anyIn(cands, site.elemhide)) return null;
+    if (anyIn(cands, site.genericFullHosts)) return 'full';
+    return anyIn(cands, site.genericExceptionHosts) ? 'excepted' : null;
   }
 
-  /** Hosts the static generic CSS must not run on. */
-  function cosmeticExcludeHosts(site) {
-    if (!site) return [];
+  /** True when a static generic CSS file skips this host and the background must inject it. */
+  function needsGeneric(host, site) {
+    return genericSource(host, site) !== null;
+  }
+
+  function hostUnion(site, keys) {
     var all = {};
-    ['genericExceptionHosts', 'generichide', 'elemhide'].forEach(function (k) {
-      (site[k] || []).forEach(function (h) { all[h] = true; });
-    });
+    keys.forEach(function (k) { ((site && site[k]) || []).forEach(function (h) { all[h] = true; }); });
     return Object.keys(all).sort();
+  }
+
+  /** Hosts the static generic CSS must not run on: { main, excepted } (see contentScriptPlan). */
+  function cosmeticExcludeHosts(site) {
+    return {
+      main: hostUnion(site, ['generichide', 'elemhide', 'genericFullHosts']),
+      excepted: hostUnion(site, ['genericExceptionHosts', 'generichide', 'elemhide', 'genericFullHosts'])
+    };
+  }
+
+  // ---------------------------------------------------------------- site data shards
+  // Same functions as tools/cosmetic.py: rules/cosmetic/site/index.json + SITE_SHARDS shard files,
+  // and the same layout in chrome.storage.local for updated lists (src/background/general.js).
+  var SITE_SHARDS = 128;
+  var SLD_LABELS = ['ac', 'co', 'com', 'edu', 'gob', 'gov', 'gv', 'ltd', 'mil', 'ne', 'net', 'nhs', 'nic', 'or', 'org', 'plc', 'sch'];
+  var SITE_LISTS = ['genericExceptionHosts', 'generichide', 'elemhide', 'genericFullHosts'];
+  var SITE_MAPS = ['ads', 'cookies', 'exceptions'];
+
+  function fnv1a(text) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  function isGlobalSiteHost(host) {
+    var l = host.split('.');
+    return l.length === 1 || (l.length === 2 && SLD_LABELS.indexOf(l[0]) !== -1);
+  }
+
+  /** Last two labels, or three after a common second-level label (bbc.co.uk): every parent of a
+   * host that can hold rules has the same key, so one shard answers a page. */
+  function siteShardKey(host) {
+    var l = host.split('.');
+    if (l.length <= 2) return host;
+    return l.slice(SLD_LABELS.indexOf(l[l.length - 2]) !== -1 ? -3 : -2).join('.');
+  }
+
+  /** Shard number of a page host (normalised); -1 for an invalid host. */
+  function siteShard(host) {
+    var h = normalizeHost(host);
+    return h ? fnv1a(siteShardKey(h)) % SITE_SHARDS : -1;
+  }
+
+  function siteShardName(i) {
+    return (i < 16 ? '0' : '') + i.toString(16);
+  }
+
+  /** Split a site object (shape of the old site.json) into { index, shards } like tools/cosmetic.py. */
+  function splitSite(site) {
+    var shards = [], i;
+    for (i = 0; i < SITE_SHARDS; i++) {
+      var sh = {};
+      SITE_MAPS.forEach(function (k) { sh[k] = {}; });
+      SITE_LISTS.forEach(function (k) { sh[k] = []; });
+      shards.push(sh);
+    }
+    function targets(h) { return isGlobalSiteHost(h) ? shards : [shards[fnv1a(siteShardKey(h)) % SITE_SHARDS]]; }
+    SITE_MAPS.forEach(function (k) {
+      var m = (site && site[k]) || {};
+      Object.keys(m).forEach(function (h) { targets(h).forEach(function (sh) { sh[k][h] = m[h]; }); });
+    });
+    SITE_LISTS.forEach(function (k) {
+      ((site && site[k]) || []).forEach(function (h) { targets(h).forEach(function (sh) { sh[k].push(h); }); });
+    });
+    var index = { v: 2, n: SITE_SHARDS };
+    SITE_LISTS.forEach(function (k) { index[k] = ((site && site[k]) || []).slice(); });
+    return { index: index, shards: shards };
   }
 
   /** What the popup shows for the active tab's URL. */
@@ -400,10 +510,10 @@
     var m = /^(https?):\/\/([^/:?#]+)/i.exec(String((o && o.url) || ''));
     var hostname = m ? normalizeHost(m[2]) : null;
     if (!hostname) {
-      return { web: false, hostname: '', host: '', on: false, detail: 'Ad Shield does not run on this page.' };
+      return { web: false, hostname: '', host: '', on: false, detail: 'AdBrake does not run on this page.' };
     }
     var allowed = isAllowlisted(hostname, (o && o.allowlist) || []);
-    var detail = o && o.enabled === false ? 'Ad Shield is switched off everywhere.'
+    var detail = o && o.enabled === false ? 'AdBrake is switched off everywhere.'
       : allowed ? 'Blocking is off on this site.' : 'Blocking ads, trackers and cookie banners.';
     return { web: true, hostname: hostname, host: siteKey(hostname), on: !allowed, detail: detail };
   }
@@ -440,6 +550,12 @@
     hostCandidates: hostCandidates,
     cssForHost: cssForHost,
     needsGeneric: needsGeneric,
-    cosmeticExcludeHosts: cosmeticExcludeHosts
+    genericSource: genericSource,
+    cosmeticExcludeHosts: cosmeticExcludeHosts,
+    SITE_SHARDS: SITE_SHARDS,
+    siteShardKey: siteShardKey,
+    siteShard: siteShard,
+    siteShardName: siteShardName,
+    splitSite: splitSite
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

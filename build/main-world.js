@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '2.0.2',
+    version: '2.0.3',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.

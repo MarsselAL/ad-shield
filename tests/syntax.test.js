@@ -12,7 +12,7 @@ var FILES = [
   'src/shared/blocking.js', 'src/background/general.js', 'src/background/autoconsent-shim.js', 'src/content/general.js',
   'src/shared/filterlist.js', 'src/shared/lists.js', 'src/background/updater.js',
   'src/scriptlets/lib.js', 'src/scriptlets/runner.js', 'build/scriptlets-main.js',
-  'src/shared/selector.js', 'src/shared/userfilters.js', 'src/content/picker.js', 'src/shared/donate.js',
+  'src/shared/selector.js', 'src/shared/userfilters.js', 'src/content/picker.js', 'src/content/gpc.js', 'src/shared/donate.js', 'src/shared/supportprompt.js',
   'src/content/clickguard.js'
 ];
 

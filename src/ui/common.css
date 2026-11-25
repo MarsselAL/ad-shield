@@ -1,69 +1,263 @@
+/* AdBrake shared UI: light "glass" look in white and red, with a dark variant.
+   Every colour is a custom property; the dark set follows prefers-color-scheme. */
 :root {
-  --bg: #ffffff;
-  --fg: #1b1b1f;
-  --muted: #5f6068;
-  --card: #f4f4f6;
-  --border: #dedee3;
-  --accent: #2f7d5b;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* page: a pearl-to-pale-pink backdrop with soft colour blobs, so the translucent cards read as
+     glass (an extension page is opaque; backdrop-filter cannot see the web page behind it) */
+  --bg: #f4f4f7;
+  --bg-image: linear-gradient(170deg, #f8f8fa 0%, #f1f2f5 55%, #f8eef0 100%);
+  --blob-1: rgba(255, 104, 116, 0.30);   /* coral */
+  --blob-2: rgba(229, 34, 46, 0.14);
+  --blob-3: rgba(150, 190, 240, 0.34);   /* sky */
+  --blob-4: rgba(255, 190, 210, 0.40);   /* pale pink */
+  --fg: #202124;
+  --muted: #6b6f79;          /* the palette's #777b85 darkened to 5:1 on white for WCAG AA */
+
+  /* glass */
+  --card: rgba(255, 255, 255, 0.7);
+  --card-strong: rgba(255, 255, 255, 0.86);
+  --card-edge: rgba(255, 255, 255, 0.6);
+  --card-shadow: 0 1px 2px rgba(28, 28, 30, 0.05), 0 8px 28px rgba(28, 28, 30, 0.07);
+  --card-shadow-hover: 0 2px 4px rgba(28, 28, 30, 0.06), 0 14px 36px rgba(28, 28, 30, 0.12);
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.95);   /* top highlight on glass */
+  --panel: rgba(255, 255, 255, 0.42);                  /* the big frosted panels */
+  --blur: blur(20px) saturate(180%);
+  --border: rgba(60, 60, 67, 0.14);   /* hairline separators and control outlines */
+  --field: rgba(255, 255, 255, 0.78);
+
+  /* accent (the icon's red) */
+  --accent: #e5222e;          /* white text on it: 4.6:1 */
+  --accent-hover: #c91b26;
+  --accent-deep: #a5121c;
+  --coral: #ff6874;
   --accent-fg: #ffffff;
-  --warn: #9a5b00;
-  --bad: #b3261e;
-  --ok: #2f7d5b;
-  --focus: #3b6fd8;
+  --accent-text: #c41d27;     /* red used as text: 5.9:1 on white */
+  --accent-soft: rgba(229, 34, 46, 0.10);
+  --accent-tint: rgba(255, 104, 116, 0.14);
+  --accent-glow: 0 6px 18px rgba(229, 34, 46, 0.30);
+  --focus: rgba(229, 34, 46, 0.55);
+  --pink-card: linear-gradient(160deg, rgba(255, 255, 255, 0.78) 0%, rgba(255, 236, 238, 0.78) 100%);
+
+  /* status */
+  --warn: #a15c00;
+  --bad: #c41e24;
+  --ok: #1f8a3c;
+
+  /* controls */
+  --switch-off: rgba(120, 120, 128, 0.22);
+  --knob: #ffffff;
+  --knob-shadow: 0 2px 4px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23636366' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  --radius-card: 18px;
+  --radius-ctl: 10px;
+  --ease: cubic-bezier(0.3, 0.7, 0.4, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);   /* slight overshoot */
+  --t: 180ms;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #18181b;
-    --fg: #ececf1;
-    --muted: #a1a1aa;
-    --card: #232328;
-    --border: #34343b;
-    --accent: #3fa57a;
-    --accent-fg: #0e1411;
-    --warn: #e0a24a;
-    --bad: #f2867e;
-    --ok: #5cc596;
-    --focus: #7aa2f7;
+    /* deep navy / graphite glass, same red accent */
+    --bg: #0a0d16;
+    --bg-image: linear-gradient(165deg, #121726 0%, #0b0e18 55%, #170d14 100%);
+    --blob-1: rgba(255, 104, 116, 0.20);
+    --blob-2: rgba(229, 34, 46, 0.20);
+    --blob-3: rgba(70, 96, 170, 0.34);
+    --blob-4: rgba(120, 90, 170, 0.22);
+    --fg: #f3f4f8;
+    --muted: #a3a8b8;        /* 7:1 on the dark cards */
+
+    --card: rgba(30, 36, 54, 0.56);
+    --card-strong: rgba(42, 48, 68, 0.78);
+    --card-edge: rgba(255, 255, 255, 0.09);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.38);
+    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --panel: rgba(20, 25, 40, 0.5);
+    --border: rgba(255, 255, 255, 0.09);
+    --field: rgba(0, 0, 0, 0.28);
+
+    --accent: #e5222e;
+    --accent-hover: #f0353f;
+    --accent-deep: #a5121c;
+    --accent-fg: #ffffff;
+    --accent-text: #ff6874;   /* red used as text (the coral): 6:1 on the dark cards */
+    --accent-soft: rgba(255, 104, 116, 0.16);
+    --accent-tint: rgba(255, 104, 116, 0.16);
+    --accent-glow: 0 6px 20px rgba(229, 34, 46, 0.40);
+    --focus: rgba(255, 104, 116, 0.7);
+    --pink-card: linear-gradient(160deg, rgba(40, 36, 56, 0.66) 0%, rgba(62, 28, 40, 0.62) 100%);
+
+    --warn: #f0a94a;
+    --bad: #ff6b70;
+    --ok: #4cd07a;
+
+    --switch-off: rgba(120, 124, 140, 0.36);
+    --knob-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23a3a8b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
 
 * { box-sizing: border-box; }
 
+html { background: var(--bg); }
+
 body {
+  position: relative;
   margin: 0;
-  background: var(--bg);
+  min-height: 100vh;
+  background: var(--bg-image), var(--bg);
+  background-attachment: fixed;
   color: var(--fg);
-  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  isolation: isolate;
+}
+/* Soft colourful backdrop drawn inside the page (an extension page is opaque, so the glass needs
+   something to blur): four blurred blobs drifting slowly. Markup: <div class="backdrop"> with
+   four <span class="blob">. */
+.backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.blob {
+  position: absolute;
+  width: 62vmax;
+  height: 62vmax;
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 0.95;
+  will-change: transform;
+}
+.blob.b1 { background: radial-gradient(circle, var(--blob-1) 0%, transparent 68%); top: -30vmax; right: -18vmax; animation: drift1 38s ease-in-out infinite alternate; }
+.blob.b2 { background: radial-gradient(circle, var(--blob-3) 0%, transparent 68%); bottom: -32vmax; left: -20vmax; animation: drift2 46s ease-in-out infinite alternate; }
+.blob.b3 { background: radial-gradient(circle, var(--blob-4) 0%, transparent 66%); top: 10vmax; left: 18vmax; width: 48vmax; height: 48vmax; animation: drift3 54s ease-in-out infinite alternate; }
+.blob.b4 { background: radial-gradient(circle, var(--blob-2) 0%, transparent 66%); bottom: -24vmax; right: 2vmax; width: 44vmax; height: 44vmax; animation: drift1 62s ease-in-out infinite alternate-reverse; }
+@keyframes drift1 { to { transform: translate(-9vmax, 7vmax) scale(1.08); } }
+@keyframes drift2 { to { transform: translate(10vmax, -6vmax) scale(1.1); } }
+@keyframes drift3 { 50% { transform: translate(-7vmax, 5vmax) scale(0.92); } to { transform: translate(6vmax, -4vmax) scale(1.06); } }
+
+/* inline SVG icon sprite and line icons */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-h1 { font-size: 15px; margin: 0; font-weight: 600; }
-h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -0.02em; }
+h2 {
+  font-size: 11px;
+  margin: 0 0 8px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+strong { font-weight: 600; }
 
-button {
+/* Buttons: glass by default, red when primary */
+button, a.button {
+  display: inline-block;
   font: inherit;
+  font-weight: 500;
   border: 1px solid var(--border);
-  background: var(--card);
+  background: var(--card-strong);
   color: var(--fg);
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: var(--radius-ctl);
+  padding: 7px 14px;
   cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 1px 2px rgba(28, 28, 30, 0.06);
+  transition: background-color var(--t) var(--ease), border-color var(--t) var(--ease),
+    box-shadow var(--t) var(--ease), transform var(--t) var(--ease);
 }
-button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:hover, a.button:hover { background: var(--field); border-color: var(--accent-soft); }
+button:active, a.button:active { transform: scale(0.98); }
+button.primary, a.button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: var(--accent-glow);
+}
+button.primary:hover, a.button.primary:hover { background: var(--accent-hover); }
+button:disabled { opacity: 0.5; cursor: default; transform: none; }
+a.button.block, button.block { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 10px 14px; border-radius: 12px; }
 
-a { color: var(--focus); }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+a { color: var(--accent-text); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a.button:hover { text-decoration: none; }
+
+/* Frosted card */
+.card {
+  background: var(--card);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 1px solid var(--card-edge);
+  border-radius: var(--radius-card);
+  box-shadow: var(--card-shadow), var(--gloss);
+  padding: 12px 14px;
+}
 .muted { color: var(--muted); }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 
-/* Switch */
-.switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: none; }
+/* iOS-style switch */
+.switch { position: relative; display: inline-block; width: 42px; height: 26px; flex: none; cursor: pointer; }
 .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-.switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 22px; transition: background 0.15s; }
-.switch .track::after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
-.switch input:checked + .track { background: var(--accent); }
+.switch .track {
+  position: absolute;
+  inset: 0;
+  background: var(--switch-off);
+  border-radius: 26px;
+  transition: background-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--knob-shadow);
+  transition: transform 340ms var(--spring), width 200ms var(--ease);
+}
+.switch:active input:not(:disabled) + .track::after { width: 26px; }
+.switch:active input:checked:not(:disabled) + .track::after { transform: translateX(12px); }
+.switch input:checked + .track { background: linear-gradient(135deg, #ef3540 0%, var(--accent) 60%, var(--accent-hover) 100%); }
 .switch input:checked + .track::after { transform: translateX(16px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--focus); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: 0.5; }
+
+/* The main on/off control: larger, red to deep red */
+.switch.master { width: 52px; height: 31px; }
+.switch.master .track { border-radius: 31px; }
+.switch.master .track::after { width: 27px; height: 27px; }
+.switch.master input:checked + .track {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  box-shadow: var(--accent-glow);
+}
+.switch.master input:checked + .track::after { transform: translateX(21px); }
+.switch.master:active input:not(:disabled) + .track::after { width: 31px; }
+.switch.master:active input:checked:not(:disabled) + .track::after { transform: translateX(17px); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation: none !important; }
+}

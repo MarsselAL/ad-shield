@@ -80,7 +80,7 @@ TWITCH = {
     "ad_text_re": r"^(ad|ads|ad \d+ of \d+|ad \d+\s*/\s*\d+|ad \(\d+:\d+\)|commercial break.*|werbung.*|anzeige.*)$",
     # The extension's toast (src/content/bridge.js: role=status, text from src/shared/stats.js).
     "toast": '[role="status"]',
-    "toast_re": r"ad blocked|ad shield",
+    "toast_re": r"ad blocked|adbrake",
     # Chat lines (Twitch native + 7TV) and "chat exists" markers.
     "chat_line": '[data-a-target="chat-line-message"], .chat-line__message, .seventv-message',
     "chat_present": '[data-a-target="chat-input"], .chat-scrollable-area__message-container, '
@@ -104,7 +104,7 @@ TWITCH = {
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-EXPECTED_VERSION = "2.0.2"  # --smoke checks the manifest version against this
+EXPECTED_VERSION = "2.0.3"  # --smoke checks the manifest version against this
 SW_PATH = "src/background/service-worker.js"
 CONFIG_JS = os.path.join(ROOT, "src", "config.js")
 INTERESTING = re.compile(r"usher\.ttvnw\.net|\.m3u8|gql\.twitch\.tv|edge\.ads\.twitch\.tv|amazon-adsystem|media-amazon\.com")
@@ -509,9 +509,10 @@ SW_STATE_JS = """
 })()
 """
 
-GENERAL_SCRIPTS = ["as-clickguard", "as-css-ads", "as-css-cookies", "as-css-popunder", "as-css-youtube", "as-scriptlets", "as-site"]
-DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated", "removeparam",
-                    "youtube"]
+GENERAL_SCRIPTS = ["as-clickguard", "as-css-ads", "as-css-ads-exc", "as-css-ads-top", "as-css-cookies", "as-css-cookies-exc", "as-css-popunder",
+                   "as-css-youtube", "as-gpc", "as-scriptlets", "as-site"]
+DEFAULT_RULESETS = ["ads_1", "ads_curated", "ads_surrogates", "client_ads", "cookie_strip", "cookies_1", "gpc", "privacy_1", "privacy_curated",
+                    "privacy_surrogates", "removeparam", "unwrap", "youtube"]
 
 # chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
 # which static rulesets a request would match. No request is sent.
@@ -784,7 +785,8 @@ def run_smoke(args):
             dnr = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps(cases))
             report["dnr_test"] = dnr
             check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
-                  dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
+                  dnr and any(x in ("ads_1", "privacy_1", "ads_surrogates") for x in dnr.get("ad", []))
+                  and any(x in ("privacy_1", "privacy_surrogates") for x in dnr.get("tracker", []))
                   and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
             rp = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
                 "page_utm": {"url": "https://example.com/?utm_source=x&keep=1", "type": "main_frame"},
@@ -842,7 +844,7 @@ def run_smoke(args):
                                      " lists: document.querySelectorAll('#lists tr').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 8 and opts["lists"] == 3
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 9 and opts["lists"] == 3
               and opts["order"].split("\n")[0] == "embed", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"

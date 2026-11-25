@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. Ad Shield is a small MIT-licensed Manifest V3 extension (plain JavaScript,
+Thanks for helping. AdBrake is a small MIT-licensed Manifest V3 extension (plain JavaScript,
 no runtime dependencies).
 
 ## Reporting a bug

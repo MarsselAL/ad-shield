@@ -1,0 +1,86 @@
+# AdBrake link unwrapping: AMP caches and redirect hops that carry the real address, unencoded, in
+# their path. Our own list (MIT). The patterns follow DuckDuckGo's AMP protection
+# (duckduckgo/privacy-configuration features/amp-links.json, Apache-2.0) and Brave's debounce
+# list (brave/adblock-lists brave-lists/debounce.json, MPL-2.0), checked 2026-11-25; see
+# rules/NOTICE.md. Turned into rules/unwrap.json by tools/unwrap.py (rebuild offline with
+# python3 -I tools/build_rules.py --curated-only).
+#
+# Each rule becomes one DNR redirect with regexSubstitution on top-level pages (main_frame) only:
+#   rule     <name>
+#   source   where the pattern comes from (free text)
+#   regex    regexFilter (RE2; matched case-insensitively, like every DNR filter). Must start with
+#            ^https?:// and end with $. If the target starts with https://\1, capture group 1 must
+#            start with a host pattern ([a-z0-9-]+(?:\.[a-z0-9-]+)+), so the result is always an
+#            https URL with a real host name (no other scheme, no user@ or :port tricks).
+#   target   regexSubstitution (\1, \2 = capture groups); must start with https://
+#   exclude  pages (initiator hosts) where links are left alone, space separated (optional)
+#   test     <URL> => <final URL after every hop>   (checked by tools/unwrap.py and tests/unwrap.test.js)
+#   miss     <URL>   that no rule may change
+# Lines starting with "#" are comments.
+#
+# Left out (DNR can only copy text from the URL; it cannot percent-decode or base64-decode it):
+#   - Brave debounce "redirect" entries (33): the target is a percent-encoded query parameter
+#     (skimresources, redirectingat, mailchimp list-manage, tradedoubler, ...);
+#   - Brave "base64,redirect" entries (4): ouo.today, mediamarkt, ActiveCampaign link-tracker;
+#   - Brave "regex-path" entries whose captured path is a percent-encoded URL: click.redditmail.com
+#     /CL0/, streak-link.com / streaklinks.com, click.pstmrk.it (both forms), awstrack.me /L0/;
+#   - Brave's own test pages (dev-pages.brave.software / bravesoftware.com);
+#   - Google's /amp/<host> form without /s/ (the page is plain http);
+#   - DuckDuckGo's "deep extraction" (fetching the AMP page to read its canonical link): that needs
+#     a network request; AdBrake makes none.
+
+rule     google-amp
+source   DuckDuckGo amp-links linkFormats[0]; Brave debounce www.google.com/amp/s/ (regex-path, https)
+regex    ^https?://(?:www\.)?google\.(?:[a-z]{2,3}|com?\.[a-z]{2})/amp/s/([a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/?#].*)?)$
+target   https://\1
+exclude  asana.com freecodecamp.org thehustle.co www.audiosciencereview.com
+test     https://www.google.com/amp/s/www.theguardian.com/world/2026/nov/25/story.amp?usqp=mq331AQ => https://www.theguardian.com/world/2026/nov/25/story.amp?usqp=mq331AQ
+test     https://www.google.co.uk/amp/s/www.bbc.co.uk/news/amp/world-1 => https://www.bbc.co.uk/news/amp/world-1
+test     http://google.de/amp/s/example.de => https://example.de
+test     https://www.google.com.au/amp/s/amp.example.com.au/a/b/#top => https://amp.example.com.au/a/b/#top
+test     https://www.google.com/amp/s/www.google.com/amp/s/example.org/x => https://example.org/x
+miss     https://www.google.com/amp/www.example.com/page
+miss     https://www.google.com/amp/s/
+miss     https://www.google.com/amp/s/localhost/x
+miss     https://www.google.com/amp/s/user@evil.example/x
+miss     https://www.google.com/amp/s/example.com:8080/x
+miss     https://www.google.com/amp/s/javascript:alert(1)
+miss     https://www.google.com.evil.example/amp/s/example.com/
+miss     https://notgoogle.com/amp/s/example.com/
+miss     https://mail.google.com/amp/s/example.com/
+miss     https://www.google.com/search?q=amp/s/example.com
+
+rule     ampproject-cache
+source   DuckDuckGo amp-links linkFormats[1]; Brave debounce *.cdn.ampproject.org/c/s/ (regex-path, https)
+regex    ^https?://(?:[a-z0-9-]+\.)?cdn\.ampproject\.org/[cv]/s/([a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[/?#].*)?)$
+target   https://\1
+exclude  asana.com freecodecamp.org thehustle.co www.audiosciencereview.com
+test     https://www-example-com.cdn.ampproject.org/c/s/www.example.com/amp/article.html => https://www.example.com/amp/article.html
+test     https://www-example-com.cdn.ampproject.org/v/s/www.example.com/amp/article.html?amp_js_v=0.1&usqp=mq331AQ => https://www.example.com/amp/article.html?amp_js_v=0.1&usqp=mq331AQ
+test     https://cdn.ampproject.org/c/s/news.example.org/ => https://news.example.org/
+miss     https://cdn.ampproject.org/v0.js
+miss     https://www-example-com.cdn.ampproject.org/i/s/www.example.com/logo.png
+miss     https://www-example-com.cdn.ampproject.org/c/www.example.com/amp/article.html
+miss     https://www-example-com.cdn.ampproject.org/c/s/user:pw@example.com/
+miss     https://evil.example/cdn.ampproject.org/c/s/example.com/
+
+rule     yandex-turbo
+source   Brave debounce *.turbopages.org/*/s/* (regex-path ^/([^/]+)/s(/.*)$, https); the query is kept
+regex    ^https?://[a-z0-9-]+\.turbopages\.org/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/s(/[^?#]*(?:[?#].*)?)$
+target   https://\1\2
+test     https://ria-ru.turbopages.org/ria.ru/s/world/20261125/story.html?parent-reqid=17 => https://ria.ru/world/20261125/story.html?parent-reqid=17
+test     https://www-example-com.turbopages.org/www.example.com/s/ => https://www.example.com/
+miss     https://ria-ru.turbopages.org/turbo/s/world/story.html
+miss     https://ria-ru.turbopages.org/ria.ru/world/story.html
+miss     https://turbopages.org/ria.ru/s/world/
+
+rule     y2u-shortener
+source   Brave debounce y2u.be (regex-path-template ^/([^/]+)$ -> https://www.youtube.com/watch?v=$1); 11-character video ids only
+regex    ^https?://y2u\.be/([A-Za-z0-9_-]{11})(?:[/?#].*)?$
+target   https://www.youtube.com/watch?v=\1
+test     https://y2u.be/dQw4w9WgXcQ => https://www.youtube.com/watch?v=dQw4w9WgXcQ
+test     http://y2u.be/dQw4w9WgXcQ?t=42 => https://www.youtube.com/watch?v=dQw4w9WgXcQ
+miss     https://y2u.be/
+miss     https://y2u.be/short
+miss     https://y2u.be/dQw4w9WgXcQ-and-more
+miss     https://notay2u.be/dQw4w9WgXcQ

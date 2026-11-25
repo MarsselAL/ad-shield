@@ -1,0 +1,98 @@
+[
+  {
+    "id": 1,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/gpt.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||securepubads.g.doubleclick.net/tag/js/gpt.js^",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/gpt.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||googletagservices.com/tag/js/gpt.js^",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/noop.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||securepubads.g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/noop.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||securepubads.g.doubleclick.net/gpt/pubads_impl_",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  },
+  {
+    "id": 5,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/adsbygoogle.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js^",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  },
+  {
+    "id": 6,
+    "priority": 2,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/surrogates/ima3.js"
+      }
+    },
+    "condition": {
+      "urlFilter": "||imasdk.googleapis.com/js/sdkloader/ima3.js^",
+      "resourceTypes": [
+        "script"
+      ]
+    }
+  }
+]

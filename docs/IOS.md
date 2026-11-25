@@ -1,6 +1,6 @@
-# Ad Shield on iPhone (free, Safari + Userscripts)
+# AdBrake on iPhone (free, Safari + Userscripts)
 
-Ad Shield's YouTube and Twitch video-ad code also ships as one userscript, `ad-shield.user.js`.
+AdBrake's YouTube and Twitch video-ad code also ships as one userscript, `ad-shield.user.js`.
 It runs in Safari on iPhone and iPad through **Userscripts**, a free, open-source Safari extension
 (quoid/userscripts on the App Store). No paid Apple Developer account and no sideloading are needed.
 
@@ -46,7 +46,7 @@ Userscripts popup.
 ## Why not Chrome on iPhone?
 
 On iOS, every browser, Chrome included, is a skin over Apple's WebKit, and Apple lets only Safari
-load web extensions. Chrome for iOS has no extensions and no userscripts, so Ad Shield can't run
+load web extensions. Chrome for iOS has no extensions and no userscripts, so AdBrake can't run
 there. Safari with the Userscripts extension is the free route.
 
 ## How the file is built
@@ -86,7 +86,7 @@ in a simulated page.
 
 ## Optional tip link
 
-To show a "Like Ad Shield? An optional tip: …" line in the builds you share, put one public
+To show a "Like AdBrake? An optional tip: …" line in the builds you share, put one public
 https link in `docs/donate.txt`, for example a revolut.me link, and rebuild. The line appears in
 the userscript header and in `INSTALL.txt` inside the Chrome zip. An empty file means no tip line.
 The build accepts only a single https link, so bank account numbers can never end up in a shared

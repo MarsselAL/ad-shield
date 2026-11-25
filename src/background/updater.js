@@ -15,7 +15,7 @@
  *  - Install: general.installLists (one queue with the rest of the general blocker's DNR work):
  *    one atomic updateDynamicRules, then chrome.storage.local "listRules" / "listSite" / "lists".
  *  - Extension update: if a packaged list is newer than the updated one, back to the packaged lists.
- * Generic cosmetic CSS (rules/cosmetic/*_generic.css, generic.json) is not updated.
+ * Generic cosmetic CSS (rules/cosmetic/*.css, generic.json, generic_excepted.json) is not updated.
  */
 /* global chrome */
 (function () {
@@ -42,8 +42,8 @@
   function packagedInfo() {
     return fetch(chrome.runtime.getURL('rules/build-info.json')).then(function (r) { return r.json(); });
   }
-  function packagedGeneric() {
-    return fetch(chrome.runtime.getURL('rules/cosmetic/generic.json')).then(function (r) { return r.json(); });
+  function packagedJson(path) {
+    return fetch(chrome.runtime.getURL(path)).then(function (r) { return r.json(); }).catch(function () { return null; });
   }
 
   function readAll() {
@@ -153,8 +153,8 @@
         })).then(function () {
           var tooMany = L.fitCheck(rules, L.limitsFrom(chrome.declarativeNetRequest), 1);
           if (tooMany) return finish(false, tooMany + '; the lists in use were kept.', null);
-          return packagedGeneric().catch(function () { return null; }).then(function (gen) {
-            var site = L.addPackagedGenericExceptions(conv.site, gen);
+          return Promise.all([packagedJson('rules/cosmetic/generic.json'), packagedJson('rules/cosmetic/generic_excepted.json')]).then(function (pg) {
+            var site = L.addPackagedGenericExceptions(conv.site, pg[0], pg[1]);
             var meta = L.successMeta(conv, counts, now);
             return G.installLists({ rules: rules, site: site, meta: meta }).then(function () {
               log.info('filter lists updated', JSON.stringify(counts));
