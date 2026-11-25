@@ -4,7 +4,7 @@ var B = __TAS__.blocking;
 
 test('defaults: everything on except auto-reject; normalize never throws', function () {
   var d = B.defaults();
-  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, scriptlets: true, stripTrackingParams: true, allowlist: [] });
+  assert.deepEqual(d, { ads: true, trackers: true, stripCookies: true, hideCookieBanners: true, autoRejectCookies: false, autoUpdateLists: true, scriptlets: true, stripTrackingParams: true, gpc: true, allowlist: [] });
   assert.equal(B.normalize({ scriptlets: false }).scriptlets, false);
   assert.equal(B.normalize({ scriptlets: 1 }).scriptlets, true);
   assert.equal(B.normalize({ autoUpdateLists: false }).autoUpdateLists, false);
@@ -105,6 +105,48 @@ test('removeparam ruleset: own switch, never counted', function () {
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'removeparam', ruleId: 3 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
 });
 
+test('gpc: own switch (default on, old settings migrate to on), static ruleset never counted', function () {
+  assert.equal(B.defaults().gpc, true);
+  assert.equal(B.normalize({ ads: true, allowlist: [] }).gpc, true, 'settings stored before GPC existed: on');
+  assert.equal(B.normalize({ gpc: false }).gpc, false);
+  assert.equal(B.normalize({ gpc: 'no' }).gpc, true);
+  assert.equal(B.rulesetFeature('gpc'), 'gpc');
+  assert.notOk(B.isListRuleset('gpc'), 'the weekly update never replaces it');
+  var ids = ['ads_1', 'removeparam', 'gpc'];
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults()).enableRulesetIds, ['ads_1', 'removeparam', 'gpc']);
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults(), { ads: true }).enableRulesetIds, ['removeparam', 'gpc'], 'dynamic lists do not disable it');
+  var off = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { gpc: false }));
+  assert.deepEqual(off.disableRulesetIds, ['gpc']);
+  var allOff = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { ads: false, trackers: false, stripTrackingParams: false }));
+  assert.deepEqual(allOff.enableRulesetIds, ['gpc'], 'independent of Ads / Trackers');
+  assert.deepEqual(B.rulesetPlan(ids, false, B.defaults()).enableRulesetIds, [], 'master switch off');
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'gpc', ruleId: 1 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
+});
+
+test('gpc: rules/gpc.json sets Sec-GPC on page loads, above list exceptions and below the allowlist', function () {
+  var rules = JSON.parse(readFile('rules/gpc.json'));
+  assert.equal(rules.length, 1);
+  var r = rules[0];
+  assert.deepEqual(r.action, { type: 'modifyHeaders', requestHeaders: [{ header: 'Sec-GPC', operation: 'set', value: '1' }] });
+  assert.deepEqual(r.condition, { resourceTypes: ['main_frame'] }, 'page loads only: Chrome counts each modifyHeaders match in the badge');
+  assert.ok(r.priority > 4, 'a list @@ exception (priority 2) must not drop the header');
+  assert.ok(r.priority < B.allowlistRules(true, ['a.com'])[0].priority, 'allowAllRequests of an allowlisted site outranks it (no header there)');
+});
+
+test('gpc: contentScriptPlan registers the MAIN-world script in every frame, allowlist excluded', function () {
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), []);
+  var g = plan.filter(function (s) { return s.id === 'as-gpc'; })[0];
+  assert.deepEqual(g, {
+    id: 'as-gpc', js: ['src/content/gpc.js'], matches: ['http://*/*', 'https://*/*'], world: 'MAIN', allFrames: true,
+    runAt: 'document_start', persistAcrossSessions: true, excludeMatches: ['*://*.off.com/*']
+  });
+  var none = B.contentScriptPlan(true, Object.assign(B.defaults(), { gpc: false }), []);
+  assert.equal(none.filter(function (s) { return s.id === 'as-gpc'; }).length, 0, 'switch off');
+  var only = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false }), []);
+  assert.deepEqual(only.map(function (s) { return s.id; }), ['as-gpc'], 'independent of Ads / Cookie banners');
+  assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), [], 'master switch off');
+});
+
 test('countMatches: curated rulesets count as ads / trackers', function () {
   var m = function (rulesetId, ruleId) { return { rule: { rulesetId: rulesetId, ruleId: ruleId }, tabId: 1 }; };
   var c = B.countMatches([m('ads_curated', 1), m('ads_curated', 1), m('privacy_curated', 1), m('ads_1', 2)]);
@@ -152,7 +194,7 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), []);
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), { main: ['gh.org'], excepted: ['exc.org', 'gh.org'] });
   assert.deepEqual(plan.map(function (s) { return s.id; }),
-    ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
+    ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-gpc'], 'no scriptlet hosts given: no as-scriptlets');
   var byId = {};
   plan.forEach(function (s) { byId[s.id] = s; });
   assert.deepEqual(byId['as-css-ads'].css, ['rules/cosmetic/ads_generic.css']);
@@ -176,7 +218,7 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(arr[0].excludeMatches, ['*://*.exc.org/*'], 'a plain array excludes from every file');
   assert.deepEqual(arr[2].excludeMatches, ['*://*.exc.org/*']);
   plan.forEach(function (s) { assert.equal(s.id.indexOf(B.SCRIPT_PREFIX), 0); assert.equal(s.runAt, 'document_start'); });
-  var ac = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, autoRejectCookies: true }), []);
+  var ac = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, autoRejectCookies: true, gpc: false }), []);
   assert.deepEqual(ac.map(function (s) { return s.id; }), ['as-autoconsent']);
   assert.equal(ac[0].matchOriginAsFallback, true);
   assert.equal(ac[0].excludeMatches, undefined);
@@ -186,7 +228,7 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
   assert.deepEqual(hosts, ['m.youtube.com', 'youtube-nocookie.com', 'youtube.com', 'youtubekids.com'], 'm.youtube.com (rule youtube-mobile) is also inside youtube.com');
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-scriptlets']);
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-scriptlets', 'as-gpc']);
   var css = plan[6], sl = plan[7];
   assert.deepEqual(css.css, ['rules/cosmetic/youtube.css']);
   assert.deepEqual(css.matches, ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*']);
@@ -199,7 +241,8 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   assert.equal(sl.persistAcrossSessions, true);
   assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(sl.excludeMatches, ['*://*.off.com/*']);
-  var noAllow = B.contentScriptPlan(true, B.defaults(), [], hosts);
+  var noAllow = B.contentScriptPlan(true, Object.assign(B.defaults(), { gpc: false }), [], hosts);
+  assert.equal(noAllow[noAllow.length - 1].id, 'as-scriptlets');
   assert.equal(noAllow[noAllow.length - 1].excludeMatches, undefined);
   var ids = function (p) { return p.map(function (s) { return s.id; }); };
   assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { scriptlets: false }), [], hosts)).indexOf('as-scriptlets'), -1, 'page scripts off');

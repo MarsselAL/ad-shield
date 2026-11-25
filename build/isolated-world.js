@@ -486,6 +486,7 @@
       autoUpdateLists: true,     // weekly download of the three filter lists (updater.js)
       scriptlets: true,          // our page scripts (rules/scriptlets.json, e.g. YouTube); needs ads on
       stripTrackingParams: true, // remove utm_*, fbclid, gclid ... from page / frame URLs (rules/removeparam.json)
+      gpc: true,                 // Global Privacy Control: Sec-GPC: 1 on page loads (rules/gpc.json) + navigator.globalPrivacyControl
       allowlist: []              // sites where all of the above (and the Twitch module) are off
     };
   }
@@ -589,9 +590,11 @@
    * pp=oAEBogYBLg redirect and its loop-guard allow rule), part of Ads.
    * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
    * frames to the same URL without tracking parameters; never counted in the popup.
+   * gpc (rules/gpc.json) sets the Global Privacy Control request header; never counted.
    */
   function rulesetFeature(id) {
     if (id === 'removeparam') return 'stripTrackingParams';
+    if (id === 'gpc') return 'gpc';
     if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
     if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
@@ -659,7 +662,8 @@
   var YOUTUBE_UNCOUNTED_RULE_IDS = [3];
 
   /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
-   * Tracking-parameter redirects (removeparam) and the YouTube pp rules are not counted. */
+   * Tracking-parameter redirects (removeparam), the GPC header (gpc) and the YouTube pp rules are
+   * not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {
@@ -728,6 +732,9 @@
    * protectFrames (src/scriptlets/runner.js) and prevent-dom-bypass.
    * userHosts: hosts with "My filters" (src/shared/userfilters.js). The page script asks the
    * background for their CSS, so with Ads and Cookie banners both off it still runs there.
+   * gpc: src/content/gpc.js (MAIN world, every frame, document_start) defines
+   * navigator.globalPrivacyControl = true where the browser has no such property; no
+   * matchOriginAsFallback, for the same sandboxed about:blank reason as the scriptlets.
    */
   function contentScriptPlan(masterEnabled, b, excl, slHosts, userHosts) {
     if (!masterEnabled) return [];
@@ -773,6 +780,14 @@
       };
       if (allow.length) sl.excludeMatches = allow.slice();
       plan.push(sl);
+    }
+    if (b.gpc) {
+      var gpc = {
+        id: 'as-gpc', js: ['src/content/gpc.js'], matches: WEB.slice(), world: 'MAIN', allFrames: true,
+        runAt: 'document_start', persistAcrossSessions: true
+      };
+      if (allow.length) gpc.excludeMatches = allow.slice();
+      plan.push(gpc);
     }
     return plan;
   }

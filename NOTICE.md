@@ -15,6 +15,10 @@ AdBrake's own code is MIT licensed (see `LICENSE`). The package also contains:
    `query-filter.json` (brave/adblock-lists, MPL-2.0) and DuckDuckGo's
    `tracking-parameters.json` (duckduckgo/privacy-configuration, Apache-2.0). Names only; the
    list itself is our own (MIT). Details: `rules/NOTICE.md`.
+4. **Global Privacy Control** (`src/content/gpc.js`, `rules/gpc.json`): our own code (MIT),
+   following the approach of DuckDuckGo's `content-scope-scripts` GPC feature and `ddg2dnr`
+   (duckduckgo, Apache-2.0): a `Sec-GPC: 1` header rule plus a `Navigator.prototype` getter set only
+   when the browser has none. No DuckDuckGo code is copied.
 
 The converter (`tools/filterlist.py`) and the autoconsent integration
 (`src/background/general.js`) are this project's own code; no code from uBlock Origin (Lite) or

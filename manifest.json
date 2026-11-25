@@ -119,6 +119,11 @@
         "id": "removeparam",
         "enabled": true,
         "path": "rules/removeparam.json"
+      },
+      {
+        "id": "gpc",
+        "enabled": true,
+        "path": "rules/gpc.json"
       }
     ]
   }

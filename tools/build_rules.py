@@ -60,14 +60,16 @@ TWITCH_RULESETS = [
 # (full or --curated-only) but never deleted by the cleanup.
 GENERATED_GLOBS = ["rules/ads_[0-9]*.json", "rules/privacy_[0-9]*.json", "rules/cookies_[0-9]*.json"]
 CURATED_IDS = tuple(rid for _, rid in C.RULESETS)
-_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5, "gpc": 6}
 # Hand-written rulesets (not generated, never deleted): kept in the manifest by every build.
-HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"}]
+# gpc: the Global Privacy Control request header (Sec-GPC: 1 on page loads).
+HAND_RULESETS = [{"id": "youtube", "enabled": True, "path": "rules/youtube.json"},
+                 {"id": "gpc", "enabled": True, "path": "rules/gpc.json"}]
 
 
 def ruleset_order_key(rid):
     """manifest order: ads_1.., ads_curated, privacy_1.., privacy_curated, cookies_1.., cookie_strip,
-    youtube, removeparam."""
+    youtube, removeparam, gpc."""
     if rid in _GROUPS:
         return (_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")

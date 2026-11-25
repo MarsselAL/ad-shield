@@ -17,8 +17,10 @@ ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allo
 # Rulesets built from our own rules/curated_hosts.txt (tools/curated.py), in manifest order.
 CURATED_RULESETS = ("ads_curated", "privacy_curated")
 # Every general (non-Twitch) ruleset id the build may produce.
-GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$|^removeparam$")
-_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5}
+GENERATED_RULESET_RE = re.compile(r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_curated$|^cookie_strip$|^youtube$|^removeparam$|^gpc$")
+_ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5, "gpc": 6}
+# Hand-written Global Privacy Control ruleset (rules/gpc.json).
+GPC_RULESET = "gpc"
 # The only ruleset allowed to contain redirect rules (tools/removeparam.py).
 REMOVEPARAM_RULESET = "removeparam"
 ALLOWLIST_PRIORITY = 100  # src/shared/blocking.js: the per-site allowlist rule must outrank everything
@@ -177,7 +179,7 @@ def regex_count(rules):
 
 def general_order_key(rid):
     """Required manifest order of the general rulesets: ads_1.., ads_curated, privacy_1..,
-    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written), removeparam."""
+    privacy_curated, cookies_1.., cookie_strip, youtube (hand-written), removeparam, gpc (hand-written)."""
     if rid in _ORDER_GROUPS:
         return (_ORDER_GROUPS[rid], 0)
     prefix, _, rest = rid.rpartition("_")
@@ -281,4 +283,30 @@ def removeparam_ruleset_errors(rules, name="removeparam ruleset"):
         m = re.match(r"^[?&]([A-Za-z0-9_]+)=$", uf) if isinstance(uf, str) else None
         if not m or m.group(1) not in params:
             e.append("%s: urlFilter must be ?name= or &name= of a removed name (else the redirect could loop)" % where)
+    return e
+
+
+GPC_HEADER = {"header": "Sec-GPC", "operation": "set", "value": "1"}
+
+
+def gpc_ruleset_errors(rules, name="gpc ruleset"):
+    """Problems with rules/gpc.json: exactly one modifyHeaders rule that only sets Sec-GPC: 1 on
+    main_frame requests, with no other condition, priority above every list rule (1..4, so a list
+    @@ exception does not stop it) and below the per-site allowlist (allowAllRequests, 100), which
+    therefore turns it off on allowlisted sites. Main frame only: Chrome adds every modifyHeaders
+    match to the toolbar badge count, so a rule on all requests would count every request."""
+    if not isinstance(rules, list) or len(rules) != 1 or not isinstance(rules[0], dict):
+        return ["%s must hold exactly one rule" % name]
+    r = rules[0]
+    e = ["%s: %s" % (name, m) for m in rule_errors(r)]
+    if set(r) != {"id", "priority", "action", "condition"}:
+        e.append("%s: rule keys must be id, priority, action, condition" % name)
+    if not isinstance(r.get("id"), int) or not 1 <= r["id"] < ALLOW_ID_BASE:
+        e.append("%s: id must be in the block range" % name)
+    if not isinstance(r.get("priority"), int) or not 4 < r["priority"] < ALLOWLIST_PRIORITY:
+        e.append("%s: priority must be above 4 and below %d" % (name, ALLOWLIST_PRIORITY))
+    if r.get("action") != {"type": "modifyHeaders", "requestHeaders": [GPC_HEADER]}:
+        e.append("%s: action must only set the request header Sec-GPC: 1" % name)
+    if r.get("condition") != {"resourceTypes": ["main_frame"]}:
+        e.append("%s: condition must be exactly resourceTypes [main_frame]" % name)
     return e

@@ -84,6 +84,9 @@ configuration.
   such as `mc_eid`, `_hsenc`), Chrome loads it without them; other parameters are kept. Our own
   list (`rules/removeparams.txt`, MIT), one static redirect ruleset (`removeparam`). Generic
   names (`ref`, `si`, `source`, ...) and Marketo's `mkt_tok` (unsubscribe links) are left alone.
+- **Global Privacy Control** (on by default): sends `Sec-GPC: 1` when a page loads and sets
+  `navigator.globalPrivacyControl` to `true` in every frame where the browser has no such
+  property (Chrome has none). Off on allowlisted sites.
 - **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
   "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
   kept under **My filters** on the options page (`example.com##.selector`, editable there) and
@@ -192,6 +195,7 @@ Twitch:
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
+| `gpc` | 1 | 0 | `rules/gpc.json` (ours, hand-written): `Sec-GPC: 1` header on page loads |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours; `client_ads` = 2 allow rules) |
 
 Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.
@@ -265,6 +269,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
 | Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 46 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Not counted in the popup. |
+| Global Privacy Control | on | Ruleset `gpc` (one `modifyHeaders` rule, priority 60: sets `Sec-GPC: 1` on `main_frame` requests; the allowlist's `allowAllRequests` rule, priority 100, outranks it) + `src/content/gpc.js` (MAIN world, all frames, document_start), which defines `navigator.globalPrivacyControl = true` on `Navigator.prototype` only if `'globalPrivacyControl' in navigator` is false. Page loads only, not sub-resources: Chrome adds every `modifyHeaders` match to the toolbar badge count. Not counted in the popup. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |

@@ -334,7 +334,7 @@ class CuratedBuild(unittest.TestCase):
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
                          ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
-                          "youtube", "removeparam"], "youtube is always kept; removeparam rebuilt and last")
+                          "youtube", "removeparam", "gpc"], "youtube and gpc are always kept; removeparam rebuilt")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])
@@ -484,12 +484,33 @@ class Schema(unittest.TestCase):
         self.assertTrue(dnr_schema.curated_ruleset_errors([]))
 
     def test_general_ruleset_ids_and_order(self):
-        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam"):
+        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam", "gpc"):
             self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
             self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
-        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip"]
+        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip", "youtube", "removeparam", "gpc"]
         self.assertEqual(sorted(reversed(ids), key=dnr_schema.general_order_key), ids)
+        self.assertEqual(sorted(reversed(ids), key=build_rules.ruleset_order_key), ids)
+
+    def test_gpc_ruleset_shape(self):
+        with open(os.path.join(ROOT, "rules", "gpc.json"), encoding="utf-8") as fh:
+            rules = json.load(fh)
+        self.assertEqual(dnr_schema.gpc_ruleset_errors(rules), [])
+        good = rules[0]
+        bad = [
+            lambda r: r.update(priority=2),     # a list @@ exception (priority 2) would drop the header
+            lambda r: r.update(priority=100),   # must stay below the allowlist (allowAllRequests, 100)
+            lambda r: r["condition"].update(resourceTypes=["main_frame", "script"]),  # badge would count every request
+            lambda r: r["condition"].update(requestDomains=["a.com"]),
+            lambda r: r["action"]["requestHeaders"][0].update(value="0"),
+            lambda r: r["action"]["requestHeaders"].append({"header": "DNT", "operation": "set", "value": "1"}),
+            lambda r: r["action"].update(responseHeaders=[{"header": "x", "operation": "remove"}]),
+        ]
+        for i, change in enumerate(bad):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.gpc_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.gpc_ruleset_errors([good, dict(good, id=2)]))
 
 
 class GeneratedData(unittest.TestCase):

@@ -133,6 +133,11 @@
         <label class="switch"><input type="checkbox" data-bkey="stripTrackingParams" aria-label="Remove tracking parameters from links"><span class="track"></span></label>
       </div>
       <div class="opt row">
+        <span class="opt-ico" aria-hidden="true"><svg class="ico"><use href="#i-ban"/></svg></span>
+        <div><strong>Global Privacy Control</strong><p class="muted">Tells sites you do not want your data sold or shared: sends the <code>Sec-GPC: 1</code> header when a page loads and sets <code>navigator.globalPrivacyControl</code>. Some US states treat this as a legal opt-out. Off on sites where blocking is off.</p></div>
+        <label class="switch"><input type="checkbox" data-bkey="gpc" aria-label="Global Privacy Control"><span class="track"></span></label>
+      </div>
+      <div class="opt row">
         <span class="opt-ico" aria-hidden="true"><svg class="ico"><use href="#i-banner"/></svg></span>
         <div><strong>Cookie banners: hide</strong><p class="muted">Hides cookie notices and blocks consent-banner scripts (EasyList Cookie List).</p></div>
         <label class="switch"><input type="checkbox" data-bkey="hideCookieBanners" aria-label="Hide cookie banners"><span class="track"></span></label>

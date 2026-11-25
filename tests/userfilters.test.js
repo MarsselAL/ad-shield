@@ -134,7 +134,7 @@ test('selectorsFor / cssFor: host and parent domains, one rule per selector', fu
 });
 
 test('contentScriptPlan: page script runs on user-filter hosts even with Ads and Cookie banners off', function () {
-  var off = Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, allowlist: ['skip.com'] });
+  var off = Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, gpc: false, allowlist: ['skip.com'] });
   assert.deepEqual(B.contentScriptPlan(true, off, [], [], []), []);
   var plan = B.contentScriptPlan(true, off, [], [], ['example.com', 'news.org']);
   assert.equal(plan.length, 1);
