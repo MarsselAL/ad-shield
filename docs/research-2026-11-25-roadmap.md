@@ -29,6 +29,25 @@ material, nothing decompiled). Full notes with sources and CHECKED / REPORTED / 
 | 6 | Surrogate scripts for blocked GA/GTM/GPT/adsbygoogle/IMA so pages don't break | redirect resources | DDG (Apache) |
 | 7 | AMP and redirect-hop unwrapping via DNR `regexSubstitution` | new ruleset | DDG ampProtection, Brave debounce.json |
 
+### Phase 1 results (25 Nov 2026, branch `claude/phase1-speed-privacy-697bf9`)
+
+All seven items shipped on the branch. `bash tests/run.sh`: 590 tests pass (545 before). Nothing has
+been tried in a real browser yet; run `tools/live_test.py` and a manual pass before release.
+
+| # | Shipped | Measured |
+|---|---|---|
+| 1 | Generic CSS split: a 3,155-selector "core" of plain ad-slot names in every frame; the other ad selectors (`ads_generic_top.css`) and all cookie selectors in the top frame only. Nothing dropped; sub-frames lose only non-core ad and cookie selectors. | CSS per sub-frame 537,805 B / 28,907 selectors -> ~47 KB / 3,431. Top frame unchanged (~538 KB). Page with 20 iframes ~11.3 MB -> ~1.4 MB parsed. |
+| 2 | `site.json` sharded into `site/index.json` + 128 files; the 527 generic selectors that sites except moved to two small `*_excepted.css` files, so exception sites no longer read `generic.json`. Updater stores the sharded form; 2.0.3 stored copies still read. Benchmark: `tools/bench_site_data.py`. | Cold lookup, bytes read / JSON parse: page with site rules 1,295,545 B / 5.3 ms -> 10,125 B / 0.03 ms; generic-exception host 1,851,845 B / 7.1 ms -> 19,453 B / 0.05 ms. |
+| 3 | GPC: `rules/gpc.json` sets `Sec-GPC: 1` on page loads (main_frame) only, since Chrome counts every modifyHeaders match in the badge; `src/content/gpc.js` defines `navigator.globalPrivacyControl` only if absent. Setting `gpc`, on by default, options toggle, allowlist respected. | |
+| 4 | autoconsent 17.2.0 -> 18.11.0; shim unchanged (same API). Sub-frames on ordinary sites now get 0 compact rules (18.x dropped two generic frame rules). | Compact rules 1,355 -> 1,571. |
+| 5 | 56 tracking params added (46 -> 102): 40 Brave, 16 DDG. Skipped `s`, `t`, `a`, `si`, `ref_src`, `ref_url`, `stkn` (site-scoped upstream; our format has no host scope), `__s`, `fb_comment_id`, `mkt_tok`. | 204 removeparam rules, no regex. |
+| 6 | Surrogates for GA (analytics.js, ga.js, gtag), GTM, GPT, adsbygoogle, IMA via DNR redirect to packaged resources, in the Ads / Trackers rulesets. DDG `ga.js`/`gpt.js` (Apache-2.0); the rest are our own code because DDG's versions are MPL code from Mozilla/uBO. No `use_dynamic_url` (Chromium rejects it for DNR redirects), so the extension ID is probeable. | |
+| 7 | `rules/unwrap.json` (4 regexSubstitution rules, page loads, shares the tracking-parameter switch): Google AMP `/amp/s/`, AMP cache, Yandex Turbo, y2u.be. Skipped (listed in `rules/unwrap.txt`): Brave's 33 percent-encoded and 4 base64 entries, encoded-path hops (redditmail, streak, pstmrk, awstrack), Google `/amp/` without `/s/`, DDG deep extraction (needs a network request). | Regex rules 13 -> 17. |
+
+Open after Phase 1: every worker start still reads the stored updated lists (`listRules`, ~3.7 MB) from
+storage when the user has updated lists; the top frame still parses ~538 KB of generic CSS.
+autoconsent 18.11.0 was published the day it was vendored (DDG waits 7 days); re-check before release.
+
 ## Phase 2: video (measure before changing)
 
 - **YouTube start delay.** Cause is known (SABR backoff of 4-9 s on videos that had a pre-roll,
