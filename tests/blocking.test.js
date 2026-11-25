@@ -227,7 +227,7 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), []);
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), { main: ['gh.org'], excepted: ['exc.org', 'gh.org'] });
   assert.deepEqual(plan.map(function (s) { return s.id; }),
-    ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-gpc'], 'no scriptlet hosts given: no as-scriptlets');
+    ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-popunder', 'as-clickguard', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-gpc'], 'no scriptlet hosts given: no as-scriptlets');
   var byId = {};
   plan.forEach(function (s) { byId[s.id] = s; });
   assert.deepEqual(byId['as-css-ads'].css, ['rules/cosmetic/ads_generic.css']);
@@ -261,8 +261,8 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
   assert.deepEqual(hosts, ['m.youtube.com', 'youtube-nocookie.com', 'youtube.com', 'youtubekids.com'], 'm.youtube.com (rule youtube-mobile) is also inside youtube.com');
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-scriptlets', 'as-gpc']);
-  var css = plan[6], sl = plan[7];
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-popunder', 'as-clickguard', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-scriptlets', 'as-gpc']);
+  var css = plan[8], sl = plan[9];
   assert.deepEqual(css.css, ['rules/cosmetic/youtube.css']);
   assert.deepEqual(css.matches, ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(css.excludeMatches, ['*://*.off.com/*'], 'YouTube CSS: allowlist only');
@@ -286,6 +286,133 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   assert.equal(ids(B.contentScriptPlan(true, B.defaults(), [], [])).indexOf('as-scriptlets'), -1, 'no hosts (rules not loaded): nothing registered');
   assert.deepEqual(B.scriptletHosts({ rules: [{ hosts: ['A.com', 'b.com', 'b.com', 'bad host', 5] }, null, { hosts: 'x' }] }), ['b.com']);
   assert.deepEqual(B.scriptletHosts(null), []);
+});
+
+test('contentScriptPlan: pop-under CSS on every site while Ads is on, allowlist excluded but not the exception hosts', function () {
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
+  var pu = plan.filter(function (s) { return s.id === 'as-css-popunder'; })[0];
+  assert.ok(pu, 'registered with Ads on');
+  assert.equal(plan[3], pu, 'right after the generic ad CSS files');
+  assert.equal(plan[2].id, 'as-css-ads-exc');
+  assert.deepEqual(pu.css, ['rules/cosmetic/popunder.css']);
+  assert.equal(pu.js, undefined);
+  assert.deepEqual(pu.matches, ['http://*/*', 'https://*/*']);
+  assert.equal(pu.allFrames, true);
+  assert.equal(pu.runAt, 'document_start');
+  assert.equal(pu.persistAcrossSessions, true);
+  assert.deepEqual(pu.excludeMatches, ['*://*.off.com/*'], 'allowlist only: our own rule, EasyList generic-hiding exceptions do not apply');
+  assert.equal(pu.excludeMatches.indexOf('*://*.exc.org/*'), -1);
+  var noAllow = B.contentScriptPlan(true, B.defaults(), ['exc.org']).filter(function (s) { return s.id === 'as-css-popunder'; })[0];
+  assert.equal(noAllow.excludeMatches, undefined, 'no allowlist: nothing excluded');
+  var ids = function (p) { return p.map(function (s) { return s.id; }); };
+  assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false }), ['exc.org'])).indexOf('as-css-popunder'), -1, 'Ads off');
+  assert.deepEqual(B.contentScriptPlan(false, B.defaults(), ['exc.org']), [], 'master switch off');
+});
+
+test('contentScriptPlan: click guard in every frame while Ads is on, right after the pop-under CSS, allowlist excluded only', function () {
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
+  var ids = function (p) { return p.map(function (s) { return s.id; }); };
+  var cg = plan.filter(function (s) { return s.id === 'as-clickguard'; })[0];
+  assert.ok(cg, 'registered with Ads on');
+  assert.equal(ids(plan).indexOf('as-clickguard'), ids(plan).indexOf('as-css-popunder') + 1, 'right after as-css-popunder');
+  assert.deepEqual(cg.js, ['src/content/clickguard.js']);
+  assert.equal(cg.css, undefined);
+  assert.equal(cg.world, undefined, 'ISOLATED world (the default)');
+  assert.deepEqual(cg.matches, ['http://*/*', 'https://*/*']);
+  assert.equal(cg.allFrames, true);
+  assert.equal(cg.matchOriginAsFallback, true, 'also about:blank / srcdoc frames of http(s) pages');
+  assert.equal(cg.runAt, 'document_start');
+  assert.equal(cg.persistAcrossSessions, true);
+  assert.deepEqual(cg.excludeMatches, ['*://*.off.com/*'], 'allowlist only, not the generic-hiding exception hosts');
+  var noAllow = B.contentScriptPlan(true, B.defaults(), ['exc.org']).filter(function (s) { return s.id === 'as-clickguard'; })[0];
+  assert.equal(noAllow.excludeMatches, undefined, 'no allowlist: nothing excluded');
+  assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false }), ['exc.org'])).indexOf('as-clickguard'), -1, 'Ads off');
+  assert.equal(ids(B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: true }), [])).indexOf('as-clickguard'), -1, 'Ads off, cookie hiding on');
+  assert.deepEqual(B.contentScriptPlan(false, B.defaults(), ['exc.org']), [], 'master switch off');
+});
+
+/* rules/cosmetic/popunder.css: [{ sel, decl }] with comments stripped. */
+function popunderRules() {
+  var text = readFile('rules/cosmetic/popunder.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  var out = [], re = /([^{}]+)\{([^{}]*)\}/g, m;
+  while ((m = re.exec(text))) out.push({ sel: m[1].trim(), decl: m[2].trim() });
+  assert.equal(text.replace(re, '').trim(), '', 'nothing but plain rules (no at-rules, no stray text)');
+  return out;
+}
+/*
+ * Evaluates one of these selectors against an element description { tag, kids, text }:
+ * kids = number of element children, text = its text content. Supported subset: div, then
+ * :empty (no children at all, not even text) or :not(:has(*)) (no element children; text and
+ * whitespace allowed), then [style*="..."] (contains) and [style$="..."] (ends with).
+ */
+function popunderMatches(sel, el) {
+  var m = /^div(:empty|:not\(:has\(\*\)\))((?:\[style[*$]="[^"]*"\])+)$/.exec(sel);
+  if (!m) throw new Error('selector outside the supported subset: ' + sel);
+  if (el.tag !== 'div') return false;
+  if (el.kids > 0) return false;
+  if (m[1] === ':empty' && (el.text || '') !== '') return false;
+  var style = el.style;
+  return m[2].match(/\[style[*$]="[^"]*"\]/g).every(function (a) {
+    var v = a.slice(9, -2);
+    return a.charAt(6) === '*' ? style.indexOf(v) !== -1 : style.length >= v.length && style.slice(style.length - v.length) === v;
+  });
+}
+
+test('popunder.css: eight rules, childless fixed max-z invisible divs only, display and pointer-events off', function () {
+  var rules = popunderRules();
+  assert.equal(rules.length, 8);
+  rules.forEach(function (r) {
+    assert.equal(r.sel.indexOf(','), -1, 'one selector per rule: ' + r.sel);
+    assert.ok(r.sel.indexOf('div:empty[') === 0 || r.sel.indexOf('div:not(:has(*))[') === 0, r.sel);
+    assert.ok(r.sel.indexOf('[style*="position: fixed"]') !== -1 || r.sel.indexOf('[style*="position:fixed"]') !== -1, r.sel);
+    assert.ok(r.sel.indexOf('[style*="z-index: 2147483647"]') !== -1 || r.sel.indexOf('[style*="z-index:2147483647"]') !== -1, r.sel);
+    var spaced = r.sel.indexOf('position: fixed') !== -1;
+    assert.equal(r.sel.indexOf(spaced ? 'z-index:2147483647' : 'z-index: 2147483647'), -1, 'spacing consistent within a rule: ' + r.sel);
+    if (r.sel.indexOf('div:empty[') === 0) {
+      assert.ok(/\[style\*="background(-color)?: ?transparent"\]$/.test(r.sel), 'empty: transparent background: ' + r.sel);
+    } else {
+      assert.ok(/\[style(\*="opacity: ?0;"|\$="opacity: ?0")\]$/.test(r.sel), 'childless: opacity 0: ' + r.sel);
+    }
+    assert.equal(r.decl.replace(/\s+/g, ''), 'display:none!important;pointer-events:none!important', r.sel);
+  });
+  ['background-color: transparent', 'background: transparent', 'background-color:transparent', 'background:transparent',
+    '*="opacity: 0;"', '$="opacity: 0"', '*="opacity:0;"', '$="opacity:0"'].forEach(function (want) {
+    assert.ok(rules.some(function (r) { return r.sel.indexOf(want) !== -1; }), want);
+  });
+});
+
+test('popunder.css: matches the live click-catchers, not modals, widgets or ordinary overlays', function () {
+  var sels = popunderRules().map(function (r) { return r.sel; });
+  function hit(tag, kids, text, style) {
+    var el = { tag: tag, kids: kids, text: text, style: style };
+    return sels.some(function (s) { return popunderMatches(s, el); });
+  }
+  var aclib = 'top: 0px; left: 0px; width: 1024px; height: 768px; position: fixed; z-index: 2147483647; background-color: transparent;';
+  var hagoromo = 'position: fixed; inset: 0px; z-index: 2147483647; background-color: transparent; pointer-events: auto; cursor: auto; margin: 0px; padding: 0px; display: block; width: 1199px; height: 674px;';
+  assert.ok(hit('div', 0, '', aclib), 'Adcash aclib overlay');
+  assert.ok(hit('div', 0, '', hagoromo), 'Hagoromo overlay');
+  assert.ok(hit('div', 0, '', 'position: fixed; inset: 0px; z-index: 2147483647; background: transparent;'), 'shorthand background');
+  assert.ok(hit('div', 0, '', 'position:fixed;inset:0;z-index:2147483647;background-color:transparent'), 'unspaced transparent background');
+  assert.notOk(hit('div', 1, '', aclib), 'div with a child (e.g. a chat widget container)');
+  assert.notOk(hit('div', 0, '\n', aclib), 'transparent but with text: not :empty');
+  assert.notOk(hit('span', 0, '', aclib), 'not a div');
+  assert.notOk(hit('div', 0, '', 'position: fixed; inset: 0px; z-index: 2147483647; background-color: rgba(0, 0, 0, 0.5);'), 'modal backdrop');
+  assert.notOk(hit('div', 0, '', 'position: fixed; inset: 0px; z-index: 1000; background-color: transparent;'), 'ordinary z-index');
+  assert.notOk(hit('div', 0, '', 'position: absolute; inset: 0px; z-index: 2147483647; background-color: transparent;'), 'absolutely positioned');
+  // A video embed page's static HTML: whitespace inside, opacity 0 instead of a transparent background.
+  var uix = '\n        position: fixed;\n        inset: 0;\n        z-index: 2147483647;\n        width: 100%;\n        height: 100%;\n' +
+    '        opacity: 0;\n        cursor: default;\n        pointer-events: auto;\n        touch-action: manipulation;\n    ';
+  assert.ok(hit('div', 0, '\n', uix), 'uix_99 overlay with whitespace content');
+  assert.ok(hit('div', 0, '', uix), 'uix_99 overlay, empty');
+  assert.notOk(hit('div', 1, '\n', uix), 'opacity 0 with a child element (a modal fading in)');
+  assert.notOk(hit('div', 0, '', uix.replace('opacity: 0;', 'opacity: 0.5;')), 'opacity 0.5');
+  assert.notOk(hit('div', 0, '', 'position: fixed; z-index: 2147483647; opacity: 0.5'), 'trailing opacity 0.5');
+  assert.ok(hit('div', 0, '', 'position: fixed; z-index: 2147483647; opacity: 0'), 'trailing opacity 0 without a semicolon');
+  assert.ok(hit('div', 0, '', 'position:fixed;inset:0;z-index:2147483647;opacity:0'), 'minified');
+  assert.ok(hit('div', 0, '', 'position:fixed;opacity:0;inset:0;z-index:2147483647'), 'minified, opacity first');
+  assert.notOk(hit('div', 0, '', 'position:fixed;inset:0;z-index:2147483647;opacity:0.5'), 'minified opacity 0.5');
+  assert.notOk(hit('div', 0, '', 'position:fixed;inset:0;z-index:1000;opacity:0'), 'minified ordinary z-index');
+  assert.notOk(hit('span', 0, '', uix), 'opacity 0 span');
 });
 
 var SITE = {

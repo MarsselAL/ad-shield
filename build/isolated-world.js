@@ -768,6 +768,14 @@
     if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css', true);
     if (b.ads) css('as-css-ads-top', 'rules/cosmetic/ads_generic_top.css', false);
     if (b.ads) css('as-css-ads-exc', 'rules/cosmetic/ads_excepted.css', true, excExclude);
+    // Own file: ads_generic.css is regenerated from EasyList and skipped on generic-hiding exception hosts.
+    if (b.ads) {
+      var pu = { id: 'as-css-popunder', css: ['rules/cosmetic/popunder.css'], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
+      if (allow.length) pu.excludeMatches = allow.slice();
+      plan.push(pu);
+      // The CSS catches known inline forms; this catches the other invisible full-viewport layers by computed style.
+      js('as-clickguard', 'src/content/clickguard.js', true);
+    }
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css', false);
     if (b.hideCookieBanners) css('as-css-cookies-exc', 'rules/cosmetic/cookies_excepted.css', false, excExclude);
     var userMatches = patternsFor(userHosts);

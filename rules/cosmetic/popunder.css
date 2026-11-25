@@ -1,0 +1,27 @@
+/*
+ * Ad Shield: pop-under click-catchers (hand-written, MIT; registered as content-script CSS on every
+ * http(s) site and in every frame while Ads is on; see docs/ARCHITECTURE.md).
+ * Pop-under scripts (seen live: Adcash "aclib" on the page, self-hosted loaders inside video
+ * embed iframes) lay an invisible div over the whole viewport, so the first click on the player
+ * opens an ad tab instead. These rules hide only such a div: a div whose inline style has
+ * position: fixed, z-index: 2147483647 (the maximum) and is invisible, in one of two ways:
+ *  - an EMPTY div (no children, no text) with a transparent background. An empty, transparent
+ *    element shows nothing, so hiding it can never hide visible content.
+ *  - opacity 0: invisible whatever it contains, but we still require no element children
+ *    (whitespace text is allowed, as in the static HTML of one embed page), so a modal or panel
+ *    that fades in from opacity 0 with its content inside is never caught.
+ * A modal backdrop (coloured) or a widget container (has children) does not match. Generic on all
+ * sites because the embed hosts rotate their domains. One rule per selector, so a selector Chrome
+ * does not understand drops only itself. "opacity: 0;" (followed by more declarations) and a
+ * trailing "opacity: 0" are separate rules, so "opacity: 0.5" never matches. The unspaced forms
+ * ("position:fixed") cover hand-written and minified HTML; src/content/clickguard.js catches
+ * the forms these attribute selectors cannot see, by computed style.
+ */
+div:empty[style*="position: fixed"][style*="z-index: 2147483647"][style*="background-color: transparent"]{display:none!important;pointer-events:none!important}
+div:empty[style*="position: fixed"][style*="z-index: 2147483647"][style*="background: transparent"]{display:none!important;pointer-events:none!important}
+div:not(:has(*))[style*="position: fixed"][style*="z-index: 2147483647"][style*="opacity: 0;"]{display:none!important;pointer-events:none!important}
+div:not(:has(*))[style*="position: fixed"][style*="z-index: 2147483647"][style$="opacity: 0"]{display:none!important;pointer-events:none!important}
+div:not(:has(*))[style*="position:fixed"][style*="z-index:2147483647"][style*="opacity:0;"]{display:none!important;pointer-events:none!important}
+div:not(:has(*))[style*="position:fixed"][style*="z-index:2147483647"][style$="opacity:0"]{display:none!important;pointer-events:none!important}
+div:empty[style*="position:fixed"][style*="z-index:2147483647"][style*="background-color:transparent"]{display:none!important;pointer-events:none!important}
+div:empty[style*="position:fixed"][style*="z-index:2147483647"][style*="background:transparent"]{display:none!important;pointer-events:none!important}

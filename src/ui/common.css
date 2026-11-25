@@ -10,7 +10,8 @@
   --bg-image: linear-gradient(170deg, #f8f8fa 0%, #f1f2f5 55%, #f8eef0 100%);
   --blob-1: rgba(255, 104, 116, 0.30);   /* coral */
   --blob-2: rgba(229, 34, 46, 0.14);
-  --blob-3: rgba(170, 182, 220, 0.30);   /* cool pearl */
+  --blob-3: rgba(150, 190, 240, 0.34);   /* sky */
+  --blob-4: rgba(255, 190, 210, 0.40);   /* pale pink */
   --fg: #202124;
   --muted: #6b6f79;          /* the palette's #777b85 darkened to 5:1 on white for WCAG AA */
 
@@ -19,6 +20,9 @@
   --card-strong: rgba(255, 255, 255, 0.86);
   --card-edge: rgba(255, 255, 255, 0.6);
   --card-shadow: 0 1px 2px rgba(28, 28, 30, 0.05), 0 8px 28px rgba(28, 28, 30, 0.07);
+  --card-shadow-hover: 0 2px 4px rgba(28, 28, 30, 0.06), 0 14px 36px rgba(28, 28, 30, 0.12);
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.95);   /* top highlight on glass */
+  --panel: rgba(255, 255, 255, 0.42);                  /* the big frosted panels */
   --blur: blur(20px) saturate(180%);
   --border: rgba(60, 60, 67, 0.14);   /* hairline separators and control outlines */
   --field: rgba(255, 255, 255, 0.78);
@@ -50,25 +54,30 @@
   --radius-card: 18px;
   --radius-ctl: 10px;
   --ease: cubic-bezier(0.3, 0.7, 0.4, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);   /* slight overshoot */
   --t: 180ms;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e0e10;
-    --bg-image: linear-gradient(170deg, #19191c 0%, #111113 60%, #1a0f11 100%);
-    --blob-1: rgba(255, 104, 116, 0.16);
-    --blob-2: rgba(229, 34, 46, 0.18);
-    --blob-3: rgba(90, 100, 140, 0.22);
-    --fg: #f5f5f7;
-    --muted: #a1a1a6;        /* 7:1 on the dark cards */
+    /* deep navy / graphite glass, same red accent */
+    --bg: #0a0d16;
+    --bg-image: linear-gradient(165deg, #121726 0%, #0b0e18 55%, #170d14 100%);
+    --blob-1: rgba(255, 104, 116, 0.20);
+    --blob-2: rgba(229, 34, 46, 0.20);
+    --blob-3: rgba(70, 96, 170, 0.34);
+    --blob-4: rgba(120, 90, 170, 0.22);
+    --fg: #f3f4f8;
+    --muted: #a3a8b8;        /* 7:1 on the dark cards */
 
-    --card: rgba(30, 30, 32, 0.6);
-    --card-strong: rgba(44, 44, 46, 0.82);
-    --card-edge: rgba(255, 255, 255, 0.08);
-    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
-    --border: rgba(255, 255, 255, 0.1);
+    --card: rgba(30, 36, 54, 0.56);
+    --card-strong: rgba(42, 48, 68, 0.78);
+    --card-edge: rgba(255, 255, 255, 0.09);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.38);
+    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --panel: rgba(20, 25, 40, 0.5);
+    --border: rgba(255, 255, 255, 0.09);
     --field: rgba(0, 0, 0, 0.28);
 
     --accent: #e5222e;
@@ -80,15 +89,15 @@
     --accent-tint: rgba(255, 104, 116, 0.16);
     --accent-glow: 0 6px 20px rgba(229, 34, 46, 0.40);
     --focus: rgba(255, 104, 116, 0.7);
-    --pink-card: linear-gradient(160deg, rgba(44, 34, 36, 0.72) 0%, rgba(58, 30, 34, 0.72) 100%);
+    --pink-card: linear-gradient(160deg, rgba(40, 36, 56, 0.66) 0%, rgba(62, 28, 40, 0.62) 100%);
 
     --warn: #f0a94a;
     --bad: #ff6b70;
     --ok: #4cd07a;
 
-    --switch-off: rgba(120, 120, 128, 0.36);
+    --switch-off: rgba(120, 124, 140, 0.36);
     --knob-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
-    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23a1a1a6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23a3a8b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   }
 }
 
@@ -108,19 +117,26 @@ body {
   -moz-osx-font-smoothing: grayscale;
   isolation: isolate;
 }
-/* blurred colour blobs behind the cards */
-body::before {
-  content: "";
-  position: fixed;
-  inset: -20%;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(28% 22% at 78% 18%, var(--blob-1) 0%, transparent 100%),
-    radial-gradient(30% 24% at 18% 46%, var(--blob-3) 0%, transparent 100%),
-    radial-gradient(26% 20% at 70% 78%, var(--blob-2) 0%, transparent 100%);
-  filter: blur(30px);
+/* Soft colourful backdrop drawn inside the page (an extension page is opaque, so the glass needs
+   something to blur): four blurred blobs drifting slowly. Markup: <div class="backdrop"> with
+   four <span class="blob">. */
+.backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.blob {
+  position: absolute;
+  width: 62vmax;
+  height: 62vmax;
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 0.95;
+  will-change: transform;
 }
+.blob.b1 { background: radial-gradient(circle, var(--blob-1) 0%, transparent 68%); top: -30vmax; right: -18vmax; animation: drift1 38s ease-in-out infinite alternate; }
+.blob.b2 { background: radial-gradient(circle, var(--blob-3) 0%, transparent 68%); bottom: -32vmax; left: -20vmax; animation: drift2 46s ease-in-out infinite alternate; }
+.blob.b3 { background: radial-gradient(circle, var(--blob-4) 0%, transparent 66%); top: 10vmax; left: 18vmax; width: 48vmax; height: 48vmax; animation: drift3 54s ease-in-out infinite alternate; }
+.blob.b4 { background: radial-gradient(circle, var(--blob-2) 0%, transparent 66%); bottom: -24vmax; right: 2vmax; width: 44vmax; height: 44vmax; animation: drift1 62s ease-in-out infinite alternate-reverse; }
+@keyframes drift1 { to { transform: translate(-9vmax, 7vmax) scale(1.08); } }
+@keyframes drift2 { to { transform: translate(10vmax, -6vmax) scale(1.1); } }
+@keyframes drift3 { 50% { transform: translate(-7vmax, 5vmax) scale(0.92); } to { transform: translate(6vmax, -4vmax) scale(1.06); } }
 
 /* inline SVG icon sprite and line icons */
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
@@ -195,7 +211,7 @@ a.button:hover { text-decoration: none; }
   backdrop-filter: var(--blur);
   border: 1px solid var(--card-edge);
   border-radius: var(--radius-card);
-  box-shadow: var(--card-shadow);
+  box-shadow: var(--card-shadow), var(--gloss);
   padding: 12px 14px;
 }
 .muted { color: var(--muted); }
@@ -221,8 +237,10 @@ a.button:hover { text-decoration: none; }
   border-radius: 50%;
   background: var(--knob);
   box-shadow: var(--knob-shadow);
-  transition: transform var(--t) var(--ease);
+  transition: transform 340ms var(--spring), width 200ms var(--ease);
 }
+.switch:active input:not(:disabled) + .track::after { width: 26px; }
+.switch:active input:checked:not(:disabled) + .track::after { transform: translateX(12px); }
 .switch input:checked + .track { background: linear-gradient(135deg, #ef3540 0%, var(--accent) 60%, var(--accent-hover) 100%); }
 .switch input:checked + .track::after { transform: translateX(16px); }
 .switch input:focus-visible + .track { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -237,6 +255,8 @@ a.button:hover { text-decoration: none; }
   box-shadow: var(--accent-glow);
 }
 .switch.master input:checked + .track::after { transform: translateX(21px); }
+.switch.master:active input:not(:disabled) + .track::after { width: 31px; }
+.switch.master:active input:checked:not(:disabled) + .track::after { transform: translateX(17px); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation: none !important; }
