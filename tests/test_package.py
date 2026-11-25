@@ -42,7 +42,8 @@ class Package(unittest.TestCase):
     def test_install_and_manifest_in_the_top_folder(self):
         for n in ("adbrake/INSTALL.txt", "adbrake/manifest.json", "adbrake/LICENSE", "adbrake/NOTICE.md",
                   "adbrake/src/background/service-worker.js", "adbrake/build/isolated-world.js",
-                  "adbrake/rules/removeparam.json", "adbrake/rules/cosmetic/popunder.css", "adbrake/src/content/picker.js", "adbrake/icons/icon128.png"):
+                  "adbrake/rules/removeparam.json", "adbrake/rules/cosmetic/popunder.css", "adbrake/src/content/picker.js",
+                  "adbrake/src/content/clickguard.js", "adbrake/icons/icon128.png"):
             self.assertIn(n, self.names)
         self.assertTrue(all(n.startswith("adbrake/") for n in self.names))
 
