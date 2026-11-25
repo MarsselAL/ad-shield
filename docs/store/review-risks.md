@@ -107,3 +107,11 @@ only removes known tracking params (utm_*, fbclid, ...). Opera's criteria are st
 3. Take screenshots; build zip; test the zip loaded unpacked.
 4. Submit to Chrome **Unlisted** with test notes; when approved, switch to Public.
 5. Edge and Opera after Chrome passes (`edge-opera.md`).
+
+### Rejection on record: keyword spam (Yellow Argon), 22 Nov 2026
+The first submission was rejected for "excessive and / or irrelevant keywords" over the
+disclaimer line "not affiliated with ... YouTube, Google, Twitch, Amazon, EasyList or
+DuckDuckGo". A list of brand names reads as keyword stuffing even inside a disclaimer.
+Rule from now on: the store description names no third-party brands; credits and licences
+live in NOTICE.md in the repo. The manifest summary still says "Twitch video-ad support"
+(one functional mention, not flagged); drop it in the next package if a reviewer objects.
