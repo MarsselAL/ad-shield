@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import dnr_schema  # noqa: E402
 import filterlist as F  # noqa: E402
 import build_rules  # noqa: E402
+import cosmetic as CO  # noqa: E402
 import curated as C  # noqa: E402
 import make_golden  # noqa: E402
 import removeparam as R  # noqa: E402
@@ -574,8 +575,8 @@ class GeneratedData(unittest.TestCase):
         self.assertGreater(len(generic["cookies"]), 1000)
         for h in site["genericExceptionHosts"] + site["generichide"] + site["elemhide"]:
             self.assertIn(".", h, "a single-label host would exclude a whole TLD from generic hiding")
-        for cat in ("ads", "cookies"):
-            with open(os.path.join(cdir, "%s_generic.css" % cat), encoding="utf-8") as fh:
+        for name in ("ads_generic.css", "ads_generic_top.css", "cookies_generic.css"):
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
                 css = fh.read()
             self.assertEqual(css.count("{display:none!important}"), css.count("\n") - 1)
             for line in css.split("\n")[1:]:
@@ -609,6 +610,59 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(site["cookies"], {"b.com": [".consent"]})
         self.assertEqual(site["genericExceptionHosts"], ["a.com"])
         self.assertEqual(site["generichide"], ["good.example"])
+        cdir = os.path.join(out, "rules", "cosmetic")
+        with open(os.path.join(cdir, "ads_generic.css"), encoding="utf-8") as fh:
+            self.assertIn(".ad{display:none!important}", fh.read(), "\"ad\" is core vocabulary")
+        self.assertTrue(os.path.isfile(os.path.join(cdir, "ads_generic_top.css")))
+        self.assertEqual(info["cosmetic"]["ads"]["adsCore"], 1)
+
+
+class GenericTiers(unittest.TestCase):
+    """tools/cosmetic.py: generic ad selectors split into a core (every frame) and the rest
+    (top frame); cookie-banner generic CSS top frame only."""
+
+    def test_core_rule(self):
+        for sel in (".ad-banner", "#ad-top", 'div[id^="ad-"]', ".sponsored > .label", '[id^="div-gpt-ad"]',
+                    "ins.adsbygoogle[data-ad-client]", "AMP-AD", "#AdSkyscraper", ".ad-300x250", "#adsense"):
+            self.assertTrue(CO.is_core_candidate(sel), sel)
+        for sel in (".widget_wpstealthads_widget", "#rightrail_pos1_ddb_0", 'a[href^="https://glersakr.com/"]',
+                    ".generic-excepted", ".banner", "#top-sidebar", ".adv-top-right-side-box-wrapper", ".anyClipWrapper"):
+            self.assertFalse(CO.is_core_candidate(sel), sel)
+
+    def test_split_keeps_every_selector_once_and_respects_the_budget(self):
+        sels = [".ad", ".ads-box", ".foo", "#ad-top-banner-wrapper", ".adv", ".bar-ad"]
+        core, top = CO.split_ad_tiers(sels, budget=12)
+        self.assertEqual(core, [".ad", ".adv"], "fewest words, then shortest, until the budget is used")
+        self.assertEqual(top, [".ads-box", ".foo", "#ad-top-banner-wrapper", ".bar-ad"])
+        core, top = CO.split_ad_tiers(sels)
+        self.assertEqual(sorted(core + top), sorted(sels))
+        self.assertEqual(top, [".foo"])
+
+    def test_golden_generic_coverage(self):
+        """Fixture lists: the top frame keeps every generic selector; sub-frames keep the ad-slot ones."""
+        g = make_golden.golden()["generic"]
+        core, top = CO.split_ad_tiers(g["ads"])
+        self.assertEqual(sorted(core + top), sorted(g["ads"]))
+        self.assertEqual(core, [".ad-banner", "#ad-top", 'div[id^="ad-"]', ".sponsored > .label"])
+        self.assertEqual(top, [".generic-excepted", ".generic-excepted2", ".generic-with-neg"])
+
+    def test_committed_tiers(self):
+        cdir = os.path.join(ROOT, "rules", "cosmetic")
+        with open(os.path.join(cdir, "generic.json"), encoding="utf-8") as fh:
+            generic = json.load(fh)
+        core, top = CO.split_ad_tiers(generic["ads"])
+        self.assertLessEqual(sum(len(s) + 1 for s in core), CO.CORE_MAX_BYTES)
+        self.assertGreater(len(core), 2000)
+        for sel in ('[id^="div-gpt-ad"]', '[id^="google_ads_iframe_"]', "ins.adsbygoogle[data-ad-client]", "AMP-AD"):
+            self.assertIn(sel, core)
+        want = {"ads_generic.css": (core, "EasyList (generic core, every frame)"),
+                "ads_generic_top.css": (top, "EasyList (other generic, top frame)"),
+                "cookies_generic.css": (generic["cookies"], "the EasyList Cookie List (top frame)")}
+        for name, (sels, source) in want.items():
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), CO.css_file(sels, source), "run python3 -I tools/cosmetic.py: " + name)
+        with open(os.path.join(cdir, "ads_generic.css"), encoding="utf-8") as fh:
+            self.assertLess(len(fh.read()), 48 * 1024, "the CSS every frame parses stays small")
 
 
 class Golden(unittest.TestCase):

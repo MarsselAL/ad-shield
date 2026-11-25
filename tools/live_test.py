@@ -509,7 +509,7 @@ SW_STATE_JS = """
 })()
 """
 
-GENERAL_SCRIPTS = ["as-css-ads", "as-css-cookies", "as-css-youtube", "as-scriptlets", "as-site"]
+GENERAL_SCRIPTS = ["as-css-ads", "as-css-ads-top", "as-css-cookies", "as-css-youtube", "as-scriptlets", "as-site"]
 DEFAULT_RULESETS = ["ads_1", "ads_curated", "client_ads", "cookie_strip", "cookies_1", "privacy_1", "privacy_curated", "removeparam",
                     "youtube"]
 

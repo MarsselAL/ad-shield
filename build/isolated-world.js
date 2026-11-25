@@ -732,8 +732,8 @@
     var allow = patternsFor(b.allowlist);
     var cssExclude = allow.concat(patternsFor(cosmeticExcludeHosts));
     var plan = [];
-    function css(id, file) {
-      var o = { id: id, css: [file], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
+    function css(id, file, allFrames) {
+      var o = { id: id, css: [file], matches: WEB.slice(), allFrames: allFrames, runAt: 'document_start', persistAcrossSessions: true };
       if (cssExclude.length) o.excludeMatches = cssExclude.slice();
       plan.push(o);
     }
@@ -743,8 +743,11 @@
       if (allow.length) o.excludeMatches = allow.slice();
       plan.push(o);
     }
-    if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css');
-    if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
+    // Generic hiding (tools/cosmetic.py): the small core of generic ad selectors in every frame,
+    // the rest of the generic ad selectors and the cookie-banner ones in the top frame only.
+    if (b.ads) css('as-css-ads', 'rules/cosmetic/ads_generic.css', true);
+    if (b.ads) css('as-css-ads-top', 'rules/cosmetic/ads_generic_top.css', false);
+    if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css', false);
     var userMatches = patternsFor(userHosts);
     if (b.ads || b.hideCookieBanners) js('as-site', 'src/content/general.js', false);
     else if (userMatches.length) js('as-site', 'src/content/general.js', false, userMatches);
