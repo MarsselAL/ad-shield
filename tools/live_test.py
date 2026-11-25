@@ -104,7 +104,7 @@ TWITCH = {
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-EXPECTED_VERSION = "2.0.1"  # --smoke checks the manifest version against this
+EXPECTED_VERSION = "2.0.2"  # --smoke checks the manifest version against this
 SW_PATH = "src/background/service-worker.js"
 CONFIG_JS = os.path.join(ROOT, "src", "config.js")
 INTERESTING = re.compile(r"usher\.ttvnw\.net|\.m3u8|gql\.twitch\.tv|edge\.ads\.twitch\.tv|amazon-adsystem|media-amazon\.com")
