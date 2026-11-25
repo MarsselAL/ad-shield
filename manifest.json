@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AdBrake – Ad Blocker",
   "short_name": "AdBrake",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Free, open-source ad, tracker, cookie-banner and video-ad blocker. No telemetry, no remote config.",
   "minimum_chrome_version": "120",
   "permissions": [
