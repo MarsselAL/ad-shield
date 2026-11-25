@@ -6,7 +6,7 @@ AdBrake's own code is MIT licensed (see `LICENSE`). The package also contains:
    EasyList, EasyPrivacy and the EasyList Cookie List by **The EasyList authors
    (https://easylist.to/)**, used under Creative Commons licences (CC BY-SA 3.0; the cookie list
    header states CC BY 3.0). Details, changes and licence links: `rules/NOTICE.md`.
-2. **DuckDuckGo autoconsent** 17.2.0 in `vendor/autoconsent/` (`content.bundle.js`,
+2. **DuckDuckGo autoconsent** 18.11.0 in `vendor/autoconsent/` (`content.bundle.js`,
    `autoconsent.cjs.js`, `compact-rules.json`), unmodified, from the npm package
    `@duckduckgo/autoconsent` (source: https://github.com/duckduckgo/autoconsent). Licence:
    Mozilla Public License 2.0, full text in `vendor/autoconsent/LICENSE`. Version, tarball URL,

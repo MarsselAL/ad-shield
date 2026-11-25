@@ -193,14 +193,28 @@ test('banner hidden report counts for the page', function () {
 });
 
 test('autoconsent init: compact rules and an opt-out config sent to the frame', function () {
+  // Top frame: the site-independent rules apply. A sub frame gets the same config but only the
+  // rules marked for frames (filterCompactRules with mainFrame false), so never more. Since
+  // autoconsent 18 no generic rule targets sub frames, so that list may be empty.
+  var top;
   calls.toTabs = [];
-  return send({ type: 'init', url: 'https://www.1news.co.nz/' }, { frameId: 3 }).then(function () {
+  return send({ type: 'init', url: 'https://www.1news.co.nz/' }).then(function () {
+    top = calls.toTabs[0];
+    assert.equal(top.frameId, 0);
+    assert.equal(top.msg.type, 'initResp');
+    assert.equal(top.msg.config.enabled, true);
+    assert.equal(top.msg.config.autoAction, 'optOut');
+    assert.ok(top.msg.rules.compact && top.msg.rules.compact.r.length > 0, 'compact rules');
+    calls.toTabs = [];
+    return send({ type: 'init', url: 'https://www.1news.co.nz/' }, { frameId: 3 });
+  }).then(function () {
     var m = calls.toTabs[0];
     assert.equal(m.frameId, 3);
     assert.equal(m.msg.type, 'initResp');
     assert.equal(m.msg.config.enabled, true);
     assert.equal(m.msg.config.autoAction, 'optOut');
-    assert.ok(m.msg.rules.compact && m.msg.rules.compact.r.length > 0, 'compact rules');
+    assert.ok(m.msg.rules.compact && Array.isArray(m.msg.rules.compact.r), 'compact rules for the frame');
+    assert.ok(m.msg.rules.compact.r.length < top.msg.rules.compact.r.length, 'sub frame gets the frame-filtered subset');
   });
 });
 
