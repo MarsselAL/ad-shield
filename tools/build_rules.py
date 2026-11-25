@@ -20,8 +20,10 @@ Writes (all committed, so the extension works offline and needs no remote config
     rules/removeparam.json                                         DNR redirect ruleset (queryTransform) from
                                                                    our own rules/removeparams.txt (tools/removeparam.py)
     rules/cosmetic/ads_generic.css (core, every frame), ads_generic_top.css (top frame),
-    rules/cosmetic/cookies_generic.css (top frame)                 generic hiding (tools/cosmetic.py)
-    rules/cosmetic/generic.json, rules/cosmetic/site.json          cosmetic data for the worker
+    rules/cosmetic/cookies_generic.css (top frame), ads_excepted.css, cookies_excepted.css
+                                                                   generic hiding (tools/cosmetic.py)
+    rules/cosmetic/site/index.json + site/00..7f.json, generic.json, generic_excepted.json
+                                                                   cosmetic data for the worker
     rules/build-info.json                                          list versions, counts, skips
 and updates declarative_net_request.rule_resources in manifest.json.
 The list data is used under CC BY-SA 3.0 (EasyList, EasyPrivacy) and CC BY 3.0 (cookie list);
@@ -164,7 +166,7 @@ def convert_texts(texts):
     """Pure conversion of the three lists. texts: {list key: file text}. Returns a dict:
     lists      {key: build-info entry without url, plus "rules" (block ids from 1, allow ids
                from ALLOW_ID_BASE + 1, before splitting into rulesets)}
-    site       the rules/cosmetic/site.json object
+    site       the site-specific cosmetic object (tools/cosmetic.py shards it into rules/cosmetic/site/)
     generic    {"ads": [...], "cookies": [...]} generic selectors (rules/cosmetic/generic.json)
     cosmetic   {"ads": CosmeticCollector, "cookies": CosmeticCollector} (finished)
     exceptions {host: set(selectors)}; cookieDomains: EasyPrivacy ||host^$third-party hosts.
@@ -286,7 +288,7 @@ def convert(lists_dir, root=ROOT):
             "siteHosts": len(c.site),
             "siteSelectors": sum(len(v) for v in c.site.values()),
         }
-    info["cosmetic"]["ads"].update(tiers)
+    info["cosmetic"]["files"] = tiers
     info["cosmetic"]["exceptionHosts"] = len(conv["exceptions"])
     info["cosmetic"]["genericExceptionHosts"] = len(site["genericExceptionHosts"])
     info["cosmetic"]["generichide"] = len(site["generichide"])

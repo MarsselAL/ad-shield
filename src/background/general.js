@@ -22,6 +22,8 @@
  *    following the protocol documented in autoconsent's docs/api.md.
  * It makes no network requests itself (updater.js downloads the lists); site cosmetic data comes
  * from the updated lists in chrome.storage.local "listSite" when present, else from the package.
+ * Site data is sharded (rules/cosmetic/site/, blocking.splitSite), so a page woken worker reads
+ * one shard of ~10 KB, not the whole 1.3 MB.
  */
 /* global chrome */
 (function () {
@@ -54,17 +56,58 @@
     return cache[path];
   }
 
-  // Site cosmetic data: the updated lists' copy (storage) wins over rules/cosmetic/site.json.
-  var siteCache = null;
-  function loadSite() {
-    if (!siteCache) {
-      siteCache = chrome.storage.local.get(L.SITE_KEY).then(function (r) {
-        var s = r[L.SITE_KEY];
-        return s && typeof s === 'object' && s.v === 1 ? s : loadJson('rules/cosmetic/site.json');
-      });
-      siteCache.catch(function () { siteCache = null; });
+  // Site cosmetic data: the updated lists' copy (storage) wins over rules/cosmetic/site/.
+  // storage "listSite" is the marker { v: 2 } of the sharded copy, or an older whole { v: 1 }.
+  var siteCache = {};
+  function cached(key, fn) {
+    if (!siteCache[key]) {
+      var p = siteCache[key] = fn();
+      p.catch(function () { if (siteCache[key] === p) delete siteCache[key]; });
     }
-    return siteCache;
+    return siteCache[key];
+  }
+  function isObj(x) { return !!x && typeof x === 'object'; }
+
+  /** Host lists for the content-script exclusions (blocking.cosmeticExcludeHosts). */
+  function loadSiteIndex() {
+    return cached('index', function () {
+      return chrome.storage.local.get([L.SITE_KEY, L.SITE_INDEX_KEY]).then(function (r) {
+        var m = r[L.SITE_KEY];
+        if (isObj(m) && m.v === 2 && isObj(r[L.SITE_INDEX_KEY])) return r[L.SITE_INDEX_KEY];
+        if (isObj(m) && m.v === 1) return L.legacySite(m);
+        return loadJson('rules/cosmetic/site/index.json');
+      });
+    });
+  }
+
+  /** Site data for a page host: its shard (same shape as the whole object, its hosts only). */
+  function loadSiteFor(host) {
+    var i = B.siteShard(host);
+    if (i < 0) return Promise.resolve(null);
+    var name = B.siteShardName(i), key = L.siteShardStorageKey(name);
+    return cached('shard:' + name, function () {
+      return chrome.storage.local.get([L.SITE_KEY, key]).then(function (r) {
+        var m = r[L.SITE_KEY];
+        if (isObj(m) && m.v === 2 && isObj(r[key])) return r[key];
+        if (isObj(m) && m.v === 1) return L.legacySite(m);
+        return loadJson('rules/cosmetic/site/' + name + '.json');
+      });
+    });
+  }
+
+  /** chrome.storage.local items for updated site data (marker, index, every shard). */
+  function siteItems(site) {
+    var split = B.splitSite(site), o = {};
+    o[L.SITE_KEY] = { v: 2, n: B.SITE_SHARDS, at: Date.now() };
+    o[L.SITE_INDEX_KEY] = split.index;
+    split.shards.forEach(function (sh, i) { o[L.siteShardStorageKey(B.siteShardName(i))] = sh; });
+    return o;
+  }
+
+  function siteKeys() {
+    var keys = [L.SITE_KEY, L.SITE_INDEX_KEY];
+    for (var i = 0; i < B.SITE_SHARDS; i++) keys.push(L.siteShardStorageKey(B.siteShardName(i)));
+    return keys;
   }
 
   function readState() {
@@ -175,11 +218,10 @@
         return syncDnr(st, data.rules, all);
       }).then(function (res) {
         if (!res.ok) throw new Error(res.error || 'updateDynamicRules failed');
-        var o = {};
+        var o = siteItems(data.site);
         o[L.RULES_KEY] = data.rules;
-        o[L.SITE_KEY] = data.site;
         o[L.META_KEY] = data.meta;
-        siteCache = null;
+        siteCache = {};
         return chrome.storage.local.set(o).then(function () { return syncScripts(state); }).then(function () { return res; });
       });
     });
@@ -190,8 +232,8 @@
     return enqueue(function () {
       var o = {};
       o[L.META_KEY] = meta;
-      return chrome.storage.local.remove([L.RULES_KEY, L.SITE_KEY]).then(function () {
-        siteCache = null;
+      return chrome.storage.local.remove([L.RULES_KEY].concat(siteKeys())).then(function () {
+        siteCache = {};
         return chrome.storage.local.set(o);
       }).then(readState).then(function (st) {
         return syncDnr(st, null, null).then(function (res) {
@@ -218,7 +260,7 @@
 
   function syncScripts(st) {
     var needSite = st.settings.enabled && (st.blocking.ads || st.blocking.hideCookieBanners);
-    var siteP = needSite ? loadSite().catch(function () { return null; }) : Promise.resolve(null);
+    var siteP = needSite ? loadSiteIndex().catch(function () { return null; }) : Promise.resolve(null);
     // Hosts of our packaged page-script rules (build/scriptlets-main.js runs only there).
     var needSl = st.settings.enabled && st.blocking.ads && st.blocking.scriptlets;
     var slP = needSl ? loadJson('rules/scriptlets.json').then(B.scriptletHosts, function () { return []; }) : Promise.resolve([]);
@@ -291,8 +333,12 @@
       // User filters apply whenever the master switch is on and the site is not allowlisted,
       // whatever the Ads / Cookie-banner switches say (they are the user's own choice).
       var userP = readUserFilters().then(function (uf) { return U.cssFor(host, uf); }, function () { return ''; });
-      var siteP = !(b.ads || b.hideCookieBanners) ? Promise.resolve(none) : loadSite().then(function (site) {
-        var genP = B.needsGeneric(host, site) ? loadJson('rules/cosmetic/generic.json') : Promise.resolve(null);
+      var siteP = !(b.ads || b.hideCookieBanners) ? Promise.resolve(none) : loadSiteFor(host).then(function (site) {
+        // Exception hosts: only the selectors they except, unless their exceptions hit the big
+        // generic files (genericFullHosts, after an update): then the whole list (556 KB).
+        var src = B.genericSource(host, site);
+        var genP = src === 'full' ? loadJson('rules/cosmetic/generic.json')
+          : src === 'excepted' ? loadJson('rules/cosmetic/generic_excepted.json') : Promise.resolve(null);
         return genP.then(function (generic) {
           return B.cssForHost(host, site, generic, { ads: b.ads, cookies: b.hideCookieBanners });
         });
@@ -448,7 +494,7 @@
   });
   chrome.runtime.onStartup.addListener(function () { apply(); });
   chrome.storage.onChanged.addListener(function (changes, area) {
-    if (area === 'local' && changes[L.SITE_KEY]) siteCache = null;
+    if (area === 'local' && changes[L.SITE_KEY]) siteCache = {};
     if (area === 'local' && (changes[S.STORAGE_KEY] || changes[B.STORAGE_KEY])) apply();
     // New or removed "My filters" hosts change where the page script must run.
     else if (area === 'local' && changes[U.STORAGE_KEY]) enqueue(function () { return readState().then(syncScripts); });

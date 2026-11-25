@@ -46,6 +46,15 @@ class Package(unittest.TestCase):
             self.assertIn(n, self.names)
         self.assertTrue(all(n.startswith("adbrake/") for n in self.names))
 
+    def test_cosmetic_data_shards_shipped(self):
+        shards = [n for n in self.names if n.startswith("adbrake/rules/cosmetic/site/")]
+        self.assertEqual(len(shards), 129, "index.json + 128 shards (tools/cosmetic.py SITE_SHARDS)")
+        self.assertIn("adbrake/rules/cosmetic/site/index.json", shards)
+        self.assertNotIn("adbrake/rules/cosmetic/site.json", self.names)
+        for n in ("generic.json", "generic_excepted.json", "ads_generic.css", "ads_generic_top.css", "ads_excepted.css",
+                  "cookies_generic.css", "cookies_excepted.css"):
+            self.assertIn("adbrake/rules/cosmetic/" + n, self.names)
+
     def test_no_development_files(self):
         bad = {"tests", "tools", "results", "dist", "docs", "__pycache__", ".git", ".claude", "_metadata"}
         for n in self.names:

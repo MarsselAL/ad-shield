@@ -564,18 +564,19 @@ class GeneratedData(unittest.TestCase):
 
     def test_cosmetic_files(self):
         cdir = os.path.join(ROOT, "rules", "cosmetic")
-        with open(os.path.join(cdir, "site.json"), encoding="utf-8") as fh:
-            site = json.load(fh)
+        self.assertFalse(os.path.exists(os.path.join(cdir, "site.json")), "replaced by site/ shards")
+        site = CO.read_site(cdir)
         with open(os.path.join(cdir, "generic.json"), encoding="utf-8") as fh:
             generic = json.load(fh)
         self.assertEqual(site["v"], 1)
-        for k in ("ads", "cookies", "exceptions", "genericExceptionHosts", "generichide", "elemhide"):
+        for k in ("ads", "cookies", "exceptions", "genericExceptionHosts", "generichide", "elemhide", "genericFullHosts"):
             self.assertIn(k, site)
+        self.assertGreater(len(site["ads"]), 5000)
         self.assertGreater(len(generic["ads"]), 1000)
         self.assertGreater(len(generic["cookies"]), 1000)
         for h in site["genericExceptionHosts"] + site["generichide"] + site["elemhide"]:
             self.assertIn(".", h, "a single-label host would exclude a whole TLD from generic hiding")
-        for name in ("ads_generic.css", "ads_generic_top.css", "cookies_generic.css"):
+        for name in ("ads_generic.css", "ads_generic_top.css", "cookies_generic.css", "ads_excepted.css", "cookies_excepted.css"):
             with open(os.path.join(cdir, name), encoding="utf-8") as fh:
                 css = fh.read()
             self.assertEqual(css.count("{display:none!important}"), css.count("\n") - 1)
@@ -604,17 +605,23 @@ class EndToEnd(unittest.TestCase):
         for r in rulesets:
             with open(os.path.join(out, r["path"]), encoding="utf-8") as fh:
                 self.assertEqual(dnr_schema.ruleset_errors(json.load(fh)), [])
-        with open(os.path.join(out, "rules", "cosmetic", "site.json"), encoding="utf-8") as fh:
-            site = json.load(fh)
+        site = CO.read_site(os.path.join(out, "rules", "cosmetic"))
         self.assertEqual(site["ads"], {"a.com": [".side-ad"]})
         self.assertEqual(site["cookies"], {"b.com": [".consent"]})
         self.assertEqual(site["genericExceptionHosts"], ["a.com"])
         self.assertEqual(site["generichide"], ["good.example"])
+        self.assertEqual(site["genericFullHosts"], [])
         cdir = os.path.join(out, "rules", "cosmetic")
+        with open(os.path.join(cdir, "ads_excepted.css"), encoding="utf-8") as fh:
+            self.assertIn(".ad{display:none!important}", fh.read(), "a.com#@#.ad: in the excepted file")
         with open(os.path.join(cdir, "ads_generic.css"), encoding="utf-8") as fh:
-            self.assertIn(".ad{display:none!important}", fh.read(), "\"ad\" is core vocabulary")
+            self.assertNotIn(".ad{", fh.read())
+        with open(os.path.join(cdir, "cookies_generic.css"), encoding="utf-8") as fh:
+            self.assertIn(".cookie-bar{display:none!important}", fh.read())
         self.assertTrue(os.path.isfile(os.path.join(cdir, "ads_generic_top.css")))
-        self.assertEqual(info["cosmetic"]["ads"]["adsCore"], 1)
+        self.assertEqual(len([f for f in os.listdir(os.path.join(cdir, "site")) if f.endswith(".json")]), CO.SITE_SHARDS + 1)
+        self.assertEqual(info["cosmetic"]["files"]["adsCore"], 0)
+        self.assertEqual(info["cosmetic"]["files"]["adsExcepted"], 1)
 
 
 class GenericTiers(unittest.TestCase):
@@ -648,21 +655,82 @@ class GenericTiers(unittest.TestCase):
 
     def test_committed_tiers(self):
         cdir = os.path.join(ROOT, "rules", "cosmetic")
-        with open(os.path.join(cdir, "generic.json"), encoding="utf-8") as fh:
-            generic = json.load(fh)
-        core, top = CO.split_ad_tiers(generic["ads"])
+        generic, site = CO.read_committed()
+        excepted = CO.excepted_selectors(generic, site)
+        skip = set(excepted["ads"]) | set(excepted["cookies"])
+        core, top = CO.split_ad_tiers([s for s in generic["ads"] if s not in skip])
         self.assertLessEqual(sum(len(s) + 1 for s in core), CO.CORE_MAX_BYTES)
         self.assertGreater(len(core), 2000)
+        every_frame = set(core) | set(excepted["ads"])
         for sel in ('[id^="div-gpt-ad"]', '[id^="google_ads_iframe_"]', "ins.adsbygoogle[data-ad-client]", "AMP-AD"):
-            self.assertIn(sel, core)
+            self.assertIn(sel, every_frame)
         want = {"ads_generic.css": (core, "EasyList (generic core, every frame)"),
                 "ads_generic_top.css": (top, "EasyList (other generic, top frame)"),
-                "cookies_generic.css": (generic["cookies"], "the EasyList Cookie List (top frame)")}
+                "cookies_generic.css": ([s for s in generic["cookies"] if s not in skip], "the EasyList Cookie List (top frame)"),
+                "ads_excepted.css": (excepted["ads"], "EasyList (generic, excepted on some sites)"),
+                "cookies_excepted.css": (excepted["cookies"], "the EasyList Cookie List (generic, excepted on some sites)")}
         for name, (sels, source) in want.items():
             with open(os.path.join(cdir, name), encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), CO.css_file(sels, source), "run python3 -I tools/cosmetic.py: " + name)
-        with open(os.path.join(cdir, "ads_generic.css"), encoding="utf-8") as fh:
-            self.assertLess(len(fh.read()), 48 * 1024, "the CSS every frame parses stays small")
+        size = 0
+        for name in ("ads_generic.css", "ads_excepted.css"):
+            with open(os.path.join(cdir, name), encoding="utf-8") as fh:
+                size += len(fh.read())
+        self.assertLess(size, 56 * 1024, "the CSS every frame parses stays small")
+        with open(os.path.join(cdir, "generic_excepted.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), excepted)
+        self.assertGreater(len(excepted["ads"]) + len(excepted["cookies"]), 100)
+        self.assertEqual(site["genericFullHosts"], [], "packaged: every excepted selector is in the excepted files")
+        self.assertEqual(CO.full_generic_hosts(site, generic, excepted), [])
+
+
+class SiteShards(unittest.TestCase):
+    """tools/cosmetic.py site/ shards (same functions as src/shared/blocking.js; parity is checked
+    in tests/blocking.test.js against these files)."""
+
+    def test_shard_key_keeps_parents_together(self):
+        self.assertEqual(CO.shard_key("a.b.example.com"), "example.com")
+        self.assertEqual(CO.shard_key("www.bbc.co.uk"), "bbc.co.uk")
+        self.assertEqual(CO.shard_key("example.com"), "example.com")
+        self.assertTrue(CO.is_global_host("co.uk") and CO.is_global_host("uk") and CO.is_global_host("gov.uk"))
+        self.assertFalse(CO.is_global_host("example.com"))
+        for host in ("www.bbc.co.uk", "a.b.c.example.org", "x.y.gov.pl", "10.0.0.1", "deep.sub.site.com.au"):
+            labels = host.split(".")
+            for i in range(len(labels)):
+                parent = ".".join(labels[i:])
+                if not CO.is_global_host(parent):
+                    self.assertEqual(CO.shard_of(parent), CO.shard_of(host), (host, parent))
+        self.assertEqual(CO.fnv1a(""), 0x811C9DC5)
+        self.assertEqual(CO.fnv1a("a"), 0xE40C292C)
+
+    def test_split_merge_round_trip(self):
+        site = dict(make_golden.golden()["site"])
+        site["genericFullHosts"] = []
+        index, shards = CO.split_site(site)
+        self.assertEqual(len(shards), CO.SITE_SHARDS)
+        self.assertEqual(index["genericExceptionHosts"], site["genericExceptionHosts"])
+        self.assertEqual(CO.merge_site(index, shards), site)
+
+    def test_committed_shards(self):
+        sdir = os.path.join(ROOT, "rules", "cosmetic", "site")
+        names = sorted(f for f in os.listdir(sdir) if f.endswith(".json"))
+        self.assertEqual(names, sorted(["index.json"] + ["%02x.json" % i for i in range(CO.SITE_SHARDS)]))
+        with open(os.path.join(ROOT, "src", "shared", "blocking.js"), encoding="utf-8") as fh:
+            self.assertEqual(int(re.search(r"var SITE_SHARDS = (\d+);", fh.read()).group(1)), CO.SITE_SHARDS)
+        biggest = 0
+        for i in range(CO.SITE_SHARDS):
+            path = os.path.join(sdir, CO.shard_name(i) + ".json")
+            biggest = max(biggest, os.path.getsize(path))
+            with open(path, encoding="utf-8") as fh:
+                sh = json.load(fh)
+            for k in CO.SITE_MAPS:
+                for h in sh[k]:
+                    self.assertTrue(CO.is_global_host(h) or CO.shard_of(h) == i, (i, h))
+        self.assertLess(biggest, 32 * 1024, "a page reads one small shard")
+        generic, site = CO.read_committed()
+        index, shards = CO.split_site(site)
+        with open(os.path.join(sdir, "index.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), index)
 
 
 class Golden(unittest.TestCase):

@@ -76,15 +76,28 @@ globalThis.chrome = {
     onRemoved: { addListener: function () {} }
   }
 };
+var fetched = [];
 globalThis.fetch = function (url) {
   var path = String(url).replace(BASE, '');
+  fetched.push(path);
   return Promise.resolve({ json: function () { return Promise.resolve(JSON.parse(readFile(path))); } });
 };
 
 loadSrc('src/config.js', 'src/shared/settings.js', 'src/shared/logger.js', 'src/shared/blocking.js', 'src/shared/userfilters.js', 'src/shared/lists.js',
   'src/background/autoconsent-shim.js', 'vendor/autoconsent/autoconsent.cjs.js', 'src/background/general.js');
 var B = __TAS__.blocking;
-var SITE = JSON.parse(readFile('rules/cosmetic/site.json'));
+// The whole packaged site data, merged from rules/cosmetic/site/ (index + shards).
+var SITE = (function () {
+  var index = JSON.parse(readFile('rules/cosmetic/site/index.json'));
+  var site = { v: 1, ads: {}, cookies: {}, exceptions: {} };
+  for (var i = 0; i < index.n; i++) {
+    var sh = JSON.parse(readFile('rules/cosmetic/site/' + B.siteShardName(i) + '.json'));
+    ['ads', 'cookies', 'exceptions'].forEach(function (k) { Object.assign(site[k], sh[k]); });
+  }
+  ['genericExceptionHosts', 'generichide', 'elemhide', 'genericFullHosts'].forEach(function (k) { site[k] = index[k]; });
+  return site;
+})();
+var EXCEPTED = JSON.parse(readFile('rules/cosmetic/generic_excepted.json'));
 
 function send(msg, sender) {
   var response;
@@ -100,12 +113,16 @@ test('startup: enables the generated rulesets, registers CSS and page script, ba
     var last = calls.rulesets[calls.rulesets.length - 1];
     assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'youtube']);
     assert.deepEqual(last.disableRulesetIds, []);
-    assert.deepEqual(ids(), ['as-css-ads', 'as-css-ads-top', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
+    assert.deepEqual(ids(), ['as-css-ads', 'as-css-ads-exc', 'as-css-ads-top', 'as-css-cookies', 'as-css-cookies-exc', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var sl = registered.filter(function (s) { return s.id === 'as-scriptlets'; })[0];
     assert.equal(sl.world, 'MAIN');
     assert.deepEqual(sl.matches, ['*://*.m.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtube.com/*', '*://*.youtubekids.com/*'], 'hosts from rules/scriptlets.json (m. is redundant with *.youtube.com)');
     var css = registered.filter(function (s) { return s.id === 'as-css-ads'; })[0];
-    assert.ok(css.excludeMatches.length >= SITE.genericExceptionHosts.length, 'exception hosts excluded from the generic CSS');
+    var exc = registered.filter(function (s) { return s.id === 'as-css-ads-exc'; })[0];
+    assert.ok(exc.excludeMatches.length >= SITE.genericExceptionHosts.length, 'exception hosts excluded from the excepted selectors');
+    assert.ok(css.excludeMatches.length < SITE.genericExceptionHosts.length, 'but not from the big generic files');
+    assert.ok(fetched.indexOf('rules/cosmetic/site/index.json') !== -1, 'registration reads the small index');
+    assert.equal(fetched.filter(function (p) { return /generic\.json|site\/[0-9a-f]{2}\.json/.test(p); }).length, 0, 'no shard, no generic list at startup');
     assert.deepEqual(calls.actionOptions[0], { displayActionCountAsBadgeText: true });
     assert.deepEqual(calls.dynamic[calls.dynamic.length - 1], { removeRuleIds: [1], addRules: [] });
   });
@@ -120,7 +137,7 @@ test('same settings again: no re-registration', function () {
 
 test('auto-reject on registers autoconsent; allowlist adds the dynamic rule and exclusions', function () {
   return setBlocking({ autoRejectCookies: true, allowlist: ['off.example'] }).then(function () {
-    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-ads-top', 'as-css-cookies', 'as-css-youtube', 'as-scriptlets', 'as-site']);
+    assert.deepEqual(ids(), ['as-autoconsent', 'as-css-ads', 'as-css-ads-exc', 'as-css-ads-top', 'as-css-cookies', 'as-css-cookies-exc', 'as-css-youtube', 'as-scriptlets', 'as-site']);
     var ac = registered.filter(function (s) { return s.id === 'as-autoconsent'; })[0];
     assert.deepEqual(ac.js, ['vendor/autoconsent/content.bundle.js']);
     assert.deepEqual(ac.excludeMatches, ['*://*.off.example/*']);
@@ -132,7 +149,9 @@ test('auto-reject on registers autoconsent; allowlist adds the dynamic rule and 
 
 test('page hello: site CSS injected as USER origin into the sending frame, cookie selectors returned', function () {
   var host = '1news.co.nz';
+  fetched = [];
   return send({ type: 'as-page', host: 'www.' + host, t: 1234 }).then(function (resp) {
+    assert.deepEqual(fetched, ['rules/cosmetic/site/' + B.siteShardName(B.siteShard(host)) + '.json'], 'one shard read');
     var c = calls.css[calls.css.length - 1];
     assert.equal(c.origin, 'USER');
     assert.deepEqual(c.target, { tabId: 7, frameIds: [0] });
@@ -145,11 +164,17 @@ test('page hello: site CSS injected as USER origin into the sending frame, cooki
 test('page hello on an exception host: generic CSS injected minus the exceptions', function () {
   var host = SITE.genericExceptionHosts[0];
   var before = calls.css.length;
+  fetched = [];
   return send({ type: 'as-page', host: host, t: 1 }, { tab: { id: 8, url: 'https://' + host + '/' } }).then(function () {
     assert.equal(calls.css.length, before + 1);
+    assert.equal(fetched.indexOf('rules/cosmetic/generic.json'), -1, 'not the whole generic list');
+    assert.ok(fetched.indexOf('rules/cosmetic/generic_excepted.json') !== -1);
     var css = calls.css[calls.css.length - 1].css;
-    assert.ok(css.split('\n').length > 1000, 'generic selectors included');
-    SITE.exceptions[host].forEach(function (s) { assert.notIncludes('\n' + css + '\n', '\n' + s + '{', 'exception ' + s); });
+    var lines = '\n' + css + '\n';
+    var kept = EXCEPTED.ads.concat(EXCEPTED.cookies).filter(function (s) { return SITE.exceptions[host].indexOf(s) === -1; });
+    assert.ok(kept.length > 100);
+    kept.forEach(function (s) { assert.includes(lines, '\n' + s + '{', 'excepted elsewhere, hidden here: ' + s); });
+    SITE.exceptions[host].forEach(function (s) { assert.notIncludes(lines, '\n' + s + '{', 'exception ' + s); });
   });
 });
 
@@ -310,13 +335,20 @@ test('installLists: dynamic rules in one call, list rulesets off, curated / cook
       assert.deepEqual(p.enableRulesetIds.slice().sort(), ['ads_curated', 'cookie_strip', 'privacy_curated', 'removeparam', 'youtube']);
       assert.deepEqual(local.listRules, STORED);
       assert.deepEqual(local.lists, META);
+      assert.equal(local.listSite.v, 2, 'sharded marker');
+      assert.deepEqual(local['listSite/index'].genericExceptionHosts, SITE.genericExceptionHosts);
+      var shardKeys = Object.keys(local).filter(function (k) { return /^listSite\/[0-9a-f]{2}$/.test(k); });
+      assert.equal(shardKeys.length, B.SITE_SHARDS);
+      assert.deepEqual(local['listSite/' + B.siteShardName(B.siteShard('fresh.example'))].ads, { 'fresh.example': ['.fresh-ad'] });
     });
   });
 });
 
 test('page hello uses the updated site data from storage', function () {
+  fetched = [];
   return send({ type: 'as-page', host: 'www.fresh.example', t: 5 }, { tab: { id: 11, url: 'https://www.fresh.example/' } }).then(function () {
     assert.includes(calls.css[calls.css.length - 1].css, '.fresh-ad{display:none!important}');
+    assert.deepEqual(fetched, [], 'nothing read from the package');
   });
 });
 
@@ -363,7 +395,29 @@ test('resetLists: static list rulesets enabled before the dynamic rules go, stor
     assert.deepEqual(first.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'youtube']);
     assert.equal(local.listRules, undefined);
     assert.equal(local.listSite, undefined);
+    assert.deepEqual(Object.keys(local).filter(function (k) { return k.indexOf('listSite') === 0; }), [], 'every shard removed');
     assert.equal(local.lists.source, 'packaged');
+  });
+});
+
+test('site data stored whole by an older version is still used; its exception hosts get the whole generic list', function () {
+  var host = SITE.genericExceptionHosts[0];
+  var old = Object.assign({}, SITE, { ads: { 'legacy.example': ['.legacy-ad'] } });
+  delete old.genericFullHosts;
+  return chrome.storage.local.set({ listSite: old }).then(flush).then(function () {
+    return send({ type: 'as-page', host: 'legacy.example', t: 6 }, { tab: { id: 12, url: 'https://legacy.example/' } });
+  }).then(function () {
+    assert.includes(calls.css[calls.css.length - 1].css, '.legacy-ad{display:none!important}');
+    fetched = [];
+    return send({ type: 'as-page', host: host, t: 7 }, { tab: { id: 13, url: 'https://' + host + '/' } });
+  }).then(function () {
+    assert.deepEqual(fetched, ['rules/cosmetic/generic.json']);
+    assert.ok(calls.css[calls.css.length - 1].css.split('\n').length > 1000, 'whole generic list');
+    return __TAS__.general.apply().then(flush);  // as after the extension update (onInstalled)
+  }).then(function () {
+    var exc = registered.filter(function (s) { return s.id === 'as-css-ads'; })[0];
+    assert.ok(exc.excludeMatches.length >= SITE.genericExceptionHosts.length, 'and the big files skip them');
+    return chrome.storage.local.remove('listSite');
   });
 });
 

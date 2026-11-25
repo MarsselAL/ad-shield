@@ -150,19 +150,31 @@ test('hostPatterns and contentScriptPlan', function () {
   assert.deepEqual(B.hostPatterns('10.0.0.1'), ['*://10.0.0.1/*']);
   assert.deepEqual(B.hostPatterns('bad_host.com'), []);
   assert.deepEqual(B.contentScriptPlan(false, B.defaults(), []), []);
-  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org']);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-cookies', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
-  assert.deepEqual(plan[0].css, ['rules/cosmetic/ads_generic.css']);
-  assert.deepEqual(plan[0].excludeMatches, ['*://*.off.com/*', '*://*.exc.org/*']);
-  assert.equal(plan[0].allFrames, true, 'generic ad core: every frame');
-  assert.deepEqual(plan[1].css, ['rules/cosmetic/ads_generic_top.css']);
-  assert.equal(plan[1].allFrames, false, 'other generic ad selectors: top frame only');
-  assert.deepEqual(plan[1].excludeMatches, plan[0].excludeMatches);
-  assert.deepEqual(plan[2].css, ['rules/cosmetic/cookies_generic.css']);
-  assert.equal(plan[2].allFrames, false, 'cookie-banner generic CSS: top frame only');
-  assert.deepEqual(plan[2].excludeMatches, plan[0].excludeMatches);
-  assert.deepEqual(plan[3].excludeMatches, ['*://*.off.com/*'], 'page script: allowlist only');
-  assert.equal(plan[3].allFrames, false);
+  var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), { main: ['gh.org'], excepted: ['exc.org', 'gh.org'] });
+  assert.deepEqual(plan.map(function (s) { return s.id; }),
+    ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube'], 'no scriptlet hosts given: no as-scriptlets');
+  var byId = {};
+  plan.forEach(function (s) { byId[s.id] = s; });
+  assert.deepEqual(byId['as-css-ads'].css, ['rules/cosmetic/ads_generic.css']);
+  assert.deepEqual(byId['as-css-ads'].excludeMatches, ['*://*.off.com/*', '*://*.gh.org/*']);
+  assert.equal(byId['as-css-ads'].allFrames, true, 'generic ad core: every frame');
+  assert.deepEqual(byId['as-css-ads-top'].css, ['rules/cosmetic/ads_generic_top.css']);
+  assert.equal(byId['as-css-ads-top'].allFrames, false, 'other generic ad selectors: top frame only');
+  assert.deepEqual(byId['as-css-ads-top'].excludeMatches, byId['as-css-ads'].excludeMatches);
+  assert.deepEqual(byId['as-css-cookies'].css, ['rules/cosmetic/cookies_generic.css']);
+  assert.equal(byId['as-css-cookies'].allFrames, false, 'cookie-banner generic CSS: top frame only');
+  assert.deepEqual(byId['as-css-cookies'].excludeMatches, byId['as-css-ads'].excludeMatches, 'exception hosts keep the big files');
+  assert.deepEqual(byId['as-css-ads-exc'].css, ['rules/cosmetic/ads_excepted.css']);
+  assert.equal(byId['as-css-ads-exc'].allFrames, true);
+  assert.deepEqual(byId['as-css-ads-exc'].excludeMatches, ['*://*.off.com/*', '*://*.exc.org/*', '*://*.gh.org/*'], 'excepted selectors skip the exception hosts');
+  assert.deepEqual(byId['as-css-cookies-exc'].css, ['rules/cosmetic/cookies_excepted.css']);
+  assert.equal(byId['as-css-cookies-exc'].allFrames, false);
+  assert.deepEqual(byId['as-css-cookies-exc'].excludeMatches, byId['as-css-ads-exc'].excludeMatches);
+  assert.deepEqual(byId['as-site'].excludeMatches, ['*://*.off.com/*'], 'page script: allowlist only');
+  assert.equal(byId['as-site'].allFrames, false);
+  var arr = B.contentScriptPlan(true, B.defaults(), ['exc.org']);
+  assert.deepEqual(arr[0].excludeMatches, ['*://*.exc.org/*'], 'a plain array excludes from every file');
+  assert.deepEqual(arr[2].excludeMatches, ['*://*.exc.org/*']);
   plan.forEach(function (s) { assert.equal(s.id.indexOf(B.SCRIPT_PREFIX), 0); assert.equal(s.runAt, 'document_start'); });
   var ac = B.contentScriptPlan(true, Object.assign(B.defaults(), { ads: false, hideCookieBanners: false, autoRejectCookies: true }), []);
   assert.deepEqual(ac.map(function (s) { return s.id; }), ['as-autoconsent']);
@@ -174,8 +186,8 @@ test('contentScriptPlan: YouTube CSS and the MAIN-world scriptlets only on their
   var hosts = B.scriptletHosts(JSON.parse(readFile('rules/scriptlets.json')));
   assert.deepEqual(hosts, ['m.youtube.com', 'youtube-nocookie.com', 'youtube.com', 'youtubekids.com'], 'm.youtube.com (rule youtube-mobile) is also inside youtube.com');
   var plan = B.contentScriptPlan(true, Object.assign(B.defaults(), { allowlist: ['off.com'] }), ['exc.org'], hosts);
-  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-cookies', 'as-site', 'as-css-youtube', 'as-scriptlets']);
-  var css = plan[4], sl = plan[5];
+  assert.deepEqual(plan.map(function (s) { return s.id; }), ['as-css-ads', 'as-css-ads-top', 'as-css-ads-exc', 'as-css-cookies', 'as-css-cookies-exc', 'as-site', 'as-css-youtube', 'as-scriptlets']);
+  var css = plan[6], sl = plan[7];
   assert.deepEqual(css.css, ['rules/cosmetic/youtube.css']);
   assert.deepEqual(css.matches, ['*://*.youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*']);
   assert.deepEqual(css.excludeMatches, ['*://*.off.com/*'], 'YouTube CSS: allowlist only');
@@ -228,7 +240,62 @@ test('cssForHost: exception hosts get the generic selectors minus their exceptio
   var r = B.cssForHost('sub.example.com', SITE, GENERIC, { ads: true, cookies: true });
   var sels = r.css.split('\n').map(function (l) { return l.replace('{display:none!important}', ''); });
   assert.deepEqual(sels, ['.deep-ad', '.side-ad', '#consent', '.g2', '.cookie-bar']);
-  assert.deepEqual(B.cosmeticExcludeHosts(SITE), ['nogeneric.net', 'nothing.org', 'sub.example.com']);
+  assert.deepEqual(B.cosmeticExcludeHosts(SITE), { main: ['nogeneric.net', 'nothing.org'], excepted: ['nogeneric.net', 'nothing.org', 'sub.example.com'] });
+  assert.equal(B.genericSource('a.sub.example.com', SITE), 'excepted');
+  assert.equal(B.genericSource('example.com', SITE), null);
+});
+
+test('genericSource: genericFullHosts get the whole generic list; generichide / elemhide nothing', function () {
+  var site = Object.assign({}, SITE, { genericFullHosts: ['sub.example.com', 'nogeneric.net'] });
+  assert.equal(B.genericSource('www.sub.example.com', site), 'full');
+  assert.equal(B.genericSource('nogeneric.net', site), null, 'generichide wins');
+  assert.equal(B.genericSource('nothing.org', site), null);
+  assert.equal(B.genericSource('x.com', null), null);
+  assert.deepEqual(B.cosmeticExcludeHosts(site).main, ['nogeneric.net', 'nothing.org', 'sub.example.com']);
+  assert.deepEqual(B.cosmeticExcludeHosts(null), { main: [], excepted: [] });
+});
+
+test('site shards: every parent of a page host that can hold rules is in the page host\'s shard', function () {
+  assert.equal(B.siteShardKey('a.b.example.com'), 'example.com');
+  assert.equal(B.siteShardKey('www.bbc.co.uk'), 'bbc.co.uk');
+  assert.equal(B.siteShardKey('bbc.co.uk'), 'bbc.co.uk');
+  assert.equal(B.siteShardKey('example.com'), 'example.com');
+  assert.equal(B.siteShard('WWW.Example.com'), B.siteShard('example.com'));
+  assert.equal(B.siteShard('news.bbc.co.uk'), B.siteShard('bbc.co.uk'));
+  assert.equal(B.siteShard('not a host'), -1);
+  assert.equal(B.siteShardName(10), '0a');
+  assert.equal(B.siteShardName(127), '7f');
+  var split = B.splitSite(SITE);
+  assert.equal(split.shards.length, B.SITE_SHARDS);
+  assert.deepEqual(split.index, { v: 2, n: B.SITE_SHARDS, genericExceptionHosts: ['sub.example.com'], generichide: ['nogeneric.net'], elemhide: ['nothing.org'], genericFullHosts: [] });
+  ['www.example.com', 'a.sub.example.com', 'nothing.org', 'nogeneric.net', 'unknown.net'].forEach(function (h) {
+    var shard = split.shards[B.siteShard(h)];
+    [[null, { ads: true, cookies: true }], [GENERIC, { ads: true, cookies: false }]].forEach(function (a) {
+      assert.deepEqual(B.cssForHost(h, shard, a[0], a[1]), B.cssForHost(h, SITE, a[0], a[1]), h);
+    });
+    assert.equal(B.genericSource(h, shard), B.genericSource(h, SITE), h);
+  });
+  var g = B.splitSite({ ads: { 'gov.uk': ['.gov'], uk: ['.tld'], 'x.gov.uk': ['.x'] } });
+  g.shards.forEach(function (sh) { assert.deepEqual(sh.ads['gov.uk'], ['.gov'], 'public-suffix-like hosts are in every shard'); assert.deepEqual(sh.ads.uk, ['.tld']); });
+  assert.deepEqual(B.cssForHost('www.x.gov.uk', g.shards[B.siteShard('www.x.gov.uk')], null, { ads: true }).selectors, 3);
+});
+
+test('site shards: the JavaScript split equals the packaged rules/cosmetic/site/ files (tools/cosmetic.py)', function () {
+  var index = JSON.parse(readFile('rules/cosmetic/site/index.json'));
+  assert.equal(index.n, B.SITE_SHARDS);
+  var shards = [], merged = { v: 1, ads: {}, cookies: {}, exceptions: {} };
+  for (var i = 0; i < index.n; i++) shards.push(JSON.parse(readFile('rules/cosmetic/site/' + B.siteShardName(i) + '.json')));
+  shards.forEach(function (sh) { ['ads', 'cookies', 'exceptions'].forEach(function (k) { Object.assign(merged[k], sh[k]); }); });
+  ['ads', 'cookies', 'exceptions'].forEach(function (k) {
+    var m = merged[k], sorted = {};
+    Object.keys(m).sort().forEach(function (h) { sorted[h] = m[h]; });
+    merged[k] = sorted;
+  });
+  ['genericExceptionHosts', 'generichide', 'elemhide', 'genericFullHosts'].forEach(function (k) { merged[k] = index[k]; });
+  var split = B.splitSite(merged);
+  assert.deepEqual(split.index, index);
+  for (i = 0; i < index.n; i++) assert.deepEqual(split.shards[i], shards[i], 'shard ' + B.siteShardName(i));
+  assert.ok(Object.keys(merged.ads).length > 5000, 'real data');
 });
 
 test('popupSite', function () {

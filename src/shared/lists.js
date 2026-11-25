@@ -9,7 +9,11 @@
  *   listRules  { ads: [...], trackers: [...], hideCookieBanners: [...] } converted rules with
  *              their dynamic ids, kept so a category switched off and on again can be re-added
  *              without a download
- *   listSite   site-specific cosmetic data (the shape of rules/cosmetic/site.json)
+ *   listSite   marker { v: 2, n: <shards>, at } of the updated site-specific cosmetic data, stored
+ *              like rules/cosmetic/site/: listSite/index (host lists for the content-script
+ *              exclusions) and listSite/00 .. listSite/7f (blocking.splitSite shards), so a page
+ *              reads one small key. Up to 2.0.3 it was the whole object ({ v: 1, ... }), which is
+ *              still read (legacySite) until the next update replaces it.
  */
 (function (root) {
   'use strict';
@@ -24,6 +28,7 @@
   var META_KEY = 'lists';
   var RULES_KEY = 'listRules';
   var SITE_KEY = 'listSite';
+  var SITE_INDEX_KEY = SITE_KEY + '/index';
   var DAY_MS = 24 * 3600 * 1000;
   var WEEK_MS = 7 * DAY_MS;
   var SLACK_MS = 3600 * 1000;         // an alarm may fire a little early
@@ -169,21 +174,47 @@
     });
   }
 
+  function selectorSet(generic) {
+    var set = {};
+    ['ads', 'cookies'].forEach(function (c) { ((generic && generic[c]) || []).forEach(function (s) { set[s] = true; }); });
+    return set;
+  }
+
   /**
    * Hosts whose exceptions hide packaged generic selectors must stay in genericExceptionHosts:
    * the generic CSS is not updated (it comes from the package), so add them to the fresh list.
+   * genericFullHosts: the hosts among them whose exceptions hit a packaged generic selector that
+   * is not in the packaged excepted files (rules/cosmetic/generic_excepted.json), so it sits in a
+   * big generic file: those hosts skip every generic file and get the whole list minus their
+   * exceptions. packagedExcepted null (not readable): every such host, the safe choice.
    */
-  function addPackagedGenericExceptions(site, packagedGeneric) {
-    var gen = {};
-    ['ads', 'cookies'].forEach(function (c) { ((packagedGeneric && packagedGeneric[c]) || []).forEach(function (s) { gen[s] = true; }); });
-    var hosts = {};
+  function addPackagedGenericExceptions(site, packagedGeneric, packagedExcepted) {
+    var gen = selectorSet(packagedGeneric), exc = packagedExcepted ? selectorSet(packagedExcepted) : null;
+    var hosts = {}, full = {};
     (site.genericExceptionHosts || []).forEach(function (h) { hosts[h] = true; });
     Object.keys(site.exceptions || {}).forEach(function (h) {
-      if (site.exceptions[h].some(function (s) { return gen[s]; })) hosts[h] = true;
+      site.exceptions[h].forEach(function (s) {
+        if (!gen[s]) return;
+        hosts[h] = true;
+        if (!exc || !exc[s]) full[h] = true;
+      });
     });
     var out = Object.assign({}, site);
     out.genericExceptionHosts = Object.keys(hosts).sort();
+    out.genericFullHosts = Object.keys(full).sort();
     return out;
+  }
+
+  /** Site data stored whole by an older version ({ v: 1 }, no genericFullHosts): its exception
+   * hosts were made against the old generic files, so all of them get the whole generic list. */
+  function legacySite(s) {
+    var out = Object.assign({}, s);
+    if (!Array.isArray(out.genericFullHosts)) out.genericFullHosts = (out.genericExceptionHosts || []).slice();
+    return out;
+  }
+
+  function siteShardStorageKey(name) {
+    return SITE_KEY + '/' + name;
   }
 
   /** Metadata after a successful update. conv: filterlist.convertLists() result. */
@@ -251,6 +282,9 @@
     META_KEY: META_KEY,
     RULES_KEY: RULES_KEY,
     SITE_KEY: SITE_KEY,
+    SITE_INDEX_KEY: SITE_INDEX_KEY,
+    siteShardStorageKey: siteShardStorageKey,
+    legacySite: legacySite,
     WEEK_MS: WEEK_MS,
     MIN_RULE_RATIO: MIN_RULE_RATIO,
     MAX_BYTES: MAX_BYTES,
