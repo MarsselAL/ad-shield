@@ -1,6 +1,7 @@
 /*
- * Popup: master switch, per-site switch (allowlist), counts for the current page, and the Twitch
- * status/counts on Twitch tabs.
+ * Popup: two panels side by side (Chrome allows popups up to 800x600; this one is about 744 wide).
+ * Left: master switch, per-site switch (allowlist), counts for the current page, quick actions and
+ * the Twitch status/counts on Twitch tabs. Right: "Support AdBrake", always fully visible.
  * Counts: chrome.declarativeNetRequest.getMatchedRules({tabId, minTimeStamp}) (needs the
  * declarativeNetRequestFeedback permission) gives the DNR matches of this tab since the page
  * started (the page script reports performance.timeOrigin); "banners handled" adds the page's
@@ -9,15 +10,15 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * "Support AdBrake" card below the "This website" card: the tip link from src/shared/donate.js
- * and "Pay with phone", a sheet with the link's QR code (Esc closes it). Hidden when no link is set.
- * The crypto addresses are only on the settings page. The occasional support note (a sheet over the
- * popup, src/shared/supportprompt.js) can show after a milestone; "Not now" or Esc snooze it.
- * Layout: header (icon, name, Settings button), the big power button (#enabled, the master switch)
- * with the "Ad Blocking On/Off/Paused" line, the page counts, the "This website" card (its chevron
- * opens the per-site switch #site-on), quick actions ("Hide an element" and "Allowlist site" /
- * "Remove from allowlist", which flips the same allowlist entry as #site-on), the support card
- * and the version.
+ * Support panel: the tip link from src/shared/donate.js with its QR code ("Pay with phone"), and
+ * a "Crypto" switch between the USDC and BTC addresses from donate.js (QR code, shortened address,
+ * Copy copies the full address, the network warning). Hidden when donate.js sets nothing.
+ * Occasional support note (src/shared/supportprompt.js): when due, the support panel glows once
+ * and shows a short thank-you line; nothing covers the popup.
+ * Layout, left panel: header (icon, name, Settings button), the big power button (#enabled, the
+ * master switch) with the "Ad Blocking On/Off/Paused" line, the page counts, the "This website"
+ * card (its chevron opens the per-site switch #site-on), quick actions ("Hide an element" and
+ * "Allowlist site" / "Remove from allowlist", which flips the same allowlist entry as #site-on).
  */
 (function () {
   'use strict';
@@ -202,13 +203,69 @@
   });
 
   // ---------------------------------------------------------------- support
-  // The tip link from src/shared/donate.js, and its QR code (a static SVG made by tools/make_qr.py)
-  // in a small sheet. No crypto here: the addresses are on the settings page.
+  // The tip link from src/shared/donate.js with its QR code, and the USDC / BTC addresses with
+  // theirs (static SVGs made by tools/make_qr.py). Values are set at runtime from donate.js only.
   var donate = ns.donate || {};
 
-  function closeQr() {
-    $('qr-sheet').hidden = true;
-    try { $('qr-open').focus(); } catch (e) {}
+  /** "0xD26B…b18A": the start and end people compare; the full address is copied and in the title. */
+  function shortAddress(a) {
+    a = String(a || '');
+    return a.length > 14 ? a.slice(0, 6) + '…' + a.slice(-4) : a;
+  }
+
+  var coins = [
+    { id: 'usdc', name: 'USDC', address: donate.usdcErc20, note: donate.usdcNote },
+    { id: 'btc', name: 'Bitcoin', address: donate.btc, note: donate.btcNote }
+  ].filter(function (c) { return !!c.address; });
+  var copyTimers = {};
+
+  function selectCoin(id, focus) {
+    coins.forEach(function (c) {
+      var on = c.id === id;
+      $('tab-' + c.id).setAttribute('aria-selected', on ? 'true' : 'false');
+      $('tab-' + c.id).tabIndex = on ? 0 : -1;
+      $('coin-' + c.id).hidden = !on;
+    });
+    if (focus) { try { $('tab-' + id).focus(); } catch (e) {} }
+  }
+
+  function copyAddress(c) {
+    var label = $(c.id + '-copy-label');
+    var btn = $(c.id + '-copy');
+    return navigator.clipboard.writeText(c.address).then(function () {
+      label.textContent = 'Copied ✓';
+      btn.className = 'copy copied';
+    }, function () {
+      label.textContent = 'Select it';
+      btn.className = 'copy';
+    }).then(function () {
+      if (copyTimers[c.id]) clearTimeout(copyTimers[c.id]);
+      copyTimers[c.id] = setTimeout(function () {
+        copyTimers[c.id] = null;
+        label.textContent = 'Copy';
+        btn.className = 'copy';
+      }, 1500);
+    });
+  }
+
+  coins.forEach(function (c, i) {
+    $(c.id + '-address').textContent = shortAddress(c.address);
+    $(c.id + '-address').title = c.address;
+    $(c.id + '-address').setAttribute('aria-label', c.name + ' address ' + c.address);
+    $(c.id + '-note').textContent = c.note || '';
+    $('tab-' + c.id).hidden = false;
+    $('tab-' + c.id).addEventListener('click', function () { selectCoin(c.id, false); });
+    $('tab-' + c.id).addEventListener('keydown', function (e) {
+      var step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0);
+      if (!step) return;
+      e.preventDefault();
+      selectCoin(coins[(i + step + coins.length) % coins.length].id, true);
+    });
+    $(c.id + '-copy').addEventListener('click', function () { copyAddress(c); });
+  });
+  if (coins.length) {
+    selectCoin(coins[0].id, false);
+    $('support-crypto').hidden = false;
   }
 
   if (donate.url) {
@@ -218,23 +275,15 @@
       e.preventDefault();
       chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
     });
-    $('qr-open').hidden = false;
-    $('qr-open').addEventListener('click', function () {
-      $('qr-sheet').hidden = false;
-      try { $('qr-close').focus(); } catch (e) {}
-    });
-    $('qr-close').addEventListener('click', closeQr);
-    $('qr-sheet').addEventListener('click', function (e) { if (e.target === $('qr-sheet')) closeQr(); });
-    $('qr-sheet').addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { e.preventDefault(); closeQr(); }
-      if (e.key === 'Tab') { e.preventDefault(); $('qr-close').focus(); } // the sheet has one control
-    });
   }
-  $('support').hidden = !donate.url;
+  var hasSupport = !!(donate.url || coins.length);
+  $('support').hidden = !hasSupport;
+  $('layout').className = hasSupport ? 'layout' : 'layout single';
 
   // ---------------------------------------------------------------- occasional support note
   // src/shared/supportprompt.js decides; this adds the page's ads count to a lower-bound total
-  // (no extra getMatchedRules calls) and shows the note over the popup at most at a milestone.
+  // (no extra getMatchedRules calls). When due, the support panel glows once and shows a short
+  // thank-you line; "Don't remind me" turns the note off (as the settings switch does).
   var SP = ns.supportPrompt;
   var promptChecked = false;
 
@@ -246,12 +295,10 @@
     }).catch(function () {});
   }
 
-  function hidePrompt() { $('support-prompt').hidden = true; }
-
-  function showPrompt(count) {
-    $('prompt-text').textContent = SP.message(count);
+  function highlightSupport(count) {
+    $('prompt-text').textContent = SP.thanks(count);
     $('support-prompt').hidden = false;
-    try { $('prompt-support').focus(); } catch (e) {}
+    $('support').className = 'panel support highlight';
   }
 
   function supportNote(ads, loadedAt) {
@@ -273,7 +320,7 @@
         st.version = version;
         if (d.show) {
           st = SP.shown(st, now, d.milestone);
-          showPrompt(d.count);
+          highlightSupport(d.count);
         }
         o[SP.STATE_KEY] = st;
       }
@@ -282,29 +329,10 @@
   }
 
   if (SP) {
-    $('prompt-support').addEventListener('click', function () {
-      hidePrompt();
-      if (donate.url) chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
-    });
-    $('prompt-later').addEventListener('click', function () {
-      hidePrompt();
-      updateState(function (st) { return SP.snooze(st, Date.now()); });
-    });
     $('prompt-never').addEventListener('click', function () {
-      hidePrompt();
+      $('support-prompt').hidden = true;
+      $('support').className = 'panel support';
       updateState(function (st) { return SP.never(st); });
-    });
-    $('support-prompt').addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        hidePrompt();
-        updateState(function (st) { return SP.snooze(st, Date.now()); });
-      } else if (e.key === 'Tab') { // keep focus inside the note
-        var order = [$('prompt-support'), $('prompt-later'), $('prompt-never')];
-        var i = order.indexOf(document.activeElement);
-        e.preventDefault();
-        order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length].focus();
-      }
     });
   }
 

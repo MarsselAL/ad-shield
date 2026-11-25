@@ -109,3 +109,8 @@ test('supportprompt: message says "at least" with a grouped number', function ()
   assert.includes(m, 'AdBrake has blocked at least 12,034 ads for you.');
   assert.includes(m, 'consider supporting development.');
 });
+
+test('supportprompt: thanks() is the short popup line with a grouped count', function () {
+  assert.equal(SP.thanks(10021), 'Thanks for using AdBrake: at least 10,021 ads blocked so far.');
+  assert.equal(SP.thanks(-5), 'Thanks for using AdBrake: at least 0 ads blocked so far.');
+});

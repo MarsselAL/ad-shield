@@ -1,5 +1,6 @@
 /*
- * Occasional "please consider supporting" note in the popup. Pure logic (no chrome.* calls), used by
+ * Occasional "please consider supporting" note in the popup (the support panel glows once and
+ * shows thanks(count)). Pure logic (no chrome.* calls), used by
  * the popup, the settings page and the service worker, and tested in tests/supportprompt.test.js.
  *
  * Calm by design:
@@ -7,7 +8,7 @@
  *  - first eligible after BOTH 7 days since install AND 1,000 ads blocked; after that at most once
  *    every 60 days and only at a new milestone (10,000, 50,000, 100,000 ...);
  *  - never on the first popup open after an install or an update;
- *  - "Not now" snoozes 60 days, "Don't ask again" and the settings switch turn it off for good.
+ *  - snooze() (60 days) is kept for callers; "Don't remind me" and the settings switch turn it off.
  *
  * The ads count is a lower bound: the popup adds the per-page count it already reads each time it
  * opens (no extra getMatchedRules calls), deduplicated by tab + URL + document load, so the note
@@ -107,6 +108,11 @@
       'takes time. If it’s useful to you, consider supporting development.';
   }
 
+  /** The short line the popup shows beside the support panel's one-time glow. */
+  function thanks(count) {
+    return 'Thanks for using AdBrake: at least ' + formatCount(count) + ' ads blocked so far.';
+  }
+
   ns.supportPrompt = Object.freeze({
     INSTALL_KEY: 'adbrakeInstalledAt',
     SEEN_KEY: 'adbrakeSeenBlocked',
@@ -124,6 +130,7 @@
     never: never,
     setReminders: setReminders,
     formatCount: formatCount,
-    message: message
+    message: message,
+    thanks: thanks
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);
