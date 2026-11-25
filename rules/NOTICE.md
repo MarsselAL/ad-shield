@@ -25,3 +25,17 @@ only; the extension's code is MIT (see `../LICENSE`).
 `curated_hosts.txt` is this project's own hand-written host list, and `ads_curated.json` and
 `privacy_curated.json` are generated from it only (by `tools/curated.py`); all three are this
 project's own data under the MIT licence (see `../LICENSE`), not derived from the lists above.
+
+`removeparams.txt` (and `removeparam.json`, generated from it by `tools/removeparam.py`) is this
+project's own list under the MIT licence. Some of its parameter names were taken from two
+published lists, checked on 2026-11-25; the sections that use them are marked `[Brave]` and
+`[DDG]` in the file:
+
+| Source | Licence |
+|---|---|
+| Brave `brave-lists/query-filter.json` (https://github.com/brave/adblock-lists), global entry only | Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/) |
+| DuckDuckGo `features/tracking-parameters.json` (https://github.com/duckduckgo/privacy-configuration) | Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0) |
+
+Attribution: **Brave Software, Inc.** and **DuckDuckGo, Inc.** Only the parameter names were
+used (no file copied); names Brave limits to one site, and a few short or page-state names, were
+left out (listed at the end of `removeparams.txt`).

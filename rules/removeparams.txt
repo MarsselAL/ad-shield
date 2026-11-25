@@ -1,4 +1,7 @@
 # Ad Shield tracking-parameter list (our own list, MIT licence, like the rest of the code).
+# Names in the sections marked [Brave] and [DDG] were taken from Brave's query-filter.json
+# (brave/adblock-lists, MPL-2.0) and DuckDuckGo's tracking-parameters.json
+# (duckduckgo/privacy-configuration, Apache-2.0), checked 2026-11-25; see rules/NOTICE.md.
 # Turned into rules/removeparam.json by tools/removeparam.py (run python3 -I tools/build_rules.py
 # --curated-only to rebuild it offline).
 #
@@ -64,8 +67,74 @@ igsh          # Instagram share-link tracking (newer name)
 s_cid         # Adobe Analytics campaign id
 _openstat     # Yandex Openstat campaign tag
 
+# --- Analytics and link tags [Brave] ---
+_gl                # Google Analytics / gtag cross-domain linker
+mtm_cid            # Matomo campaign id
+pk_cid             # Matomo (Piwik) campaign id
+_branch_match_id   # Branch deep-link match id
+_branch_referrer   # Branch deep-link referrer
+guce_referrer      # Yahoo consent page: original referrer handed to the site
+guce_referrer_sig  # Yahoo consent page: signature of the referrer above
+irclickid          # Impact (affiliate) click id
+syclid             # click id (Brave list)
+ymclid             # Yandex Market click id
+unicorn_click_id   # ad click id (Brave list)
+
+# --- E-mail, SMS and marketing-automation tracking [Brave] ---
+sfmc_id            # Salesforce Marketing Cloud subscriber id
+sfmc_activityid    # Salesforce Marketing Cloud activity id
+et_rid             # Salesforce / ExactTarget recipient id
+sc_customer        # e-mail recipient id (Brave list)
+sc_eh              # e-mail recipient hash (Brave list)
+sc_uid             # e-mail recipient id (Brave list)
+vero_conv          # Vero e-mail conversion id
+vgo_ee             # ActiveCampaign encoded e-mail address
+ss_email_id        # Squarespace e-mail campaign id
+bsft_uid           # Blueshift user id
+bsft_clkid         # Blueshift click id
+at_recipient_id    # Adobe Campaign recipient id
+at_recipient_list  # Adobe Campaign recipient list
+ml_subscriber      # MailerLite subscriber id
+ml_subscriber_hash # MailerLite subscriber hash
+bbeml              # e-mail recipient tag (Brave list)
+_bhlid             # beehiiv newsletter link id
+oft_id             # e-mail link tracking (Brave list)
+oft_k              # e-mail link tracking (Brave list)
+oft_lk             # e-mail link tracking (Brave list)
+oft_d              # e-mail link tracking (Brave list)
+oft_c              # e-mail link tracking (Brave list)
+oft_ck             # e-mail link tracking (Brave list)
+oft_ids            # e-mail link tracking (Brave list)
+oft_sk             # e-mail link tracking (Brave list)
+sms_click          # SMS marketing click tag
+sms_source         # SMS marketing source tag
+sms_uph            # SMS marketing hashed phone number
+
+# --- Facebook share/action tags and old Google Analytics tags [Brave, DDG] ---
+fb_action_ids      # Facebook Open Graph action ids
+fb_action_types    # Facebook Open Graph action types
+fb_source          # Facebook share source
+fb_ref             # Facebook share referrer
+action_object_map  # Facebook Open Graph share data
+action_type_map    # Facebook Open Graph share data
+action_ref_map     # Facebook Open Graph share data
+ga_source          # Google Analytics campaign tag (old)
+ga_medium          # Google Analytics campaign tag (old)
+ga_term            # Google Analytics campaign tag (old)
+ga_content         # Google Analytics campaign tag (old)
+ga_campaign        # Google Analytics campaign tag (old)
+ga_place           # Google Analytics campaign tag (old)
+gs_l               # Google search box telemetry
+hmb_campaign       # campaign tag (DDG list)
+hmb_source         # source tag (DDG list)
+hmb_medium         # medium tag (DDG list)
+
 # Deliberately NOT listed:
 #   mkt_tok   Marketo: also identifies the reader on unsubscribe / preference pages; removing it
 #             can break unsubscribing from e-mail.
 #   si, ref, ref_src, ref_url, source, cid, spm, campaign: too generic; sites use them for real
 #             content or navigation.
+#   s, t, a, si, ref_src, ref_url, stkn: Brave removes these only on one site (X, YouTube,
+#             Instagram); this list has no per-site scoping, so they stay.
+#   __s       Drip e-mail id, but too short and ambiguous to remove everywhere.
+#   fb_comment_id  Facebook comments plugin: links straight to one comment on the page.

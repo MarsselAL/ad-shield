@@ -11,6 +11,10 @@ AdBrake's own code is MIT licensed (see `LICENSE`). The package also contains:
    `@duckduckgo/autoconsent` (source: https://github.com/duckduckgo/autoconsent). Licence:
    Mozilla Public License 2.0, full text in `vendor/autoconsent/LICENSE`. Version, tarball URL,
    integrity hash and file hashes: `vendor/autoconsent/VERSION.json`.
+3. **Tracking-parameter names** in `rules/removeparams.txt`: some taken from Brave's
+   `query-filter.json` (brave/adblock-lists, MPL-2.0) and DuckDuckGo's
+   `tracking-parameters.json` (duckduckgo/privacy-configuration, Apache-2.0). Names only; the
+   list itself is our own (MIT). Details: `rules/NOTICE.md`.
 
 The converter (`tools/filterlist.py`) and the autoconsent integration
 (`src/background/general.js`) are this project's own code; no code from uBlock Origin (Lite) or

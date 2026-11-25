@@ -99,7 +99,7 @@
     }
   },
   "removeparam": {
-    "params": 46
+    "params": 102
   },
   "rulesets": {
     "ads_1": {
@@ -141,10 +141,10 @@
     "removeparam": {
       "allow": 0,
       "block": 0,
-      "params": 46,
+      "params": 102,
       "regex": 0,
-      "rules": 92
+      "rules": 204
     }
   },
-  "totalStaticRules": 14912
+  "totalStaticRules": 15024
 }

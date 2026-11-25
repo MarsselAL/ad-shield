@@ -423,6 +423,18 @@ class Removeparam(unittest.TestCase):
         for n in ("si", "ref", "mkt_tok", "source", "id"):
             self.assertNotIn(n, names)
 
+    def test_names_from_brave_and_duckduckgo(self):
+        """Names taken from Brave's query-filter.json (MPL-2.0) and DuckDuckGo's
+        tracking-parameters.json (Apache-2.0) are in the built ruleset; the short or site-scoped
+        names those lists use only for one site (or that carry page state) are not."""
+        with open(os.path.join(ROOT, R.OUTPUT), encoding="utf-8") as fh:
+            built = json.load(fh)[0]["action"]["redirect"]["transform"]["queryTransform"]["removeParams"]
+        for n in ("_gl", "mtm_cid", "pk_cid", "sfmc_id", "sfmc_activityid", "_branch_match_id", "irclickid",
+                  "oft_id", "ml_subscriber_hash", "fb_action_ids", "ga_campaign", "hmb_source"):
+            self.assertIn(n, built)
+        for n in ("s", "t", "a", "si", "ref_src", "ref_url", "stkn", "__s", "fb_comment_id", "mkt_tok", "ref", "source"):
+            self.assertNotIn(n, built)
+
 
 class Schema(unittest.TestCase):
     def test_schema_rejects_bad_rules(self):
