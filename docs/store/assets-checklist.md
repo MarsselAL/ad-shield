@@ -5,10 +5,10 @@ shows what it marks as required.
 
 ## Files ready (docs/store/images/, made 21 Nov 2026)
 
-**To do (AdBrake 2.0.3 rebrand):** the icons (`store-icon-*.png`, made by
-`python3 -I tools/make_icons.py --store`) are new, but the screenshots and promo tiles below still
-show the old name, icon and colours. Re-run `python3 -I tools/store_shots.py` (needs Chrome and a
-network page load) before submitting 2.0.3.
+**To do (AdBrake 2.0.3 rebrand):** the new icon is still pending, so `icons/*.png` and
+`store-icon-*.png` are still the old shield. The screenshots and promo tiles below also still
+show the old name, icon and colours. Once the icon is in, re-run `python3 -I tools/store_shots.py`
+(needs Chrome and a network page load) before submitting 2.0.3.
 
 All screenshots are compositions of **real captures** of the extension at 2.0.0 (popup and settings
 page), taken by `python3 -I tools/store_shots.py` in headless Chrome with the unpacked extension.
