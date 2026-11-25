@@ -3,20 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ad Shield – Settings</title>
+  <title>AdBrake – Settings</title>
   <link rel="stylesheet" href="../ui/common.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <main>
     <header class="row">
-      <div class="brand"><img src="../../icons/icon48.png" alt="" width="28" height="28"><h1>Ad Shield settings</h1></div>
+      <div class="brand"><img src="../../icons/icon48.png" alt="" width="28" height="28"><h1>AdBrake settings</h1></div>
       <span class="muted" id="version"></span>
     </header>
 
     <section class="card" id="support">
-      <h2>Support Ad Shield</h2>
-      <p class="muted">Ad Shield is free. If it saves you time, an optional tip helps keep it going. Thank you!</p>
+      <h2>Support AdBrake</h2>
+      <p class="muted">AdBrake is free. If it saves you time, an optional tip helps keep it going. Thank you!</p>
       <div class="row left" id="support-revolut" hidden>
         <a class="button primary" id="support-link" href="#" target="_blank" rel="noopener noreferrer">☕ Tip via Revolut</a>
       </div>
@@ -97,7 +97,7 @@
 
     <section class="card">
       <h2>My filters</h2>
-      <p class="muted">Elements you hid with "Hide an element on this page" in the popup, one per line as <code>example.com##.selector</code> (the site covers its subdomains; <code>a.com,b.com##.selector</code> for several sites). You can add, edit or delete lines here. Lines starting with <code>!</code> are comments and are not kept. Filters apply on their sites whenever Ad Shield is on there, also with Ads switched off; not on sites where blocking is off. Per site only: a line without a site is rejected. Reload open tabs after a change.</p>
+      <p class="muted">Elements you hid with "Hide an element on this page" in the popup, one per line as <code>example.com##.selector</code> (the site covers its subdomains; <code>a.com,b.com##.selector</code> for several sites). You can add, edit or delete lines here. Lines starting with <code>!</code> are comments and are not kept. Filters apply on their sites whenever AdBrake is on there, also with Ads switched off; not on sites where blocking is off. Per site only: a line without a site is rejected. Reload open tabs after a change.</p>
       <textarea id="userfilters" rows="6" spellcheck="false" aria-label="My filters, one site##selector per line"></textarea>
       <ul class="errors" id="uf-errors" aria-live="polite"></ul>
       <div class="row left">

@@ -1,18 +1,18 @@
-AD SHIELD - HOW TO INSTALL
+ADBRAKE - HOW TO INSTALL
 ==========================
 
-Ad Shield is free. It is not in the Chrome Web Store: you install it from this
+AdBrake is free. It is not in the Chrome Web Store: you install it from this
 folder. It works in Google Chrome, Microsoft Edge and Brave (version 120 or newer).
 
 
 1. FIRST: PUT THE FOLDER WHERE IT CAN STAY
 ------------------------------------------
-Unzip the zip file. You get a folder called "ad-shield" (it contains
+Unzip the zip file. You get a folder called "adbrake" (it contains
 manifest.json and this INSTALL.txt). Windows "Extract All" may put it inside
-another folder named like the zip: use the inner "ad-shield" folder.
+another folder named like the zip: use the inner "adbrake" folder.
 
 Move that folder to a permanent place, for example:
-  Windows: C:\Users\<you>\Documents\ad-shield
+  Windows: C:\Users\<you>\Documents\adbrake
   macOS:   your Documents folder
 
 Do not leave it in Downloads, and do not delete, rename or move it later:
@@ -26,30 +26,30 @@ Google Chrome:
   1. Type chrome://extensions in the address bar and press Enter.
   2. Turn on "Developer mode" (switch at the top right).
   3. Click "Load unpacked".
-  4. Choose the "ad-shield" folder (the one that contains manifest.json).
+  4. Choose the "adbrake" folder (the one that contains manifest.json).
   5. Reload tabs that were already open.
 
 Microsoft Edge:
   1. Type edge://extensions in the address bar and press Enter.
   2. Turn on "Developer mode" (switch in the left column, near the bottom;
      on a narrow window open the menu at the top left first).
-  3. Click "Load unpacked" and choose the "ad-shield" folder.
+  3. Click "Load unpacked" and choose the "adbrake" folder.
   4. Reload tabs that were already open.
 
 Brave:
   1. Type brave://extensions in the address bar and press Enter.
   2. Turn on "Developer mode" (switch at the top right).
-  3. Click "Load unpacked" and choose the "ad-shield" folder.
+  3. Click "Load unpacked" and choose the "adbrake" folder.
   4. Reload tabs that were already open.
 
 
 3. INSTALL ON macOS
 -------------------
-Double-click the zip to unzip it, move the "ad-shield" folder to Documents,
+Double-click the zip to unzip it, move the "adbrake" folder to Documents,
 then in Google Chrome:
   1. Type chrome://extensions in the address bar and press Return.
   2. Turn on "Developer mode" (top right).
-  3. Click "Load unpacked" and choose the "ad-shield" folder.
+  3. Click "Load unpacked" and choose the "adbrake" folder.
 Edge (edge://extensions) and Brave (brave://extensions) work the same way.
 
 
@@ -57,7 +57,7 @@ Edge (edge://extensions) and Brave (brave://extensions) work the same way.
 -------------------------------------------
 Because the extension is not from the store, the browser may show a message
 such as "Disable developer mode extensions" when it starts. That is normal.
-Close it with the X. Do not click "Disable" or "Turn off", or Ad Shield is
+Close it with the X. Do not click "Disable" or "Turn off", or AdBrake is
 switched off until you turn it on again in the extensions page.
 Leave "Developer mode" on.
 
@@ -65,19 +65,19 @@ Leave "Developer mode" on.
 5. PIN THE ICON AND OPEN THE SETTINGS
 -------------------------------------
 Pin: click the puzzle-piece (Extensions) icon next to the address bar and
-click the pin next to "Ad Shield" (Edge: the eye icon, "Show in toolbar").
+click the pin next to "AdBrake" (Edge: the eye icon, "Show in toolbar").
 
-The Ad Shield button shows what was blocked on the current page, has a switch
+The AdBrake button shows what was blocked on the current page, has a switch
 to turn blocking off for one site, and "Hide an element on this page" to
 remove anything else you do not want to see.
 
-Settings: click the Ad Shield button and then "Settings", or right-click the
+Settings: click the AdBrake button and then "Settings", or right-click the
 icon and choose "Options".
 
 
 6. FILTER LISTS UPDATE THEMSELVES
 ---------------------------------
-Once a week Ad Shield downloads the newest EasyList, EasyPrivacy and EasyList
+Once a week AdBrake downloads the newest EasyList, EasyPrivacy and EasyList
 Cookie List by itself. You do not need to do anything. "Update now" is in
 Settings, under "Filter lists".
 
@@ -85,19 +85,20 @@ Settings, under "Filter lists".
 7. UPDATING TO A NEW VERSION
 ----------------------------
   1. Unzip the new zip somewhere temporary.
-  2. Open your existing "ad-shield" folder, delete everything inside it, and
-     copy everything from the new "ad-shield" folder into it.
+  2. Open your existing folder ("ad-shield" if you installed version 2.0.2
+     or older, otherwise "adbrake"), delete everything inside it, and copy
+     everything from the new "adbrake" folder into it.
      Keep the same folder in the same place: then your settings, your
      allowed sites and "My filters" are kept.
   3. Open chrome://extensions (edge://extensions, brave://extensions) and
-     click the reload icon (circular arrow) on the Ad Shield card.
+     click the reload icon (circular arrow) on the AdBrake card.
   4. Reload open tabs.
 
 
 8. UNINSTALL
 ------------
 Open chrome://extensions (edge://extensions, brave://extensions), click
-"Remove" on the Ad Shield card, then delete the "ad-shield" folder.
+"Remove" on the AdBrake card, then delete the "adbrake" folder.
 
 
 PRIVACY

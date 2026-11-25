@@ -1,7 +1,7 @@
 # Privacy practices tab: answers
 
 ## Single purpose (one sentence)
-> Ad Shield blocks unwanted content — ads, trackers, tracking cookies and cookie banners — on
+> AdBrake blocks unwanted content — ads, trackers, tracking cookies and cookie banners — on
 > the web pages the user visits, including video ads on YouTube and Twitch.
 
 (Everything in the extension serves that: rules, hiding CSS, the per-site switch, the element
@@ -41,7 +41,7 @@ extension's bundled worker code in a Blob worker. Twitch's code is the site's ow
 loaded from the extension author's servers. Worth knowing in case of a question.
 
 ## Data usage checkboxes ("What user data do you collect?")
-**Tick none of them**: Ad Shield does not collect any of: personally identifiable information,
+**Tick none of them**: AdBrake does not collect any of: personally identifiable information,
 health, financial and payment info, authentication information, personal communications,
 location, web history, user activity, website content.
 

@@ -1,24 +1,24 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ad Shield — Privacy Policy</title>
+<title>AdBrake — Privacy Policy</title>
 <style>body{font:16px/1.6 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}@media (prefers-color-scheme:dark){body{color:#e8e8e8;background:#161616}a{color:#8ab4f8}}code{background:rgba(127,127,127,.18);padding:0 .25em;border-radius:3px;overflow-wrap:anywhere}h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:1.8rem}li{margin:.25rem 0}.brand{display:flex;align-items:center;gap:.6rem}.brand svg{flex:none}</style></head>
 <body>
-<h1 class="brand"><svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 3v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5z" fill="#2f7d5b"/><path d="M7.5 12.2l3 3 6-6.4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Ad Shield — Privacy Policy</h1>
-<p><em>Last updated: 21 November 2026. Applies to Ad Shield version 2.0.0 and later.</em></p>
-<p><strong>Short version: Ad Shield does not collect, store on any server, sell or share any personal data. It has no developer-operated server.</strong></p>
-<h2>What Ad Shield does not do</h2>
+<h1 class="brand"><svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 3v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5z" fill="#2f7d5b"/><path d="M7.5 12.2l3 3 6-6.4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>AdBrake — Privacy Policy</h1>
+<p><em>Last updated: 21 November 2026. Applies to AdBrake version 2.0.0 and later.</em></p>
+<p><strong>Short version: AdBrake does not collect, store on any server, sell or share any personal data. It has no developer-operated server.</strong></p>
+<h2>What AdBrake does not do</h2>
 <ul><li>No analytics, telemetry, crash reporting, advertising IDs or accounts.</li><li>No data about the pages you visit, your searches, your browsing history, cookies or content is sent to the developer or any third party.</li><li>No remote configuration: the extension's behaviour and its code come only from the installed package. No code is downloaded or executed from the network.</li></ul>
 <h2>What is stored on your device</h2>
-<p>Using <code>chrome.storage</code> (local to your browser profile), Ad Shield keeps: your settings, the list of sites where blocking is off, your own element-hiding filters ("My filters"), simple counters (how many ads/trackers were blocked), and the downloaded filter lists with their version information. This data never leaves your browser through Ad Shield. Removing the extension deletes it.</p>
+<p>Using <code>chrome.storage</code> (local to your browser profile), AdBrake keeps: your settings, the list of sites where blocking is off, your own element-hiding filters ("My filters"), simple counters (how many ads/trackers were blocked), and the downloaded filter lists with their version information. This data never leaves your browser through AdBrake. Removing the extension deletes it.</p>
 <h2>Network requests the extension makes itself</h2>
 <ol><li><strong>Weekly filter-list update</strong> (on by default; switch it off in Settings, or press "Update now" to run it manually). It downloads three public text files with a plain HTTPS GET, with cookies omitted and no identifiers added: <code>https://easylist.to/easylist/easylist.txt</code>, <code>https://easylist.to/easylist/easyprivacy.txt</code> and <code>https://secure.fanboy.co.nz/fanboy-cookiemonster.txt</code>. Like any web request, the servers that host these files can see your IP address and the time of the request. Their operators have their own policies. The files are treated purely as data and converted in your browser into blocking rules.</li><li><strong>On Twitch pages only, when a stream contains an ad:</strong> the extension, from the Twitch page, asks Twitch's own servers (<code>gql.twitch.tv</code>, <code>usher.ttvnw.net</code>) for the same stream as another player type. These are the same kind of requests Twitch's own player makes, they go only to Twitch, and are subject to Twitch's privacy policy.</li></ol>
-<p>Ad Shield makes no other network requests. The element picker, My filters, tracking-parameter removal, cookie stripping and the per-site switch run entirely locally.</p>
+<p>AdBrake makes no other network requests. The element picker, My filters, tracking-parameter removal, cookie stripping and the per-site switch run entirely locally.</p>
 <h2>What the permissions are used for</h2>
-<p>Ad Shield asks for access to all websites so its blocking and hiding rules can apply on every site. It uses that access to block or modify requests and to hide page elements; it does not read, copy or transmit page content. See the extension's description for a permission-by-permission explanation.</p>
+<p>AdBrake asks for access to all websites so its blocking and hiding rules can apply on every site. It uses that access to block or modify requests and to hide page elements; it does not read, copy or transmit page content. See the extension's description for a permission-by-permission explanation.</p>
 <h2>Support links</h2>
 <p>The popup and settings page contain an optional "Support" link (and payment addresses) that open or display text only. Nothing is sent when they are shown. If you open the link, you visit a third-party website (Revolut) governed by its own policy.</p>
 <h2>Children</h2>
-<p>Ad Shield collects no data from anyone, including children.</p>
+<p>AdBrake collects no data from anyone, including children.</p>
 <h2>Changes</h2>
 <p>If this policy changes it will be updated here with a new date, and the change noted in the release notes.</p>
 <h2>Contact</h2>

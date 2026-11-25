@@ -28,7 +28,7 @@
   }
 
   var config = {
-    version: '2.0.2',
+    version: '2.0.3',
 
     // Namespaced key used on every message we exchange (worker <-> page, page <-> bridge).
     // Our own choice; anything not carrying this key is ignored and passed through.
@@ -841,10 +841,10 @@
     var m = /^(https?):\/\/([^/:?#]+)/i.exec(String((o && o.url) || ''));
     var hostname = m ? normalizeHost(m[2]) : null;
     if (!hostname) {
-      return { web: false, hostname: '', host: '', on: false, detail: 'Ad Shield does not run on this page.' };
+      return { web: false, hostname: '', host: '', on: false, detail: 'AdBrake does not run on this page.' };
     }
     var allowed = isAllowlisted(hostname, (o && o.allowlist) || []);
-    var detail = o && o.enabled === false ? 'Ad Shield is switched off everywhere.'
+    var detail = o && o.enabled === false ? 'AdBrake is switched off everywhere.'
       : allowed ? 'Blocking is off on this site.' : 'Blocking ads, trackers and cookie banners.';
     return { web: true, hostname: hostname, host: siteKey(hostname), on: !allowed, detail: detail };
   }
@@ -1042,7 +1042,7 @@
   function toastText(name) {
     if (name === 'ad-blocked-backup') return 'Ad blocked – using backup stream';
     if (name === 'ad-stripped') return 'Ad blocked – ad segments removed, stream resumes shortly';
-    if (name === 'degraded') return 'Ad Shield: strip-only mode for this channel (too many reloads)';
+    if (name === 'degraded') return 'AdBrake: strip-only mode for this channel (too many reloads)';
     return null;
   }
 

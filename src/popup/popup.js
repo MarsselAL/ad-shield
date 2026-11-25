@@ -9,7 +9,7 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * "Support Ad Shield" card under the header: the tip link and the BTC and USDC addresses with
+ * "Support AdBrake" card under the header: the tip link and the BTC and USDC addresses with
  * Copy buttons, all taken from src/shared/donate.js at runtime (textContent only). Rows without a
  * value stay hidden; the card stays hidden when none is set.
  * Footer: Settings, version.

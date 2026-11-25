@@ -102,10 +102,13 @@ def main():
         return report()
 
     check(m.get("manifest_version") == 3, "manifest_version must be 3")
-    check(m.get("version") == "2.0.2", "version must be 2.0.2")
+    check(m.get("version") == "2.0.3", "version must be 2.0.3")
     check(m.get("minimum_chrome_version") == "120", "minimum_chrome_version must be 120")
-    check(m.get("name") == "Ad Shield", "name must be Ad Shield")
-    check("twitch" in m.get("description", "").lower(), "description must still mention the Twitch features")
+    check(m.get("name") == "AdBrake \u2013 Ad Blocker", "name must be AdBrake \u2013 Ad Blocker")
+    check("video-ad" in m.get("description", "").lower(), "description must still mention video-ad blocking")
+    check(not any(b in m.get("description", "").lower() for b in ("twitch", "youtube")),
+          "description must not name third-party brands (keyword-spam rejection, docs/store/review-risks.md)")
+    check(len(m.get("description", "")) <= 132, "description must be at most 132 characters")
     check("<all_urls>" in m.get("host_permissions", []), "host_permissions must include <all_urls> (modifyHeaders, cosmetic CSS)")
     check("twitch" not in json.dumps(m.get("icons", {})).lower(), "icons must not be Twitch-branded files")
 

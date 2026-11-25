@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for tools/package.py: the zip to share has INSTALL.txt and manifest.json under ad-shield/
+"""Tests for tools/package.py: the zip to share has INSTALL.txt and manifest.json under adbrake/
 and no tests, tools, results or other docs; the store zip has manifest.json at its root and no
 INSTALL.txt.
 
@@ -22,12 +22,12 @@ class Package(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="adshield-test-package-")
-        cls.out = os.path.join(cls.tmp, "ad-shield-test.zip")
+        cls.out = os.path.join(cls.tmp, "adbrake-test.zip")
         package.build_zip(cls.out)
         with zipfile.ZipFile(cls.out) as z:
             cls.names = z.namelist()
-            cls.install = z.read("ad-shield/INSTALL.txt").decode("utf-8")
-        cls.store_out = os.path.join(cls.tmp, "ad-shield-test-store.zip")
+            cls.install = z.read("adbrake/INSTALL.txt").decode("utf-8")
+        cls.store_out = os.path.join(cls.tmp, "adbrake-test-store.zip")
         package.build_store_zip(cls.store_out)
         with zipfile.ZipFile(cls.store_out) as z:
             cls.store_names = z.namelist()
@@ -40,11 +40,11 @@ class Package(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def test_install_and_manifest_in_the_top_folder(self):
-        for n in ("ad-shield/INSTALL.txt", "ad-shield/manifest.json", "ad-shield/LICENSE", "ad-shield/NOTICE.md",
-                  "ad-shield/src/background/service-worker.js", "ad-shield/build/isolated-world.js",
-                  "ad-shield/rules/removeparam.json", "ad-shield/src/content/picker.js", "ad-shield/icons/icon128.png"):
+        for n in ("adbrake/INSTALL.txt", "adbrake/manifest.json", "adbrake/LICENSE", "adbrake/NOTICE.md",
+                  "adbrake/src/background/service-worker.js", "adbrake/build/isolated-world.js",
+                  "adbrake/rules/removeparam.json", "adbrake/src/content/picker.js", "adbrake/icons/icon128.png"):
             self.assertIn(n, self.names)
-        self.assertTrue(all(n.startswith("ad-shield/") for n in self.names))
+        self.assertTrue(all(n.startswith("adbrake/") for n in self.names))
 
     def test_no_development_files(self):
         bad = {"tests", "tools", "results", "dist", "docs", "__pycache__", ".git", ".claude", "_metadata"}
@@ -53,7 +53,7 @@ class Package(unittest.TestCase):
             self.assertFalse(set(parts[1:-1]) & bad, n)
             self.assertFalse(parts[-1].startswith("."), n)
             self.assertFalse(n.endswith(".pyc"), n)
-        self.assertEqual([n for n in self.names if n.endswith(".txt") and n.count("/") == 1], ["ad-shield/INSTALL.txt"])
+        self.assertEqual([n for n in self.names if n.endswith(".txt") and n.count("/") == 1], ["adbrake/INSTALL.txt"])
 
     def test_every_manifest_file_is_inside(self):
         import json
@@ -64,7 +64,7 @@ class Package(unittest.TestCase):
         need += [f for c in m["content_scripts"] for f in c["js"]]
         need += list(m["icons"].values())
         for f in need:
-            self.assertIn("ad-shield/" + f, self.names)
+            self.assertIn("adbrake/" + f, self.names)
 
     def test_install_text_is_the_repo_copy_and_covers_the_steps(self):
         with open(os.path.join(ROOT, "docs", "INSTALL.txt"), encoding="utf-8") as fh:
@@ -72,7 +72,7 @@ class Package(unittest.TestCase):
         info = package._build_module().donate_info()
         self.assertEqual(self.install, repo.rstrip("\n") + "\n\n" + package.support_text(info))
         self.assertTrue(self.install.endswith(
-            "\n\nLike Ad Shield? Optional support:\n"
+            "\n\nLike AdBrake? Optional support:\n"
             "  Tip via Revolut: %s\n"
             "  USDC on Ethereum (ERC-20) only: %s\n"
             "  BTC on the Bitcoin network only: %s\n"
@@ -99,7 +99,7 @@ class Package(unittest.TestCase):
         for n in ("LICENSE", "NOTICE.md", "src/background/service-worker.js", "build/isolated-world.js",
                   "icons/icon128.png"):
             self.assertIn(n, self.store_names)
-        self.assertFalse([n for n in self.store_names if n.startswith("ad-shield/")])
+        self.assertFalse([n for n in self.store_names if n.startswith("adbrake/")])
 
     def test_store_zip_has_no_install_metadata_or_dev_files(self):
         bad = {"tests", "tools", "results", "dist", "docs", "__pycache__", ".git", ".claude", "_metadata"}
@@ -113,7 +113,7 @@ class Package(unittest.TestCase):
             self.assertNotEqual(parts[-1], "INSTALL.txt", n)
 
     def test_store_zip_is_folder_zip_without_install_and_prefix(self):
-        expect = {n[len("ad-shield/"):]: b for n, b in self.folder_bytes.items() if n != "ad-shield/INSTALL.txt"}
+        expect = {n[len("adbrake/"):]: b for n, b in self.folder_bytes.items() if n != "adbrake/INSTALL.txt"}
         self.assertEqual(sorted(self.store_names), sorted(expect))
         self.assertEqual(len(self.store_names), len(set(self.store_names)))
         for n, b in expect.items():
@@ -141,7 +141,7 @@ class InstallSupportLines(unittest.TestCase):
             out = os.path.join(d, "out.zip")
             package.build_zip(out, root=d)
             with zipfile.ZipFile(out) as z:
-                return z.read("ad-shield/INSTALL.txt").decode("utf-8")
+                return z.read("adbrake/INSTALL.txt").decode("utf-8")
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -151,12 +151,12 @@ class InstallSupportLines(unittest.TestCase):
 
     def test_url_only(self):
         self.assertEqual(self.install(self.URL + "\n"),
-                         "Install steps\n\nLike Ad Shield? Optional support:\n  Tip via Revolut: %s\n" % self.URL)
+                         "Install steps\n\nLike AdBrake? Optional support:\n  Tip via Revolut: %s\n" % self.URL)
 
     def test_url_usdc_and_btc(self):
         self.assertEqual(
             self.install("%s\nusdc-erc20: %s\nbtc: %s\n" % (self.URL, self.USDC, self.BTC)),
-            "Install steps\n\nLike Ad Shield? Optional support:\n"
+            "Install steps\n\nLike AdBrake? Optional support:\n"
             "  Tip via Revolut: %s\n"
             "  USDC on Ethereum (ERC-20) only: %s\n"
             "  BTC on the Bitcoin network only: %s\n"
@@ -165,7 +165,7 @@ class InstallSupportLines(unittest.TestCase):
     def test_btc_only(self):
         self.assertEqual(
             self.install("btc: %s\n" % self.BTC),
-            "Install steps\n\nLike Ad Shield? Optional support:\n"
+            "Install steps\n\nLike AdBrake? Optional support:\n"
             "  BTC on the Bitcoin network only: %s\n"
             "Sending other coins or using other networks will lose the funds.\n" % self.BTC)
 

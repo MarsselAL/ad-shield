@@ -5,7 +5,12 @@ shows what it marks as required.
 
 ## Files ready (docs/store/images/, made 21 Nov 2026)
 
-All screenshots are compositions of **real captures** of Ad Shield 2.0.0 (popup and settings
+**To do (AdBrake 2.0.3 rebrand):** the icons (`store-icon-*.png`, made by
+`python3 -I tools/make_icons.py --store`) are new, but the screenshots and promo tiles below still
+show the old name, icon and colours. Re-run `python3 -I tools/store_shots.py` (needs Chrome and a
+network page load) before submitting 2.0.3.
+
+All screenshots are compositions of **real captures** of the extension at 2.0.0 (popup and settings
 page), taken by `python3 -I tools/store_shots.py` in headless Chrome with the unpacked extension.
 The popup numbers are what it really counted on a news front page (edition.cnn.com) that run.
 In the store variant of the settings page the rows that name YouTube/Twitch and the USDC/BTC

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Watch a few YouTube videos in a throwaway headless Chrome, with and/or without Ad Shield.
+"""Watch a few YouTube videos in a throwaway headless Chrome, with and/or without AdBrake.
 
 Usage:
     python3 -I tools/youtube_test.py                 # with the extension, then without
@@ -479,7 +479,7 @@ def write_md(outdir, runs, seconds):
     lines = ["# YouTube run %s" % os.path.basename(outdir), "",
              "Each video watched for %d s in a fresh headless profile. Ad keys: %s." % (seconds, ", ".join(AD_KEYS)), ""]
     for run in runs:
-        lines += ["## %s" % ("With Ad Shield" if run["withExtension"] else "Without extension (control)"), "",
+        lines += ["## %s" % ("With AdBrake" if run["withExtension"] else "Without extension (control)"), "",
                   "Extension: %s" % (run.get("extensionPath") or "-"), "",
                   "Registered scripts: %s" % (run.get("registeredScripts") or "-"), "",
                   "| Video | Played | Max content t | ad-showing s | Skip btn | SSAP | Wall | Page saw (initial / player) | Served (HTML / player responses) | Page exceptions |",
@@ -491,7 +491,7 @@ def write_md(outdir, runs, seconds):
                 v["served"]["playerResponsesWithAdKeys"], v["served"]["playerResponses"], v["served"]["playerResponseAdKeys"],
                 v["pageExceptionCount"]))
         lines += ["", "### Start state (%s, mode %s, harness nudges %s, autoplay policy %s)" % (
-            "with Ad Shield" if run["withExtension"] else "without extension", run.get("mode"), "on" if run.get("nudge") else "off",
+            "with AdBrake" if run["withExtension"] else "without extension", run.get("mode"), "on" if run.get("nudge") else "off",
             run.get("autoplayPolicy")), "",
                   "| Video | Time to first frame ms | Started paused | 3 s: paused / state / t / res | 8 s: paused / state / t / res | Content pause events |",
                   "|---|---|---|---|---|---|"]
@@ -500,7 +500,7 @@ def write_md(outdir, runs, seconds):
             cell = lambda a: "%s / %s / %s / %s" % (a["paused"], a["state"], a["t"], a["res"]) if a else "-"
             lines.append("| %s | %s | %s | %s | %s | %d |" % (v["video"], st.get("ttffMs"), st.get("startedPaused"),
                                                             cell(st.get("at3")), cell(st.get("at8")), len(st.get("contentPauses") or [])))
-        lines += ["", "### Playback health (%s)" % ("with Ad Shield" if run["withExtension"] else "without extension"), ""]
+        lines += ["", "### Playback health (%s)" % ("with AdBrake" if run["withExtension"] else "without extension"), ""]
         lines += lt.HEALTH_MD_HEAD
         for v in run["videos"]:
             lines.append(lt.health_md_row(v["video"], v.get("health")))
@@ -509,7 +509,7 @@ def write_md(outdir, runs, seconds):
     if len(runs) >= 2:
         lines += ["## Playback health: with vs without the extension", "",
                   "Totals over all videos (separate fresh profiles, one after the other).", ""]
-        lines += lt.health_compare_md([("with Ad Shield" if r["withExtension"] else "without extension", r.get("health"))
+        lines += lt.health_compare_md([("with AdBrake" if r["withExtension"] else "without extension", r.get("health"))
                                        for r in runs])
         lines += ["", "| Video | " + " | ".join("%s: stall events / ms / dropped %% / below 720p %% / pauses" % (
             "ext" if r["withExtension"] else "noext") for r in runs) + " |", "|---" * (len(runs) + 1) + "|"]

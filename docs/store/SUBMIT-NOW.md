@@ -1,4 +1,4 @@
-# Submit Ad Shield 2.0.0: click by click
+# Submit AdBrake 2.0.3: click by click
 
 Everything here is done by **you** (logins, pushes, publishing, accepting terms, clicking Submit).
 Files are in this repo. Do the parts in this order: **A, G, C, then E and O** (the privacy
@@ -14,8 +14,8 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
 1. Open Terminal in the repo folder (the branch with these files, `claude/release-assets-fc71aa`).
 2. Run the tests: `bash tests/run.sh`. The last line must be `ALL TESTS PASSED`.
 3. Make the zips: `python3 -I tools/package.py`. You get two files in `dist/`:
-   - `ad-shield-2.0.0-store.zip`: **upload this one to Chrome, Edge and Opera**.
-   - `ad-shield-2.0.0.zip`: for the GitHub release and for sharing by hand (has INSTALL.txt).
+   - `adbrake-2.0.3-store.zip`: **upload this one to Chrome, Edge and Opera**.
+   - `adbrake-2.0.3.zip`: for the GitHub release and for sharing by hand (has INSTALL.txt).
 4. Optional last check: unzip the store zip into a new folder, open `chrome://extensions`,
    Developer mode on, **Load unpacked**, pick that folder, open a news site, click the icon:
    counts appear. Then remove it again.
@@ -42,8 +42,8 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
    Website `https://marsselal.github.io/ad-shield/`, Topics `adblock`, `privacy`,
    `chrome-extension`, `manifest-v3`, `cookie-banner`. Save.
 9. **Create the release.** Repo › **Releases** › **Draft a new release** ›
-   - Choose a tag: type `v2.0.0` › **Create new tag on publish**, target `main`.
-   - Title: `Ad Shield 2.0.0`
+   - Choose a tag: type `v2.0.3` › **Create new tag on publish**, target `main`.
+   - Title: `AdBrake 2.0.3`
    - Notes (paste):
      ```
      First public release.
@@ -51,15 +51,15 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
      - Removes tracking parameters from links, element picker ("Hide an element"), per-site switch.
      - Works on video sites too (YouTube, Twitch); these sites change often.
      - No telemetry, no accounts, no remote configuration. MIT licence.
-     Install: from the browser stores (links in the README once live), or download ad-shield-2.0.0.zip below and follow INSTALL.txt inside.
+     Install: from the browser stores (links in the README once live), or download adbrake-2.0.3.zip below and follow INSTALL.txt inside.
      ```
-   - Attach both files from `dist/` (drag them into the box): `ad-shield-2.0.0.zip` and
-     `ad-shield-2.0.0-store.zip`.
+   - Attach both files from `dist/` (drag them into the box): `adbrake-2.0.3.zip` and
+     `adbrake-2.0.3-store.zip`.
    - **Publish release**.
 
 ## C. Chrome Web Store (chrome.google.com/webstore/devconsole)
 
-1. **Add new item** › **Choose file** › `dist/ad-shield-2.0.0-store.zip` › **Upload**.
+1. **Add new item** › **Choose file** › `dist/adbrake-2.0.3-store.zip` › **Upload**.
 2. **Store listing** tab:
    | Field | What to put |
    |---|---|
@@ -95,7 +95,7 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
 
 ## E. Microsoft Edge Add-ons (partner.microsoft.com › Edge › Extensions overview)
 
-1. **Create new extension** › upload `dist/ad-shield-2.0.0-store.zip`.
+1. **Create new extension** › upload `dist/adbrake-2.0.3-store.zip`.
 2. **Availability**: Visibility **Public**, Markets: all. Save.
 3. **Properties**: Category **Productivity**; Privacy policy: **Yes**, URL
    `https://marsselal.github.io/ad-shield/store/privacy-policy.html`; Website
@@ -111,18 +111,18 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
    | Screenshots | `shot-1` … `shot-5` |
    | Large promotional tile | `images/promo-marquee.png` (optional) |
    | YouTube video URL | empty |
-   | Search terms | `ad blocker`, `privacy`, `tracker blocker`, `cookie banner`, `adblock` |
+   | Search terms | the 7 terms in `listing.md` (Edge search terms) |
    Save.
 5. **Submit** › "Notes for certification": paste the test instructions from `listing.md` and,
    below them, the permission table from `permissions.md`. Click **Publish**.
 
 ## O. Opera add-ons (addons.opera.com/developer)
 
-1. Sign in › **Upload extension** › `dist/ad-shield-2.0.0-store.zip`.
+1. Sign in › **Upload extension** › `dist/adbrake-2.0.3-store.zip`.
 2. Fill in:
    | Field | What to put |
    |---|---|
-   | Name | `Ad Shield` (no "Opera" in the name) |
+   | Name | `AdBrake – Ad Blocker` (no "Opera" in the name) |
    | Summary | the 117-character summary from `listing.md` |
    | Description | "Detailed description" from `listing.md` |
    | Category | Productivity (or Privacy & Security if offered) |

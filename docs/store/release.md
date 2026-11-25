@@ -21,19 +21,19 @@ All must pass. Do not release with a failing test.
 python3 -I tools/package.py
 ```
 Output, two zips:
-- `dist/ad-shield-<version>.zip`: one folder `ad-shield/` inside, with `INSTALL.txt` (install
+- `dist/adbrake-<version>.zip`: one folder `adbrake/` inside, with `INSTALL.txt` (install
   steps and the optional support lines). For sharing by hand and for the GitHub release.
-- `dist/ad-shield-<version>-store.zip`: `manifest.json` at the zip root, no `INSTALL.txt`, no
+- `dist/adbrake-<version>-store.zip`: `manifest.json` at the zip root, no `INSTALL.txt`, no
   `_metadata/`. **This is the one to upload** to Chrome, Edge and Opera.
 
 ## 4. Inspect the zip
 ```bash
-unzip -l dist/ad-shield-<version>-store.zip | head
-unzip -l dist/ad-shield-<version>.zip | head
+unzip -l dist/adbrake-<version>-store.zip | head
+unzip -l dist/adbrake-<version>.zip | head
 ```
 Check that `_metadata`, `tests`, `docs`, `tools` and `.git` are **absent** (Chrome rejects a
 zip with `_metadata`), that the store zip has `manifest.json` at its root, and that the sharing
-zip has it under `ad-shield/`. `tests/test_package.py` checks all of this too.
+zip has it under `adbrake/`. `tests/test_package.py` checks all of this too.
 Confirm `manifest.json` `description` is at most 132 characters.
 
 ## 5. Smoke test the zip

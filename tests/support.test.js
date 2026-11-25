@@ -1,5 +1,5 @@
 /*
- * "Support Ad Shield" in the popup (card under the header) and on the settings page (first card):
+ * "Support AdBrake" in the popup (card under the header) and on the settings page (first card):
  * popup.js and options.js run against a small DOM built from the ids in their HTML files and must
  * show the tip link and the BTC and USDC addresses exactly as src/shared/donate.js holds them,
  * which must equal docs/donate.txt. Copy buttons must copy the exact value. No address or link is

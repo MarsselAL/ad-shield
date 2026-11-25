@@ -1,6 +1,6 @@
 # Security policy
 
-Ad Shield makes no network requests of its own except the weekly download of three public
+AdBrake makes no network requests of its own except the weekly download of three public
 filter lists and, on Twitch only, requests to Twitch's servers (see the privacy policy in
 `docs/store/privacy-policy.md`). It collects no data.
 

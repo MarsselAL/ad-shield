@@ -92,7 +92,7 @@ test('no executed chrome.* API use', function () {
 });
 
 test('support notes: tip link and USDC (Ethereum, ERC-20 only) line from docs/donate.txt', function () {
-  assert.includes(SRC, '\n// Like Ad Shield? An optional tip: https://revolut.me/marsel951u\n');
+  assert.includes(SRC, '\n// Like AdBrake? An optional tip: https://revolut.me/marsel951u\n');
   assert.includes(SRC, '\n// Or USDC on Ethereum (ERC-20) only, other coins or networks will be lost: 0xD26B379f952D9a3008eB5a8C908d335F5715b18A\n');
   assert.includes(SRC, '\n// Or BTC on the Bitcoin network only, other coins or networks will be lost: bc1q37wpzj5zdfnpj7xa0vzwjyy6nep7fnf3s02cns\n');
 });
@@ -102,7 +102,7 @@ test('smaller file: source comments and blank lines stripped, only the build not
   var body = lines.slice(header().end + 1);
   var notes = body.filter(function (l) { return /^\s*(\/\/|\/\*|\*)/.test(l); });
   notes.forEach(function (l) {
-    assert.ok(/^\/\/ (GENERATED |Runs in |Install and |Like Ad Shield|Or USDC on Ethereum \(ERC-20\) only|Or BTC on the Bitcoin network only|---- [\w\/.-]+ ----$|YouTube: |Twitch: )/.test(l), 'comment line left: ' + l);
+    assert.ok(/^\/\/ (GENERATED |Runs in |Install and |Like AdBrake|Or USDC on Ethereum \(ERC-20\) only|Or BTC on the Bitcoin network only|---- [\w\/.-]+ ----$|YouTube: |Twitch: )/.test(l), 'comment line left: ' + l);
   });
   assert.equal(body.filter(function (l) { return /^\s*$/.test(l); }).length, 1, 'no blank lines (only the final newline)');
   assert.equal(body.filter(function (l) { return /\s$/.test(l); }).length, 0, 'no trailing whitespace');

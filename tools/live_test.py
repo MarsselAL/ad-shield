@@ -80,7 +80,7 @@ TWITCH = {
     "ad_text_re": r"^(ad|ads|ad \d+ of \d+|ad \d+\s*/\s*\d+|ad \(\d+:\d+\)|commercial break.*|werbung.*|anzeige.*)$",
     # The extension's toast (src/content/bridge.js: role=status, text from src/shared/stats.js).
     "toast": '[role="status"]',
-    "toast_re": r"ad blocked|ad shield",
+    "toast_re": r"ad blocked|adbrake",
     # Chat lines (Twitch native + 7TV) and "chat exists" markers.
     "chat_line": '[data-a-target="chat-line-message"], .chat-line__message, .seventv-message',
     "chat_present": '[data-a-target="chat-input"], .chat-scrollable-area__message-container, '
@@ -104,7 +104,7 @@ TWITCH = {
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-EXPECTED_VERSION = "2.0.2"  # --smoke checks the manifest version against this
+EXPECTED_VERSION = "2.0.3"  # --smoke checks the manifest version against this
 SW_PATH = "src/background/service-worker.js"
 CONFIG_JS = os.path.join(ROOT, "src", "config.js")
 INTERESTING = re.compile(r"usher\.ttvnw\.net|\.m3u8|gql\.twitch\.tv|edge\.ads\.twitch\.tv|amazon-adsystem|media-amazon\.com")

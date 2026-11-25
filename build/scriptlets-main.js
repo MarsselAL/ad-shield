@@ -3,7 +3,7 @@
 
 // ---- src/scriptlets/lib.js ----
 /*
- * Ad Shield scriptlets: small patches of page APIs that run in the page's own JavaScript world
+ * AdBrake scriptlets: small patches of page APIs that run in the page's own JavaScript world
  * (MAIN) at document_start, before the site's scripts. This project's own code (MIT). The
  * behaviour follows the public descriptions of the filter-syntax scriptlets of the same names
  * (docs/research-v2.md A.1); no code from uBlock Origin, uBO Lite or AdGuard is used.

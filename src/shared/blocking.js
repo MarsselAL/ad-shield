@@ -392,10 +392,10 @@
     var m = /^(https?):\/\/([^/:?#]+)/i.exec(String((o && o.url) || ''));
     var hostname = m ? normalizeHost(m[2]) : null;
     if (!hostname) {
-      return { web: false, hostname: '', host: '', on: false, detail: 'Ad Shield does not run on this page.' };
+      return { web: false, hostname: '', host: '', on: false, detail: 'AdBrake does not run on this page.' };
     }
     var allowed = isAllowlisted(hostname, (o && o.allowlist) || []);
-    var detail = o && o.enabled === false ? 'Ad Shield is switched off everywhere.'
+    var detail = o && o.enabled === false ? 'AdBrake is switched off everywhere.'
       : allowed ? 'Blocking is off on this site.' : 'Blocking ads, trackers and cookie banners.';
     return { web: true, hostname: hostname, host: siteKey(hostname), on: !allowed, detail: detail };
   }

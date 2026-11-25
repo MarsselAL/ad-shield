@@ -1,11 +1,11 @@
-# Ad Shield — Privacy Policy
+# AdBrake — Privacy Policy
 
-_Last updated: 21 November 2026. Applies to Ad Shield version 2.0.0 and later._
+_Last updated: 21 November 2026. Applies to AdBrake version 2.0.0 and later._
 
-**Short version: Ad Shield does not collect, store on any server, sell or share any personal
+**Short version: AdBrake does not collect, store on any server, sell or share any personal
 data. It has no developer-operated server.**
 
-## What Ad Shield does not do
+## What AdBrake does not do
 - No analytics, telemetry, crash reporting, advertising IDs or accounts.
 - No data about the pages you visit, your searches, your browsing history, cookies or content is
   sent to the developer or any third party.
@@ -13,10 +13,10 @@ data. It has no developer-operated server.**
   package. No code is downloaded or executed from the network.
 
 ## What is stored on your device
-Using `chrome.storage` (local to your browser profile), Ad Shield keeps: your settings, the list
+Using `chrome.storage` (local to your browser profile), AdBrake keeps: your settings, the list
 of sites where blocking is off, your own element-hiding filters ("My filters"), simple counters
 (how many ads/trackers were blocked), and the downloaded filter lists with their version
-information. This data never leaves your browser through Ad Shield. Removing the extension
+information. This data never leaves your browser through AdBrake. Removing the extension
 deletes it.
 
 ## Network requests the extension makes itself
@@ -33,11 +33,11 @@ deletes it.
    player type. These are the same kind of requests Twitch's own player makes, they go only to
    Twitch, and are subject to Twitch's privacy policy.
 
-Ad Shield makes no other network requests. The element picker, My filters, tracking-parameter
+AdBrake makes no other network requests. The element picker, My filters, tracking-parameter
 removal, cookie stripping and the per-site switch run entirely locally.
 
 ## What the permissions are used for
-Ad Shield asks for access to all websites so its blocking and hiding rules can apply on every
+AdBrake asks for access to all websites so its blocking and hiding rules can apply on every
 site. It uses that access to block or modify requests and to hide page elements; it does not
 read, copy or transmit page content. See the extension's description for a permission-by-permission
 explanation.
@@ -48,7 +48,7 @@ or display text only. Nothing is sent when they are shown. If you open the link,
 third-party website (Revolut) governed by its own policy.
 
 ## Children
-Ad Shield collects no data from anyone, including children.
+AdBrake collects no data from anyone, including children.
 
 ## Changes
 If this policy changes it will be updated here with a new date, and the change noted in the

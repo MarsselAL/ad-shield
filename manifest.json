@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Ad Shield",
-  "short_name": "Ad Shield",
-  "version": "2.0.2",
-  "description": "Free, open-source ad, tracker and cookie-banner blocker with Twitch video-ad support. No telemetry, no remote config.",
+  "name": "AdBrake – Ad Blocker",
+  "short_name": "AdBrake",
+  "version": "2.0.3",
+  "description": "Free, open-source ad, tracker, cookie-banner and video-ad blocker. No telemetry, no remote config.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",
@@ -20,7 +20,7 @@
     "service_worker": "src/background/service-worker.js"
   },
   "action": {
-    "default_title": "Ad Shield",
+    "default_title": "AdBrake",
     "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

@@ -44,7 +44,7 @@
   var panel = el('div', 'position:fixed;right:16px;bottom:16px;width:360px;max-width:calc(100vw - 32px);' +
     'box-sizing:border-box;padding:12px;border-radius:10px;background:#fff;color:#111;pointer-events:auto;' +
     'box-shadow:0 6px 24px rgba(0,0,0,.25);border:1px solid #d4d4d8;' + FONT);
-  var title = el('div', 'font-weight:600;margin:0 0 4px;', 'Ad Shield: hide an element');
+  var title = el('div', 'font-weight:600;margin:0 0 4px;', 'AdBrake: hide an element');
   var hint = el('div', 'color:#52525b;margin:0 0 8px;', 'Point at the element and click it. Esc cancels.');
   var input = el('input', 'display:block;width:100%;box-sizing:border-box;margin:0 0 6px;padding:5px 6px;' +
     'border:1px solid #a1a1aa;border-radius:6px;background:#fafafa;color:#111;' +

@@ -81,7 +81,7 @@ def build():
         body = convert(fh.read())
     return ('<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
-            '<title>Ad Shield — Privacy Policy</title>\n<style>%s</style></head>\n<body>\n%s\n</body></html>\n'
+            '<title>AdBrake — Privacy Policy</title>\n<style>%s</style></head>\n<body>\n%s\n</body></html>\n'
             % (STYLE, body))
 
 

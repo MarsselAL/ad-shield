@@ -1,6 +1,6 @@
-<p align="center"><img src="icons/icon128.png" width="96" height="96" alt="Ad Shield logo"></p>
+<p align="center"><img src="icons/icon128.png" width="96" height="96" alt="AdBrake logo"></p>
 
-<h1 align="center">Ad Shield</h1>
+<h1 align="center">AdBrake</h1>
 
 <p align="center"><strong>A free, open-source ad, tracker and cookie-banner blocker for Chrome, Edge, Opera and Brave.</strong><br>
 No telemetry. No accounts. No remote configuration.</p>
@@ -20,7 +20,7 @@ No telemetry. No accounts. No remote configuration.</p>
   <a href="https://marsselal.github.io/ad-shield/store/privacy-policy.html">Privacy policy</a>
 </p>
 
-![Ad Shield popup on a news page: 10 ads, 3 trackers and 1 cookie banner blocked](docs/store/images/shot-1-popup.png)
+![AdBrake popup on a news page: 10 ads, 3 trackers and 1 cookie banner blocked](docs/store/images/shot-1-popup.png)
 
 ### Highlights
 
@@ -35,7 +35,7 @@ No telemetry. No accounts. No remote configuration.</p>
 - **Private by design**: settings stay in your browser; the only downloads are the three public
   filter lists, once a week ([privacy policy](https://marsselal.github.io/ad-shield/store/privacy-policy.html)).
 
-Ad Shield is not a perfect blocker: Chrome's rule system cannot express everything that
+AdBrake is not a perfect blocker: Chrome's rule system cannot express everything that
 uBlock Origin can, so some ads get through. Do not run two ad blockers at once.
 
 <table>
@@ -123,14 +123,14 @@ The built files in `build/` are committed. To rebuild them: `python3 tools/build
 
 ## Share a build / install on another computer (no store)
 
-1. Run `python3 -I tools/package.py`. It makes `dist/ad-shield-<version>.zip` with one folder
-   `ad-shield/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
+1. Run `python3 -I tools/package.py`. It makes `dist/adbrake-<version>.zip` with one folder
+   `adbrake/` inside: the extension plus **`INSTALL.txt`** (source: [docs/INSTALL.txt](docs/INSTALL.txt)).
    Tests, tools, docs and test results are left out. It also makes
-   `dist/ad-shield-<version>-store.zip` (`manifest.json` at the zip root, no `INSTALL.txt`) for
+   `dist/adbrake-<version>-store.zip` (`manifest.json` at the zip root, no `INSTALL.txt`) for
    uploading to the browser stores.
 2. Send the zip (USB stick, cloud drive, e-mail).
 3. The other person follows `INSTALL.txt`: unzip to a permanent folder, open
-   `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `ad-shield`
+   `chrome://extensions`, turn on **Developer mode**, **Load unpacked**, pick the `adbrake`
    folder. It also covers macOS, the "developer mode extensions" message at browser start
    (expected; close it, do not disable), pinning the icon, the settings, weekly list updates,
    updating to a new zip and uninstalling.
@@ -269,7 +269,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |
 | Update filter lists automatically | on | Weekly download and conversion of the three lists (dynamic rules; the generic hiding CSS stays from the package). The options page shows each list's version, date, rule count and status, with "Update now" and "Use built-in lists". |
 | Sites where blocking is off | empty | One site per line, covers subdomains. Also turns the Twitch features off on twitch.tv. |
-| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever Ad Shield is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
+| My filters | empty | `site##selector` per line (from the element picker or typed). Applied on that site (and its subdomains) whenever AdBrake is on there, even with Ads off. Caps: 200 per site, 5,000 in all. |
 | Block client-side ad requests on videos (VODs) | on | On `twitch.tv/videos/…` (and the embedded player with `?video=`) only, the page and its video worker answer Twitch's client-side ad requests (`edge.ads.twitch.tv`, `vaes.amazon-adsystem.com` ad paths, GET) locally with "no ad". Live streams are never touched: a failed ad request there is the likely trigger of Twitch's "you're running ad block" notice, so the always-on ruleset `client_ads` holds two allow rules (priority 5) that let these requests from twitch.tv pages through although EasyList blocks `edge.ads.twitch.tv`. Up to 2.0 `client_ads` blocked them on every page. |
 | Block ad tracking paths | off | DNR ruleset `trackers`: `twitch.tv/r/s/` (scripts) and `/r/c/` (images). Untested on live Twitch. |
 | Hide standalone video ads | on | Hides, mutes and pauses ad `<video>` elements whose source is an Amazon ad host, and hides the display ads beside / below the player (`[data-test-selector="display-ad"]`, `[data-test-selector="ad-banner"]`, `[data-a-target="ads-banner"]`, `iframe[title="Stream Display Ad"]`, `.stream-display-ad`), muting and pausing any `<video>` in them; never a container that holds the stream's player. |
@@ -359,7 +359,7 @@ See [docs/TESTING.md](docs/TESTING.md) for results.
 
 ## Support
 
-Ad Shield is free. If it saves you time, an optional tip is welcome:
+AdBrake is free. If it saves you time, an optional tip is welcome:
 
 - Revolut: https://revolut.me/marsel951u
 - Crypto: USDC, `0xD26B379f952D9a3008eB5a8C908d335F5715b18A` – **USDC on Ethereum (ERC-20)

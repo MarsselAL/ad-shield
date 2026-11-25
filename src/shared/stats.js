@@ -78,7 +78,7 @@
   function toastText(name) {
     if (name === 'ad-blocked-backup') return 'Ad blocked – using backup stream';
     if (name === 'ad-stripped') return 'Ad blocked – ad segments removed, stream resumes shortly';
-    if (name === 'degraded') return 'Ad Shield: strip-only mode for this channel (too many reloads)';
+    if (name === 'degraded') return 'AdBrake: strip-only mode for this channel (too many reloads)';
     return null;
   }
 

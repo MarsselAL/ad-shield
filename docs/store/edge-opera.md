@@ -32,4 +32,4 @@ Check them on the day; some Opera pages are undated.
 ## Decisions for Marsel
 1. Submit Chrome first; Edge when Chrome passes; Opera last (slowest, fussiest).
 2. Opera: ship with tracking-parameter removal on or off?
-3. Same name on all three; check "Ad Shield" availability and clashes first (`review-risks.md` risk 5).
+3. Same name on all three; check "AdBrake" availability and clashes first (`review-risks.md` risk 5).
