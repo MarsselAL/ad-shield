@@ -42,7 +42,8 @@ class Package(unittest.TestCase):
     def test_install_and_manifest_in_the_top_folder(self):
         for n in ("ad-shield/INSTALL.txt", "ad-shield/manifest.json", "ad-shield/LICENSE", "ad-shield/NOTICE.md",
                   "ad-shield/src/background/service-worker.js", "ad-shield/build/isolated-world.js",
-                  "ad-shield/rules/removeparam.json", "ad-shield/rules/cosmetic/popunder.css", "ad-shield/src/content/picker.js", "ad-shield/icons/icon128.png"):
+                  "ad-shield/rules/removeparam.json", "ad-shield/rules/cosmetic/popunder.css", "ad-shield/src/content/picker.js",
+                  "ad-shield/src/content/clickguard.js", "ad-shield/icons/icon128.png"):
             self.assertIn(n, self.names)
         self.assertTrue(all(n.startswith("ad-shield/") for n in self.names))
 

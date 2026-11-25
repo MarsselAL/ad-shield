@@ -749,6 +749,8 @@
       var pu = { id: 'as-css-popunder', css: ['rules/cosmetic/popunder.css'], matches: WEB.slice(), allFrames: true, runAt: 'document_start', persistAcrossSessions: true };
       if (allow.length) pu.excludeMatches = allow.slice();
       plan.push(pu);
+      // The CSS catches known inline forms; this catches the other invisible full-viewport layers by computed style.
+      js('as-clickguard', 'src/content/clickguard.js', true);
     }
     if (b.hideCookieBanners) css('as-css-cookies', 'rules/cosmetic/cookies_generic.css');
     var userMatches = patternsFor(userHosts);
