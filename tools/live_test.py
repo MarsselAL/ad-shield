@@ -785,7 +785,8 @@ def run_smoke(args):
             dnr = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps(cases))
             report["dnr_test"] = dnr
             check("testMatchOutcome: ad, tracker and tracking-cookie requests match; a plain request does not",
-                  dnr and any(x in ("ads_1", "privacy_1") for x in dnr.get("ad", [])) and "privacy_1" in dnr.get("tracker", [])
+                  dnr and any(x in ("ads_1", "privacy_1", "ads_surrogates") for x in dnr.get("ad", []))
+                  and any(x in ("privacy_1", "privacy_surrogates") for x in dnr.get("tracker", []))
                   and len(dnr.get("cookie", [])) > 0 and dnr.get("plain") == [], dnr)
             rp = cdp.evaluate(sw_sid, DNR_TEST_JS % json.dumps({
                 "page_utm": {"url": "https://example.com/?utm_source=x&keep=1", "type": "main_frame"},
@@ -843,7 +844,7 @@ def run_smoke(args):
                                      " lists: document.querySelectorAll('#lists tr').length,"
                                      " order: document.getElementById('playerTypes').value })")
         report["options"] = opts
-        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 8 and opts["lists"] == 3
+        check("options page renders", opts and opts["toggles"] == 7 and opts["btoggles"] == 9 and opts["lists"] == 3
               and opts["order"].split("\n")[0] == "embed", opts)
         bad = cdp.evaluate(opt_sid, "(() => { document.getElementById('playerTypes').value = 'autoplay\\nbogus';"
                                     " document.getElementById('pt-save').click();"
