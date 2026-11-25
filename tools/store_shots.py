@@ -48,7 +48,10 @@ def metrics(cdp, sid, w, h, scale=2, dark=False):
     cdp.send("Emulation.setDeviceMetricsOverride", {"width": w, "height": h, "deviceScaleFactor": scale,
                                                     "mobile": False}, session=sid)
     cdp.send("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme",
-                                                          "value": "dark" if dark else "light"}]}, session=sid)
+                                                          "value": "dark" if dark else "light"},
+                                                         # still images: no transitions caught half way
+                                                         {"name": "prefers-reduced-motion", "value": "reduce"}]},
+             session=sid)
 
 
 def wait_load(cdp, sid, timeout=40):
@@ -82,7 +85,7 @@ def capture(out_raw, site):
         # 2. Popup as a background tab of the same window: tabs.query({active, currentWindow}) = news tab.
         # The popup is two panels side by side (controls | Support AdBrake), 630 px wide.
         # Store variant: the page's host name is shown as news.example.com and the tip button, whose
-        # label names payment wallets, is hidden, so the images name no third-party brand
+        # label names payment wallets, is hidden with its row, so the images name no third-party brand
         # (docs/store/review-risks.md). The counts are what the popup really counted on that page.
         for dark in (False, True):
             tid = cdp.send("Target.createTarget", {"url": "about:blank", "background": True})["targetId"]
@@ -95,18 +98,25 @@ def capture(out_raw, site):
             info = cdp.evaluate(sid, "['g-ads','g-trackers','g-banners','g-cookies','site-host']"
                                      ".map(id => id + '=' + document.getElementById(id).textContent)")
             print("popup", "dark" if dark else "light", info)
+            # Hide the whole tip-button row (not just the button), so the panel closes up with no gap.
             cdp.evaluate(sid, """(() => {
                 document.getElementById('site-host').textContent = 'news.example.com';
                 const s = document.createElement('style');
-                s.textContent = '#support-link { display: none !important; }';
+                s.textContent = '#support-revolut { display: none !important; }';
                 document.head.appendChild(s);
             })()""")
             time.sleep(0.8)
             box = cdp.evaluate(sid, "(() => { const r = document.body.getBoundingClientRect();"
                                     " return {w: Math.ceil(r.width), h: Math.ceil(r.height)}; })()")
             print("popup size", box)
-            shot(cdp, sid, os.path.join(out_raw, "popup-%s.png" % ("dark" if dark else "light")),
-                 clip={"x": 0, "y": 0, "width": box["w"], "height": box["h"]})
+            # Light: the default Phone view, and the USDC view picked with the popup's own control.
+            views = [("", None)] if dark else [("", None), ("-usdc", "tab-usdc")]
+            for suffix, tab in views:
+                if tab:
+                    cdp.evaluate(sid, "document.getElementById('%s').click()" % tab)
+                    time.sleep(1.5)
+                shot(cdp, sid, os.path.join(out_raw, "popup-%s%s.png" % ("dark" if dark else "light", suffix)),
+                     clip={"x": 0, "y": 0, "width": box["w"], "height": box["h"]})
             cdp.send("Target.closeTarget", {"targetId": tid})
 
         # 3. Settings page (light and dark), full height, plus section offsets for cropping.

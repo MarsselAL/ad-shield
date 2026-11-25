@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RAW = os.path.join(os.path.dirname(HERE), "raw")
 HEAD = '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="style.css"></head>'
 VERSION = "2.0.3"
-POPUP_W = 744  # CSS width of the popup capture (src/popup/popup.css)
+POPUP_W = 630  # CSS width of the popup capture (src/popup/popup.css)
 PAGE_W = 760   # CSS width of the settings page capture
 
 
@@ -91,7 +91,7 @@ page("shot-3-filters-1280x800.html", '<div class="wrap">' + text(
     ["Point and click to hide an element", "Allow a site with one switch", "Edit your own rules any time"]) +
     '<div class="stage"><div class="stack" style="width:640px;height:%dpx">' % (34 + (y1 - y0) * s3 + 70) +
     '<div style="position:absolute;right:0;top:0">' + crop("options-store-light.png", y0, y1, s3, bar="AdBrake settings") + '</div>'
-    '<div style="position:absolute;left:-30px;bottom:0">' + pcrop("popup-light.png", 18, 336, 386, 482, 1.0) + '</div>'
+    '<div style="position:absolute;left:-30px;bottom:0">' + pcrop("popup-light.png", 16, 286, 334, 406, 1.1) + '</div>'
     '</div></div></div>' + NOTE)
 
 # 4. Privacy, in dark mode: the popup as the dark theme shows it.
@@ -101,18 +101,13 @@ page("shot-4-privacy-1280x800.html", '<div class="wrap">' + text(
     ["MIT licence, source code public", "No analytics, no remote config", "Free, with no paid tier"]) +
     '<div class="stage">' + popup("popup-dark.png", 640) + '</div></div>' + NOTE, cls="dark")
 
-# 5. Support: the popup's support panel and the support card at the top of settings.
-y0, y1 = span(L, "Support AdBrake", "Support AdBrake", 6)
+# 5. Support: the popup's support panel, with the USDC view picked in its Phone | USDC | BTC control.
 page("shot-5-support-1280x800.html", '<div class="wrap">' + text(
     "Free for everyone",
     "Every feature is free, with no ads of its own and no upsell. If it saves you time, an optional tip helps keep it going.",
     ["Nothing is locked behind a payment", "Tips are optional; reminders can be turned off",
      "Filter lists update by themselves"]) +
-    '<div class="stage"><div class="stack" style="width:640px;height:620px">'
-    '<div style="position:absolute;left:0;top:0">' + pcrop("popup-light.png", 400, 8, 736, 300, 1.0) + '</div>'
-    '<div style="position:absolute;right:-20px;bottom:0">' + crop("options-store-light.png", y0, y1, 0.8,
-                                                                  bar="AdBrake settings") + '</div>'
-    '</div></div></div>' + NOTE)
+    '<div class="stage">' + pcrop("popup-light-usdc.png", 346, 6, 624, 419, 1.38) + '</div></div>' + NOTE)
 
 # 440x280 small promo tile
 page("promo-small-440x280.html", '<div style="position:absolute;inset:0;background:linear-gradient(150deg,#e5222e,#a5121c);'
