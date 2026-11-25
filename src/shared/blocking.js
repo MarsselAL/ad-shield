@@ -142,12 +142,15 @@
    * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
    * frames to the same URL without tracking parameters; never counted in the popup.
    * gpc (rules/gpc.json) sets the Global Privacy Control request header; never counted.
+   * ads_surrogates / privacy_surrogates (hand-written) redirect a few blocked Google scripts (GPT,
+   * AdSense, IMA / Analytics, Tag Manager) to no-op stand-ins in src/surrogates/; they follow Ads /
+   * Trackers and count there, since each redirect replaces a block.
    */
   function rulesetFeature(id) {
     if (id === 'removeparam') return 'stripTrackingParams';
     if (id === 'gpc') return 'gpc';
-    if (/^ads_(\d+|curated)$/.test(id) || id === 'youtube') return 'ads';
-    if (/^privacy_(\d+|curated)$/.test(id)) return 'trackers';
+    if (/^ads_(\d+|curated|surrogates)$/.test(id) || id === 'youtube') return 'ads';
+    if (/^privacy_(\d+|curated|surrogates)$/.test(id)) return 'trackers';
     if (/^cookies_\d+$/.test(id)) return 'hideCookieBanners';
     if (id === 'cookie_strip') return 'stripCookies';
     return null;

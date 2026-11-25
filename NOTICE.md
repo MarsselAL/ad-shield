@@ -19,6 +19,12 @@ AdBrake's own code is MIT licensed (see `LICENSE`). The package also contains:
    following the approach of DuckDuckGo's `content-scope-scripts` GPC feature and `ddg2dnr`
    (duckduckgo, Apache-2.0): a `Sec-GPC: 1` header rule plus a `Navigator.prototype` getter set only
    when the browser has none. No DuckDuckGo code is copied.
+5. **Surrogate scripts** in `src/surrogates/`: `ga.js` and `gpt.js` are from DuckDuckGo's
+   tracker-surrogates (https://github.com/duckduckgo/tracker-surrogates, commit 1cca57f),
+   Copyright (c) 2021-2023 Duck Duck Go, Inc., Apache License 2.0; `ga.js` unmodified, `gpt.js`
+   with one changed line (noted in its header). The licence file is
+   `src/surrogates/LICENSE-duckduckgo.md`. The other surrogates (`analytics.js`, `gtm.js`,
+   `adsbygoogle.js`, `ima3.js`, `noop.js`) are our own code (MIT), written from the public APIs.
 
 The converter (`tools/filterlist.py`) and the autoconsent integration
 (`src/background/general.js`) are this project's own code; no code from uBlock Origin (Lite) or

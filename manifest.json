@@ -68,6 +68,22 @@
       "all_frames": true
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/surrogates/adsbygoogle.js",
+        "src/surrogates/analytics.js",
+        "src/surrogates/ga.js",
+        "src/surrogates/gpt.js",
+        "src/surrogates/gtm.js",
+        "src/surrogates/ima3.js",
+        "src/surrogates/noop.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "declarative_net_request": {
     "rule_resources": [
       {
@@ -124,6 +140,16 @@
         "id": "gpc",
         "enabled": true,
         "path": "rules/gpc.json"
+      },
+      {
+        "id": "ads_surrogates",
+        "enabled": true,
+        "path": "rules/ads_surrogates.json"
+      },
+      {
+        "id": "privacy_surrogates",
+        "enabled": true,
+        "path": "rules/privacy_surrogates.json"
       }
     ]
   }

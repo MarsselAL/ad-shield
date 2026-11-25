@@ -123,6 +123,26 @@ test('gpc: own switch (default on, old settings migrate to on), static ruleset n
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'gpc', ruleId: 1 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
 });
 
+test('surrogate rulesets: follow Ads / Trackers, stay with updated lists, count as the block they replace', function () {
+  assert.equal(B.rulesetFeature('ads_surrogates'), 'ads');
+  assert.equal(B.rulesetFeature('privacy_surrogates'), 'trackers');
+  assert.equal(B.rulesetFeature('cookies_surrogates'), null);
+  assert.notOk(B.isListRuleset('ads_surrogates'));
+  assert.notOk(B.isListRuleset('privacy_surrogates'));
+  var ids = ['ads_1', 'privacy_1', 'ads_surrogates', 'privacy_surrogates'];
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults()).enableRulesetIds, ids);
+  var noTrackers = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { trackers: false }));
+  assert.deepEqual(noTrackers.disableRulesetIds, ['privacy_1', 'privacy_surrogates'], 'no GA / GTM stand-ins while trackers load normally');
+  var noAds = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { ads: false }));
+  assert.deepEqual(noAds.disableRulesetIds, ['ads_1', 'ads_surrogates']);
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults(), { ads: true, trackers: true }).enableRulesetIds, ['ads_surrogates', 'privacy_surrogates'],
+    'updated lists replace ads_N / privacy_N only');
+  assert.deepEqual(B.rulesetPlan(ids, false, B.defaults()).enableRulesetIds, []);
+  var m = function (rulesetId, ruleId) { return { rule: { rulesetId: rulesetId, ruleId: ruleId } }; };
+  assert.deepEqual(B.countMatches([m('ads_surrogates', 1), m('privacy_surrogates', 3), m('privacy_surrogates', 4)]),
+    { ads: 1, trackers: 2, cookies: 0, banners: 0 });
+});
+
 test('gpc: rules/gpc.json sets Sec-GPC on page loads, above list exceptions and below the allowlist', function () {
   var rules = JSON.parse(readFile('rules/gpc.json'));
   assert.equal(rules.length, 1);

@@ -87,6 +87,11 @@ configuration.
 - **Global Privacy Control** (on by default): sends `Sec-GPC: 1` when a page loads and sets
   `navigator.globalPrivacyControl` to `true` in every frame where the browser has no such
   property (Chrome has none). Off on allowlisted sites.
+- **Surrogate scripts**: when Ads / Trackers block Google Publisher Tag, AdSense, the IMA video-ad
+  SDK, Google Analytics or Google Tag Manager, the page gets a small built-in stand-in
+  (`src/surrogates/`) instead of a failed request, so sites that call `googletag.cmd.push`,
+  `adsbygoogle.push`, `google.ima.*`, `ga()`, `gtag()` or wait for a `dataLayer` callback keep
+  working. Nothing is sent; the stand-ins only release the page's callbacks.
 - **Hide an element** (popup): an element picker. Point at an element, click it, adjust with
   "Wider" / "Narrower" (live preview with the number of matches) and press "Hide". The rule is
   kept under **My filters** on the options page (`example.com##.selector`, editable there) and
@@ -196,6 +201,7 @@ Twitch:
 | `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
 | `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
 | `gpc` | 1 | 0 | `rules/gpc.json` (ours, hand-written): `Sec-GPC: 1` header on page loads |
+| `ads_surrogates`, `privacy_surrogates` | 6 + 5 | 0 | hand-written: redirects of blocked Google scripts to `src/surrogates/` (Ads / Trackers) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours; `client_ads` = 2 allow rules) |
 
 Total 14,920 static rules, below Chrome's guaranteed 30,000, so no shared global pool is needed.

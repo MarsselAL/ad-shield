@@ -111,7 +111,7 @@ function setBlocking(patch) { return chrome.storage.local.set({ blocking: Object
 test('startup: enables the generated rulesets, registers CSS and page script, badge count on', function () {
   return flush().then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
-    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'gpc', 'youtube'].sort());
+    assert.deepEqual(last.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'gpc', 'youtube', 'ads_surrogates', 'privacy_surrogates'].sort());
     assert.deepEqual(last.disableRulesetIds, []);
     assert.deepEqual(ids(), ['as-css-ads', 'as-css-ads-exc', 'as-css-ads-top', 'as-css-cookies', 'as-css-cookies-exc', 'as-css-youtube', 'as-gpc', 'as-scriptlets', 'as-site']);
     var sl = registered.filter(function (s) { return s.id === 'as-scriptlets'; })[0];
@@ -253,7 +253,7 @@ test('master switch off: all general rulesets disabled, scripts unregistered, al
   return chrome.storage.local.set({ settings: Object.assign(__TAS__.settings.defaults(), { enabled: false }) }).then(flush).then(function () {
     var last = calls.rulesets[calls.rulesets.length - 1];
     assert.deepEqual(last.enableRulesetIds, []);
-    assert.equal(last.disableRulesetIds.length, 9, 'including gpc');
+    assert.equal(last.disableRulesetIds.length, 11, 'including gpc and the two surrogate rulesets');
     assert.deepEqual(ids(), []);
     assert.deepEqual(calls.dynamic[calls.dynamic.length - 1].addRules, []);
   });
@@ -346,7 +346,7 @@ test('installLists: dynamic rules in one call, list rulesets off, curated / cook
       assert.deepEqual(dynIds('trackers'), [2000001]);
       var p = lastPlan();
       assert.deepEqual(p.disableRulesetIds.slice().sort(), ['ads_1', 'cookies_1', 'privacy_1']);
-      assert.deepEqual(p.enableRulesetIds.slice().sort(), ['ads_curated', 'cookie_strip', 'privacy_curated', 'removeparam', 'gpc', 'youtube'].sort());
+      assert.deepEqual(p.enableRulesetIds.slice().sort(), ['ads_curated', 'cookie_strip', 'privacy_curated', 'removeparam', 'gpc', 'youtube', 'ads_surrogates', 'privacy_surrogates'].sort());
       assert.deepEqual(local.listRules, STORED);
       assert.deepEqual(local.lists, META);
       assert.equal(local.listSite.v, 2, 'sharded marker');
@@ -406,7 +406,7 @@ test('resetLists: static list rulesets enabled before the dynamic rules go, stor
   return __TAS__.general.resetLists({ source: 'packaged', lists: {} }).then(function () {
     assert.equal(dynamicRules.filter(function (r) { return r.id !== 1; }).length, 0);
     var first = calls.rulesets[n];
-    assert.deepEqual(first.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'gpc', 'youtube'].sort());
+    assert.deepEqual(first.enableRulesetIds.slice().sort(), ['ads_1', 'ads_curated', 'cookie_strip', 'cookies_1', 'privacy_1', 'privacy_curated', 'removeparam', 'gpc', 'youtube', 'ads_surrogates', 'privacy_surrogates'].sort());
     assert.equal(local.listRules, undefined);
     assert.equal(local.listSite, undefined);
     assert.deepEqual(Object.keys(local).filter(function (k) { return k.indexOf('listSite') === 0; }), [], 'every shard removed');

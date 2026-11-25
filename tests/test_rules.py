@@ -334,7 +334,8 @@ class CuratedBuild(unittest.TestCase):
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
                          ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
-                          "youtube", "removeparam", "gpc"], "youtube and gpc are always kept; removeparam rebuilt")
+                          "youtube", "removeparam", "gpc", "ads_surrogates", "privacy_surrogates"],
+                         "hand-written rulesets (youtube, gpc, surrogates) are always kept; removeparam rebuilt")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])
@@ -484,11 +485,13 @@ class Schema(unittest.TestCase):
         self.assertTrue(dnr_schema.curated_ruleset_errors([]))
 
     def test_general_ruleset_ids_and_order(self):
-        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam", "gpc"):
+        for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam", "gpc",
+                    "ads_surrogates", "privacy_surrogates"):
             self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
             self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
-        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip", "youtube", "removeparam", "gpc"]
+        ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip", "youtube", "removeparam", "gpc",
+               "ads_surrogates", "privacy_surrogates"]
         self.assertEqual(sorted(reversed(ids), key=dnr_schema.general_order_key), ids)
         self.assertEqual(sorted(reversed(ids), key=build_rules.ruleset_order_key), ids)
 
@@ -511,6 +514,66 @@ class Schema(unittest.TestCase):
             change(r)
             self.assertTrue(dnr_schema.gpc_ruleset_errors([r]), i)
         self.assertTrue(dnr_schema.gpc_ruleset_errors([good, dict(good, id=2)]))
+
+    def test_surrogate_shape_check_rejects_deviations(self):
+        good = {"id": 1, "priority": 2, "action": {"type": "redirect", "redirect": {"extensionPath": "/src/surrogates/gtm.js"}},
+                "condition": {"urlFilter": "||googletagmanager.com/gtm.js^", "resourceTypes": ["script"]}}
+        self.assertEqual(dnr_schema.surrogate_ruleset_errors([good]), [])
+        bad = [
+            lambda r: r.update(priority=1),     # a block (1) at the same priority would win the tie
+            lambda r: r.update(priority=3),     # would override the lists' exceptions (allow, 2)
+            lambda r: r.update(id=500001),
+            lambda r: r["action"]["redirect"].update(extensionPath="/src/popup/popup.js"),
+            lambda r: r["action"].update(redirect={"url": "https://example.com/x.js"}),
+            lambda r: r["condition"].update(resourceTypes=["script", "main_frame"]),
+            lambda r: r["condition"].update(initiatorDomains=["a.com"]),
+            lambda r: r["condition"].update(urlFilter="/gtm.js"),
+        ]
+        for i, change in enumerate(bad):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.surrogate_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.surrogate_ruleset_errors([good], exists=lambda p: False))
+        self.assertTrue(dnr_schema.surrogate_ruleset_errors([]))
+
+    def test_url_filter_matcher(self):
+        m = dnr_schema.rule_matches
+        r = {"condition": {"urlFilter": "||google-analytics.com/analytics.js^", "resourceTypes": ["script"]}}
+        self.assertTrue(m(r, "https://www.google-analytics.com/analytics.js", "script"))
+        self.assertTrue(m(r, "https://google-analytics.com/analytics.js?x=1", "script"))
+        self.assertFalse(m(r, "https://www.google-analytics.com/analytics.jsx", "script"))
+        self.assertFalse(m(r, "https://notgoogle-analytics.com/analytics.js", "script"))
+        self.assertFalse(m(r, "https://www.google-analytics.com/analytics.js", "xmlhttprequest"))
+        self.assertTrue(m({"condition": {"requestDomains": ["a.com"]}}, "https://x.a.com/p", "image"))
+        self.assertFalse(m({"condition": {"requestDomains": ["a.com"]}}, "https://x.a.com/p", "main_frame"))
+        self.assertFalse(m({"condition": {"urlFilter": "/x", "initiatorDomains": ["b.com"]}}, "https://a.com/x", "script", "c.com"))
+
+
+# Requests the surrogate rulesets must turn into their stand-in (and the list category whose
+# block they replace). Each must also be blocked by that category's packaged lists today.
+SURROGATE_SAMPLES = [
+    ("ads", "https://securepubads.g.doubleclick.net/tag/js/gpt.js", "gpt.js"),
+    ("ads", "https://www.googletagservices.com/tag/js/gpt.js?network=1", "gpt.js"),
+    ("ads", "https://securepubads.g.doubleclick.net/pagead/managed/js/gpt/m202511200101/pubads_impl.js", "noop.js"),
+    ("ads", "https://securepubads.g.doubleclick.net/gpt/pubads_impl_2024103101.js", "noop.js"),
+    ("ads", "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1", "adsbygoogle.js"),
+    ("ads", "https://imasdk.googleapis.com/js/sdkloader/ima3.js", "ima3.js"),
+    ("trackers", "https://www.google-analytics.com/analytics.js", "analytics.js"),
+    ("trackers", "https://ssl.google-analytics.com/ga.js", "ga.js"),
+    ("trackers", "https://www.googletagmanager.com/gtm.js?id=GTM-ABC1", "gtm.js"),
+    ("trackers", "https://www.googletagmanager.com/gtag/js?id=G-ABC123", "gtm.js"),
+    ("trackers", "https://www.googletagmanager.com/gtag/js?id=AW-123", "gtm.js"),
+    ("trackers", "https://www.google-analytics.com/gtm/js?id=GTM-1", "gtm.js"),
+]
+# Look-alikes no surrogate rule may touch.
+SURROGATE_MISSES = [
+    ("https://www.google-analytics.com/analytics.jsx", "script"),
+    ("https://www.google-analytics.com/analytics.js", "xmlhttprequest"),
+    ("https://www.googletagmanager.com/gtm.js?id=GTM-1", "main_frame"),
+    ("https://imasdk.googleapis.com/js/sdkloader/ima3_dai.js", "script"),
+    ("https://example.com/gtm.js", "script"),
+    ("https://www.google-analytics.com/g/collect?v=2", "script"),
+]
 
 
 class GeneratedData(unittest.TestCase):
@@ -584,6 +647,33 @@ class GeneratedData(unittest.TestCase):
                         self.assertFalse(h == d or h.endswith("." + d), (rid, r["id"], d))
                 for w in words:
                     self.assertNotIn(w, c.get("urlFilter") or c.get("regexFilter") or "", (rid, r["id"]))
+
+    def test_surrogate_rulesets(self):
+        cat = {"ads": "ads_surrogates", "trackers": "privacy_surrogates"}
+        lists = {"ads": [i for i in self.rulesets if re.match(r"^ads_(\d+|curated)$", i)],
+                 "trackers": [i for i in self.rulesets if re.match(r"^privacy_(\d+|curated)$", i)]}
+        for rid in cat.values():
+            self.assertEqual(dnr_schema.surrogate_ruleset_errors(
+                self.rulesets[rid], rid, lambda p: os.path.isfile(os.path.join(ROOT, p.lstrip("/")))), [], rid)
+        used = set()
+        for c, url, target in SURROGATE_SAMPLES:
+            hits = [(rid, r["id"]) for rid in cat.values() for r in self.rulesets[rid] if dnr_schema.rule_matches(r, url, "script", "example.org")]
+            self.assertEqual(len(hits), 1, (url, hits))
+            rid, rule_id = hits[0]
+            self.assertEqual(rid, cat[c], url)
+            rule = [r for r in self.rulesets[rid] if r["id"] == rule_id][0]
+            self.assertEqual(rule["action"]["redirect"]["extensionPath"], "/src/surrogates/" + target, url)
+            used.add((rid, rule_id))
+            blocks = [(i, r["id"]) for i in lists[c] for r in self.rulesets[i]
+                      if r["action"]["type"] == "block" and "initiatorDomains" not in r["condition"]
+                      and dnr_schema.rule_matches(r, url, "script", "example.org")]
+            self.assertTrue(blocks, "%s: the %s lists no longer block it, so its surrogate would replace a working script" % (url, c))
+        every = {(rid, r["id"]) for rid in cat.values() for r in self.rulesets[rid]}
+        self.assertEqual(used, every, "every surrogate rule has a sample URL")
+        for url, rtype in SURROGATE_MISSES:
+            for rid in cat.values():
+                for r in self.rulesets[rid]:
+                    self.assertFalse(dnr_schema.rule_matches(r, url, rtype, "example.org"), (url, rtype, rid, r["id"]))
 
     def test_curated_rulesets(self):
         ids = [r["id"] for r in self.manifest["declarative_net_request"]["rule_resources"]]

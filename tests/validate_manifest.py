@@ -16,6 +16,8 @@ Checks:
     (ads_curated, privacy_curated) exist, are enabled, in order, and have exactly the one-rule
     third-party block shape; static rule / regex / ruleset limits hold; the general content-script files exist; vendored autoconsent is unmodified
   - the hand-written gpc ruleset only sets Sec-GPC: 1 on page loads (dnr_schema.gpc_ruleset_errors);
+  - the surrogate rulesets only redirect script URLs to existing src/surrogates/*.js files, which are
+    exactly the web_accessible_resources and make no requests;
   - the hand-written youtube ruleset blocks only its two paths; redirect rules exist only in
     removeparam.json and have its exact shape (tests/dnr_schema.removeparam_ruleset_errors); the scriptlet bundle exists and the
     scriptlet sources contain no URLs
@@ -125,7 +127,15 @@ def main():
     for c in cs:
         for f in c.get("js", []):
             check(os.path.isfile(os.path.join(ROOT, f)) if "ROOT" in globals() else True, "content script file missing: " + f)
-    check("web_accessible_resources" not in m, "no web_accessible_resources expected")
+    # Only the surrogate scripts are web accessible (DNR extensionPath redirects need it); they
+    # are checked against the surrogate rulesets below. No use_dynamic_url: Chrome's web-accessible
+    # check then requires the per-session GUID host, but DNR redirects to the static-ID URL.
+    war = m.get("web_accessible_resources")
+    check(isinstance(war, list) and len(war) == 1 and isinstance(war[0], dict)
+          and set(war[0]) == {"resources", "matches"} and war[0].get("matches") == ["<all_urls>"],
+          "web_accessible_resources must be one entry {resources, matches: [<all_urls>]}")
+    war_resources = war[0].get("resources", []) if isinstance(war, list) and war and isinstance(war[0], dict) else []
+    surrogate_paths = set()
 
     # Referenced files
     bg = m.get("background", {}).get("service_worker")
@@ -297,9 +307,15 @@ def main():
             check(r.get("enabled") is True, "removeparam ruleset must be enabled by default")
             for msg in dnr_schema.removeparam_ruleset_errors(rules, r.get("path")):
                 errors.append(msg)
+        elif r.get("id") in dnr_schema.SURROGATE_RULESETS:
+            check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
+            for msg in dnr_schema.surrogate_ruleset_errors(rules, r.get("path"), lambda p: os.path.isfile(os.path.join(ROOT, p.lstrip("/")))):
+                errors.append(msg)
+            surrogate_paths.update(x["action"]["redirect"]["extensionPath"].lstrip("/") for x in rules
+                                   if isinstance(x, dict) and "extensionPath" in x.get("action", {}).get("redirect", {}))
         else:
             check(r.get("id") == "youtube" or not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
-                  "%s: redirect rules are only allowed in rules/removeparam.json (and the youtube pp rule)" % r.get("path"))
+                  "%s: redirect rules are only allowed in rules/removeparam.json, the surrogate rulesets (and the youtube pp rule)" % r.get("path"))
         if r.get("id") == dnr_schema.GPC_RULESET:
             check(r.get("enabled") is True, "gpc ruleset must be enabled by default")
             for msg in dnr_schema.gpc_ruleset_errors(rules, r.get("path")):
@@ -340,6 +356,16 @@ def main():
                     re.compile(cond["regexFilter"])
                 except re.error as e:
                     errors.append("%s rule %s: bad regex %s" % (r.get("path"), x.get("id"), e))
+    for sr in dnr_schema.SURROGATE_RULESETS:
+        check(sr in ids, "ruleset %s missing" % sr)
+    check(war_resources == sorted(surrogate_paths),
+          "web_accessible_resources must list exactly the surrogate files the rulesets redirect to (sorted): %s, got %s"
+          % (sorted(surrogate_paths), war_resources))
+    for f in war_resources:
+        p = exists(f, "surrogate script")
+        if os.path.isfile(p):
+            check(not re.search(r"(fetch|XMLHttpRequest|sendBeacon|importScripts)\s*\(|new\s+(Image|WebSocket)\b", open(p, encoding="utf-8").read()),
+                  "%s must not make requests" % f)
     check(enabled_rules <= dnr_schema.GUARANTEED_MINIMUM_STATIC_RULES,
           "enabled static rules %d exceed the guaranteed %d" % (enabled_rules, dnr_schema.GUARANTEED_MINIMUM_STATIC_RULES))
     check(regexes <= dnr_schema.MAX_NUMBER_OF_REGEX_RULES, "%d regex rules (max %d)" % (regexes, dnr_schema.MAX_NUMBER_OF_REGEX_RULES))

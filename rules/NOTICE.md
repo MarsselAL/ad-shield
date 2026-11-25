@@ -22,6 +22,10 @@ only; the extension's code is MIT (see `../LICENSE`).
 
 `client_ads.json` and `trackers.json` are this project's own Twitch rules (MIT).
 
+`youtube.json`, `gpc.json`, `ads_surrogates.json` and `privacy_surrogates.json` are this
+project's own hand-written rules (MIT). The surrogate scripts they redirect to are in
+`../src/surrogates/` (credits in `../NOTICE.md`).
+
 `curated_hosts.txt` is this project's own hand-written host list, and `ads_curated.json` and
 `privacy_curated.json` are generated from it only (by `tools/curated.py`); all three are this
 project's own data under the MIT licence (see `../LICENSE`), not derived from the lists above.
