@@ -7,63 +7,71 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M18.79 10.28 L21.10 10.61 L21.10 13.39 L18.79 13.72 L18.01 15.58 L19.41 17.45 L17.45 19.41 L15.58 18.01 L13.72 18.79 L13.39 21.10 L10.61 21.10 L10.28 18.79 L8.42 18.01 L6.55 19.41 L4.59 17.45 L5.99 15.58 L5.21 13.72 L2.90 13.39 L2.90 10.61 L5.21 10.28 L5.99 8.42 L4.59 6.55 L6.55 4.59 L8.42 5.99 L10.28 5.21 L10.61 2.90 L13.39 2.90 L13.72 5.21 L15.58 5.99 L17.45 4.59 L19.41 6.55 L18.01 8.42Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M6.6 6.9a7.6 7.6 0 1 0 10.8 0"/></symbol>
+    <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M5 3.5l13.5 6.8-5.8 1.9-2 5.8z"/><path d="M13 13l5 5"/></symbol>
+    <symbol id="i-list-plus" viewBox="0 0 24 24"><path d="M4 6h13M4 12h8M4 18h7M17.5 14v7M14 17.5h7"/></symbol>
+    <symbol id="i-list-minus" viewBox="0 0 24 24"><path d="M4 6h13M4 12h8M4 18h7M14 17.5h7"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.6-7.5-10.2A4.2 4.2 0 0 1 12 7.2a4.2 4.2 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"/></symbol>
+  </svg>
+
   <header class="row">
-    <div class="brand"><img src="../../icons/icon32.png" alt="" width="20" height="20"><h1>AdBrake</h1></div>
-    <label class="switch" title="Turn AdBrake on or off everywhere">
-      <input type="checkbox" id="enabled" aria-label="AdBrake enabled">
-      <span class="track"></span>
-    </label>
+    <div class="brand"><img src="../../icons/icon128.png" alt="" width="30" height="30"><h1>AdBrake</h1><span class="muted small" id="version"></span></div>
+    <a href="#" id="open-options" class="icon-btn" title="Settings" aria-label="Settings"><svg class="ico"><use href="#i-gear"/></svg></a>
   </header>
 
-  <section class="card support" id="support" aria-labelledby="support-title" hidden>
-    <h2 id="support-title">Support AdBrake</h2>
-    <div class="support-row" id="support-revolut" hidden>
-      <a href="#" id="support-link" target="_blank" rel="noopener noreferrer">☕ Revolut tip</a>
-    </div>
-    <div class="support-row" id="support-btc" hidden>
-      <div class="row">
-        <span class="coin-label">BTC · Bitcoin network</span>
-        <button class="copy" id="btc-copy" aria-label="Copy the Bitcoin address">Copy</button>
-      </div>
-      <code class="address" id="btc-address" aria-label="Bitcoin address"></code>
-    </div>
-    <div class="support-row" id="support-usdc" hidden>
-      <div class="row">
-        <span class="coin-label">USDC · Ethereum (ERC-20) only</span>
-        <button class="copy" id="usdc-copy" aria-label="Copy the USDC address">Copy</button>
-      </div>
-      <code class="address" id="usdc-address" aria-label="USDC address"></code>
-    </div>
-  </section>
-
-  <section class="card site">
-    <div class="row">
-      <div class="site-text">
-        <strong id="site-host">This page</strong>
-        <p class="muted small" id="site-detail"></p>
-      </div>
-      <label class="switch" title="Blocking on this site">
-        <input type="checkbox" id="site-on" aria-label="Blocking on this site">
-        <span class="track"></span>
-      </label>
-    </div>
-    <button id="site-reload" class="primary" hidden>Reload tab</button>
-    <button id="pick" hidden>Hide an element on this page</button>
-    <p class="muted small" id="pick-error" hidden></p>
+  <section class="hero" aria-label="AdBrake on or off">
+    <label class="power" title="Turn AdBrake on or off everywhere">
+      <input type="checkbox" id="enabled" aria-label="AdBrake enabled">
+      <span class="power-tile"><span class="power-btn"><svg class="ico"><use href="#i-power"/></svg></span></span>
+    </label>
+    <p class="state" aria-live="polite">Ad Blocking <span id="state-word" class="state-word on">On</span></p>
+    <p class="tagline muted">A cleaner, faster and safer web.</p>
   </section>
 
   <section class="stats">
-    <table>
-      <thead><tr><th></th><th>This page</th></tr></thead>
-      <tbody>
-        <tr><td>Ads blocked</td><td id="g-ads">–</td></tr>
-        <tr><td>Trackers blocked</td><td id="g-trackers">–</td></tr>
-        <tr><td>Tracking cookies stripped</td><td id="g-cookies">–</td></tr>
-        <tr><td>Cookie banners handled</td><td id="g-banners">–</td></tr>
+    <table role="table">
+      <thead role="rowgroup"><tr role="row"><th role="columnheader"></th><th role="columnheader">This page</th></tr></thead>
+      <tbody role="rowgroup">
+        <tr role="row" class="stat-ads"><td role="cell">Ads blocked</td><td role="cell" id="g-ads">–</td></tr>
+        <tr role="row" class="stat-trackers"><td role="cell">Trackers blocked</td><td role="cell" id="g-trackers">–</td></tr>
+        <tr role="row" class="stat-banners"><td role="cell">Cookie banners handled</td><td role="cell" id="g-banners">–</td></tr>
+        <tr role="row" class="stat-cookies"><td role="cell">Tracking cookies stripped</td><td role="cell" id="g-cookies">–</td></tr>
       </tbody>
     </table>
     <p class="muted small" id="counts-note"></p>
   </section>
+
+  <section class="card site">
+    <button type="button" class="site-head" id="site-toggle" aria-expanded="false" aria-controls="site-panel" title="Blocking on this site">
+      <span class="site-ico on" id="site-ico" aria-hidden="true"><svg class="ico ico-on"><use href="#i-shield-check"/></svg><svg class="ico ico-off"><use href="#i-ban"/></svg></span>
+      <span class="site-text">
+        <strong id="site-host">This page</strong>
+        <span class="muted small" id="site-detail"></span>
+      </span>
+      <svg class="ico chev" aria-hidden="true"><use href="#i-chev"/></svg>
+    </button>
+    <div class="site-panel" id="site-panel" hidden>
+      <div class="row">
+        <span>Blocking on this site</span>
+        <label class="switch" title="Blocking on this site">
+          <input type="checkbox" id="site-on" aria-label="Blocking on this site">
+          <span class="track"></span>
+        </label>
+      </div>
+    </div>
+    <button id="site-reload" class="primary" hidden>Reload tab</button>
+    <p class="muted small" id="pick-error" hidden></p>
+  </section>
+
+  <div class="actions" id="actions">
+    <button type="button" class="pill" id="pick" title="Hide an element on this page" aria-label="Hide an element on this page" hidden><svg class="ico" aria-hidden="true"><use href="#i-cursor"/></svg><span>Hide element</span></button>
+    <button type="button" class="pill pill-accent" id="allow-toggle" hidden><svg class="ico" aria-hidden="true"><use href="#i-list-plus" id="allow-icon"/></svg><span id="allow-label">Allowlist site</span></button>
+  </div>
 
   <section id="twitch" class="twitch" hidden>
     <h2>Twitch video ads</h2>
@@ -88,10 +96,29 @@
     <p class="last muted small" id="last-event">No events yet.</p>
   </section>
 
-  <footer class="row">
-    <a href="#" id="open-options">Settings</a>
-    <span class="muted small" id="version"></span>
-  </footer>
+  <section class="card support" id="support" aria-labelledby="support-title" hidden>
+    <div class="support-head">
+      <span class="heart" aria-hidden="true"><svg class="ico"><use href="#i-heart"/></svg></span>
+      <h2 id="support-title">Enjoying a cleaner internet?</h2>
+    </div>
+    <p class="support-text">AdBrake is built independently. Your support helps keep it free, improve protection and fund future development.</p>
+    <div class="support-row" id="support-revolut" hidden>
+      <a href="#" id="support-link" class="button primary block" target="_blank" rel="noopener noreferrer" title="Revolut tip (opens in a new tab)">Support AdBrake <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="support-foot">
+      <p class="muted small thanks">Every contribution makes a difference.</p>
+      <button type="button" class="link-btn" id="qr-open" aria-haspopup="dialog" aria-controls="qr-sheet" hidden>Pay with phone</button>
+    </div>
+  </section>
+
+  <div class="sheet-backdrop" id="qr-sheet" role="dialog" aria-modal="true" aria-labelledby="qr-title" hidden>
+    <div class="sheet">
+      <h2 id="qr-title">Pay with your phone</h2>
+      <span class="qr-tile"><img src="../assets/qr/revolut.svg" alt="QR code for the AdBrake tip link" width="150" height="150"></span>
+      <p class="muted small">Scan with your phone camera to pay with Apple Pay or Google Pay</p>
+      <button type="button" id="qr-close">Close</button>
+    </div>
+  </div>
 
   <script src="../config.js"></script>
   <script src="../shared/settings.js"></script>

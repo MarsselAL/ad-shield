@@ -1,5 +1,5 @@
 /*
- * "Support AdBrake" in the popup (card under the header) and on the settings page (first card):
+ * "Support AdBrake" in the popup (card below the "This website" card: tip link and its QR code only) and on the settings page (first card):
  * popup.js and options.js run against a small DOM built from the ids in their HTML files and must
  * show the tip link and the BTC and USDC addresses exactly as src/shared/donate.js holds them,
  * which must equal docs/donate.txt. Copy buttons must copy the exact value. No address or link is
@@ -140,21 +140,26 @@ test('support: no address or link is written into the popup or settings page sou
 
 // ------------------------------------------------------------------------------ layout
 
-test('support: popup card sits under the header, before the site card; no footer link', function () {
+test('support: popup card sits below the "This website" card; no footer link', function () {
   var html = readFile('src/popup/popup.html');
   var card = html.indexOf('id="support"');
   assert.ok(card > html.indexOf('</header>'), 'after the header');
-  assert.ok(card < html.indexOf('class="card site"'), 'before the site card');
+  assert.ok(card > html.indexOf('class="card site"'), 'after the site card');
   assert.equal(html.indexOf('id="support"', card + 1), -1, 'one support element only');
   var footer = html.slice(html.indexOf('<footer'), html.indexOf('</footer>'));
   assert.notIncludes(footer, 'support', 'footer has no support link');
 });
 
-test('support: popup labels name the networks', function () {
+test('support: popup has the tip link and no crypto; the settings page names the networks', function () {
   var html = readFile('src/popup/popup.html');
-  assert.includes(html, 'BTC · Bitcoin network');
-  assert.includes(html, 'USDC · Ethereum (ERC-20) only');
   assert.includes(html, 'Revolut tip');
+  ['btc-address', 'usdc-address', 'btc-copy', 'usdc-copy', 'Bitcoin', 'USDC'].forEach(function (s) {
+    assert.notIncludes(html, s, 'popup: ' + s);
+  });
+  assert.includes(html, '../assets/qr/revolut.svg');
+  var opts = readFile('src/options/options.html');
+  assert.includes(opts, 'BTC · Bitcoin network');
+  assert.includes(opts, 'USDC · Ethereum (ERC-20) only');
 });
 
 test('support: settings page shows #support as the first card', function () {
@@ -170,46 +175,32 @@ test('support: settings page shows #support as the first card', function () {
 
 // ------------------------------------------------------------------------------ popup.js
 
-test('support: popup shows the link and both addresses exactly as donate.js and donate.txt', function () {
+test('support: popup shows the tip link exactly as donate.js and donate.txt', function () {
   var env = runPopup(REAL_DONATE);
-  var txt = donateTxt();
   var e = env.els;
   assert.equal(e['support'].hidden, false, 'card shown');
-  assert.equal(e['support-revolut'].hidden, false, 'revolut row');
-  assert.equal(e['support-btc'].hidden, false, 'btc row');
-  assert.equal(e['support-usdc'].hidden, false, 'usdc row');
+  assert.equal(e['support-revolut'].hidden, false, 'link row');
   assert.equal(e['support-link'].href, REAL_DONATE.url);
-  assert.equal(e['btc-address'].textContent, REAL_DONATE.btc);
-  assert.equal(e['usdc-address'].textContent, REAL_DONATE.usdcErc20);
-  assert.equal(e['support-link'].href, txt.url);
-  assert.equal(e['btc-address'].textContent, txt.btc);
-  assert.equal(e['usdc-address'].textContent, txt.usdcErc20);
+  assert.equal(e['support-link'].href, donateTxt().url);
+  assert.equal(e['qr-open'].hidden, false, 'Pay with phone shown');
   return settle();
 });
 
-test('support: popup copy buttons copy the exact address and show "Copied"', function () {
+test('support: popup "Pay with phone" opens the QR sheet; Esc and Close close it', function () {
   var env = runPopup(REAL_DONATE);
-  var btn = env.els['btc-copy'];
-  btn.fire('click');
-  env.els['usdc-copy'].fire('click');
-  assert.deepEqual(env.copied, [REAL_DONATE.btc, REAL_DONATE.usdcErc20]);
-  assert.deepEqual(env.copied, [donateTxt().btc, donateTxt().usdcErc20]);
-  return settle().then(function () {
-    assert.equal(btn.textContent, 'Copied');
-    assert.equal(env.els['usdc-copy'].textContent, 'Copied');
-    __advanceTimers(5000);
-    assert.equal(btn.textContent, 'Copy', 'label restored');
-  });
-});
-
-test('support: popup copy falls back to selecting the address', function () {
-  var env = runPopup(REAL_DONATE, { clipboardFails: true });
-  env.els['usdc-copy'].fire('click');
-  return settle().then(function () {
-    assert.equal(env.selected, env.els['usdc-address'], 'address selected');
-    assert.notIncludes(env.els['usdc-copy'].textContent, 'Copied');
-    __advanceTimers(5000);
-  });
+  var e = env.els;
+  assert.equal(e['qr-sheet'].hidden, true, 'closed at first');
+  e['qr-open'].fire('click');
+  assert.equal(e['qr-sheet'].hidden, false, 'opened');
+  var ev = { type: 'keydown', key: 'Escape', target: e['qr-sheet'], preventDefault: function () { this.p = true; } };
+  e['qr-sheet'].listeners.keydown.forEach(function (fn) { fn(ev); });
+  assert.equal(e['qr-sheet'].hidden, true, 'Esc closes');
+  assert.ok(ev.p, 'Esc handled');
+  e['qr-open'].fire('click');
+  e['qr-close'].fire('click');
+  assert.equal(e['qr-sheet'].hidden, true, 'Close closes');
+  assert.deepEqual(env.tabsCreated, [], 'nothing opened');
+  return settle();
 });
 
 test('support: popup tip link opens a new tab with the donate.js link and closes the popup', function () {
@@ -220,14 +211,10 @@ test('support: popup tip link opens a new tab with the donate.js link and closes
   return settle().then(function () { assert.equal(env.closed, 1, 'popup closed'); });
 });
 
-test('support: popup hides rows without a value, and the card when none is set', function () {
-  var env = runPopup({ url: '', usdcErc20: '', btc: REAL_DONATE.btc, btcNote: REAL_DONATE.btcNote, usdcNote: '' });
-  assert.equal(env.els['support'].hidden, false, 'card shown');
-  assert.equal(env.els['support-revolut'].hidden, true, 'no revolut row');
-  assert.equal(env.els['support-usdc'].hidden, true, 'no usdc row');
-  assert.equal(env.els['support-btc'].hidden, false, 'btc row');
-  var none = runPopup({ url: '', usdcErc20: '', btc: '' });
-  assert.equal(none.els['support'].hidden, true, 'card hidden');
+test('support: popup hides the card when no link is set (crypto alone does not show it)', function () {
+  var env = runPopup({ url: '', usdcErc20: REAL_DONATE.usdcErc20, btc: REAL_DONATE.btc });
+  assert.equal(env.els['support'].hidden, true, 'card hidden');
+  assert.equal(env.els['qr-open'].hidden, true, 'no QR link');
   var missing = runPopup(undefined);
   assert.equal(missing.els['support'].hidden, true, 'card hidden without donate.js');
   return settle();
@@ -254,6 +241,26 @@ test('support: settings page shows the link and both addresses exactly as donate
   return settle();
 });
 
+test('support: settings page shows addresses shortened, keeps the full text, toggles the QR codes', function () {
+  var env = runOptions(REAL_DONATE);
+  var e = env.els;
+  assert.equal(e['support-crypto'].hidden, false, 'crypto section');
+  ['btc', 'usdc'].forEach(function (id) {
+    var full = id === 'btc' ? REAL_DONATE.btc : REAL_DONATE.usdcErc20;
+    var short = e[id + '-address'].getAttribute('data-short');
+    assert.ok(short.length < full.length && short.indexOf('…') > 0, id + ' shortened');
+    assert.equal(short.slice(0, 8), full.slice(0, 8));
+    assert.equal(short.slice(-6), full.slice(-6));
+    assert.equal(e[id + '-qr'].hidden, true, id + ' QR hidden at first');
+    e[id + '-qr-toggle'].fire('click');
+    assert.equal(e[id + '-qr'].hidden, false, id + ' QR shown');
+    assert.equal(e[id + '-qr-toggle'].getAttribute('aria-expanded'), 'true');
+    e[id + '-qr-toggle'].fire('click');
+    assert.equal(e[id + '-qr'].hidden, true, id + ' QR hidden again');
+  });
+  return settle();
+});
+
 test('support: settings page copy buttons copy the exact address', function () {
   var env = runOptions(REAL_DONATE);
   env.els['btc-copy'].fire('click');
@@ -261,7 +268,7 @@ test('support: settings page copy buttons copy the exact address', function () {
   assert.deepEqual(env.copied, [REAL_DONATE.btc, REAL_DONATE.usdcErc20]);
   assert.deepEqual(env.copied, [donateTxt().btc, donateTxt().usdcErc20]);
   return settle().then(function () {
-    assert.equal(env.els['btc-copied'].textContent, 'Copied.');
+    assert.equal(env.els['btc-copied'].textContent, 'Copied ✓');
     __advanceTimers(5000);
   });
 });

@@ -38,27 +38,28 @@
     return e;
   }
 
-  var FONT = 'font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;';
+  var FONT = 'font:13px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;';
   var box = el('div', 'position:fixed;display:none;pointer-events:none;box-sizing:border-box;' +
-    'border:2px solid #2563eb;background:rgba(37,99,235,.18);border-radius:2px;');
+    'border:2px solid #e5242b;background:rgba(229,36,43,.14);border-radius:4px;');
   var panel = el('div', 'position:fixed;right:16px;bottom:16px;width:360px;max-width:calc(100vw - 32px);' +
-    'box-sizing:border-box;padding:12px;border-radius:10px;background:#fff;color:#111;pointer-events:auto;' +
-    'box-shadow:0 6px 24px rgba(0,0,0,.25);border:1px solid #d4d4d8;' + FONT);
+    'box-sizing:border-box;padding:14px;border-radius:16px;background:rgba(255,255,255,.82);color:#1c1c1e;' +
+    'pointer-events:auto;-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);' +
+    'box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 36px rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.6);' + FONT);
   var title = el('div', 'font-weight:600;margin:0 0 4px;', 'AdBrake: hide an element');
-  var hint = el('div', 'color:#52525b;margin:0 0 8px;', 'Point at the element and click it. Esc cancels.');
+  var hint = el('div', 'color:#636366;margin:0 0 8px;', 'Point at the element and click it. Esc cancels.');
   var input = el('input', 'display:block;width:100%;box-sizing:border-box;margin:0 0 6px;padding:5px 6px;' +
-    'border:1px solid #a1a1aa;border-radius:6px;background:#fafafa;color:#111;' +
+    'border:1px solid rgba(60,60,67,.24);border-radius:10px;background:rgba(255,255,255,.9);color:#1c1c1e;' +
     'font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;');
   input.type = 'text';
   input.spellcheck = false;
   input.placeholder = 'CSS selector';
   input.setAttribute('aria-label', 'CSS selector of the elements to hide');
-  var info = el('div', 'color:#52525b;margin:0 0 8px;min-height:1.4em;', '');
+  var info = el('div', 'color:#636366;margin:0 0 8px;min-height:1.4em;', '');
   var row = el('div', 'display:flex;flex-wrap:wrap;gap:6px;');
   function button(label, primary) {
-    var b = el('button', 'all:initial;cursor:pointer;padding:5px 10px;border-radius:6px;' + FONT +
-      (primary ? 'background:#2563eb;color:#fff;border:1px solid #2563eb;font-weight:600;'
-        : 'background:#f4f4f5;color:#111;border:1px solid #d4d4d8;'), label);
+    var b = el('button', 'all:initial;cursor:pointer;padding:6px 12px;border-radius:10px;font-weight:500;' + FONT +
+      (primary ? 'background:#e5242b;color:#fff;border:1px solid #e5242b;font-weight:600;'
+        : 'background:rgba(255,255,255,.9);color:#1c1c1e;border:1px solid rgba(60,60,67,.18);'), label);
     b.type = 'button';
     row.appendChild(b);
     return b;
@@ -130,7 +131,7 @@
       });
     }
     var n = list ? list.length : 0;
-    info.style.color = err ? '#b91c1c' : '#52525b';
+    info.style.color = err ? '#b91c1c' : '#636366';
     info.textContent = err || (!selector ? 'Nothing picked yet.' : n === 0 ? 'Matches nothing on this page.'
       : 'Hides ' + n + (n === 1 ? ' element' : ' elements') + ' (preview).');
     setDisabled(hide, busy || !!err || n === 0);
@@ -159,7 +160,7 @@
     if (busy || hide.disabled) return;
     busy = true;
     preview(selector);
-    info.style.color = '#52525b';
+    info.style.color = '#636366';
     info.textContent = 'Saving…';
     var sent;
     try {

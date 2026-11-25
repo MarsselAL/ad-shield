@@ -1,5 +1,5 @@
 /*
- * Support AdBrake: the public tip link and the USDC and BTC addresses shown at the top of the popup and of the
+ * Support AdBrake: the public tip link and the USDC and BTC addresses shown in the popup and at the top of the
  * settings page. Same values as docs/donate.txt (used by tools/build.py for the shared builds);
  * tests/test_package.py fails when the two differ. Nothing here is fetched or sent anywhere.
  */

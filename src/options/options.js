@@ -3,8 +3,9 @@
  * validation. Twitch/master settings live under "settings" (src/shared/settings.js), the
  * all-sites settings and allowlist under "blocking" (src/shared/blocking.js), "My filters" under
  * "userFilters" (src/shared/userfilters.js; the element picker adds to it). "Support AdBrake"
- * (the first card) shows the tip link and the USDC and BTC addresses from src/shared/donate.js,
- * set with textContent at runtime.
+ * (the first card) shows the tip link with its QR code, and under "Crypto" the USDC and BTC
+ * addresses from src/shared/donate.js (set with textContent at runtime; shown shortened, copied
+ * in full) with their QR codes (static SVGs made by tools/make_qr.py, src/assets/qr/).
  */
 (function () {
   'use strict';
@@ -211,21 +212,32 @@
     $('support-link').href = donate.url;
     $('support-revolut').hidden = false;
   }
+  /** "bc1q37wp…s02cns": start and end, the parts people compare; the full text stays selectable. */
+  function shortAddress(a) { return a.length > 20 ? a.slice(0, 8) + '…' + a.slice(-6) : a; }
   function showAddress(id, address, note) {
     if (!address) return;
     $(id + '-address').textContent = address;
+    $(id + '-address').setAttribute('data-short', shortAddress(address));
+    $(id + '-address').title = address;
     $(id + '-note').textContent = note;
     $('support-' + id).hidden = false;
     $(id + '-copy').addEventListener('click', function () {
       navigator.clipboard.writeText(address).then(function () {
-        flash(id + '-copied', 'Copied.');
+        flash(id + '-copied', 'Copied ✓');
       }, function () { flash(id + '-copied', 'Could not copy; select the address and copy it.'); });
+    });
+    $(id + '-qr-toggle').addEventListener('click', function () {
+      var show = $(id + '-qr').hidden;
+      $(id + '-qr').hidden = !show;
+      $(id + '-qr-toggle').textContent = show ? 'Hide QR' : 'Show QR';
+      $(id + '-qr-toggle').setAttribute('aria-expanded', show ? 'true' : 'false');
     });
   }
   if (donate) {
     showAddress('usdc', donate.usdcErc20, donate.usdcNote);
     showAddress('btc', donate.btc, donate.btcNote);
   }
+  $('support-crypto').hidden = !(donate && (donate.usdcErc20 || donate.btc));
   if (!donate || (!donate.url && !donate.usdcErc20 && !donate.btc)) $('support').hidden = true;
 
   $('known').textContent = cfg.knownPlayerTypes.join(', ');

@@ -9,10 +9,14 @@
  * 5 s while the popup stays open.
  * "Hide an element on this page" (web pages with blocking on) injects the element picker
  * (src/shared/selector.js + src/content/picker.js) into the tab's top frame and closes the popup.
- * "Support AdBrake" card under the header: the tip link and the BTC and USDC addresses with
- * Copy buttons, all taken from src/shared/donate.js at runtime (textContent only). Rows without a
- * value stay hidden; the card stays hidden when none is set.
- * Footer: Settings, version.
+ * "Support AdBrake" card below the "This website" card: the tip link from src/shared/donate.js
+ * and "Pay with phone", a sheet with the link's QR code (Esc closes it). Hidden when no link is set.
+ * The crypto addresses are only on the settings page.
+ * Layout: header (icon, name, Settings button), the big power button (#enabled, the master switch)
+ * with the "Ad Blocking On/Off/Paused" line, the page counts, the "This website" card (its chevron
+ * opens the per-site switch #site-on), quick actions ("Hide an element" and "Allowlist site" /
+ * "Remove from allowlist", which flips the same allowlist entry as #site-on), the support card
+ * and the version.
  */
 (function () {
   'use strict';
@@ -41,6 +45,17 @@
     $('site-on').checked = site.on;
     $('site-on').disabled = !site.web || !settings.enabled;
     $('pick').hidden = !(site.web && site.on && settings.enabled);
+    // Status line and quick actions
+    var word = !settings.enabled ? 'Off' : (site.web && !site.on ? 'Paused' : 'On');
+    $('state-word').textContent = word;
+    $('state-word').className = 'state-word ' + (word === 'On' ? 'on' : 'off');
+    $('site-ico').className = 'site-ico ' + (site.on && settings.enabled ? 'on' : 'off');
+    var canAllow = site.web && settings.enabled;
+    $('allow-toggle').hidden = !canAllow;
+    $('allow-label').textContent = site.on ? 'Allowlist site' : 'Remove from allowlist';
+    $('allow-toggle').title = site.on ? 'Turn blocking off on this site' : 'Turn blocking back on for this site';
+    $('allow-icon').setAttribute('href', site.on ? '#i-list-plus' : '#i-list-minus');
+    $('actions').hidden = $('pick').hidden && $('allow-toggle').hidden;
   }
 
   function setCount(id, n) { $(id).textContent = typeof n === 'number' ? String(n) : '–'; }
@@ -139,12 +154,26 @@
     chrome.storage.local.set(o);
   });
 
-  $('site-on').addEventListener('change', function (e) {
+  /** Blocking on (true) or off (false) for the current site: edits the allowlist. */
+  function setSiteBlocking(on) {
     var host = B.popupSite({ url: tabUrl() }).hostname;
-    var next = Object.assign({}, blocking, { allowlist: B.setSiteAllowed(blocking.allowlist, host, !e.target.checked) });
+    var next = Object.assign({}, blocking, { allowlist: B.setSiteAllowed(blocking.allowlist, host, !on) });
     var o = {};
     o[B.STORAGE_KEY] = next;
     chrome.storage.local.set(o).then(function () { $('site-reload').hidden = false; });
+  }
+
+  $('site-on').addEventListener('change', function (e) { setSiteBlocking(e.target.checked); });
+
+  $('allow-toggle').addEventListener('click', function () {
+    var site = B.popupSite({ url: tabUrl(), enabled: settings.enabled, allowlist: blocking.allowlist });
+    if (site.web) setSiteBlocking(!site.on);
+  });
+
+  $('site-toggle').addEventListener('click', function () {
+    var open = $('site-panel').hidden;
+    $('site-panel').hidden = !open;
+    $('site-toggle').setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
   function reloadTab() {
@@ -171,40 +200,13 @@
   });
 
   // ---------------------------------------------------------------- support
+  // The tip link from src/shared/donate.js, and its QR code (a static SVG made by tools/make_qr.py)
+  // in a small sheet. No crypto here: the addresses are on the settings page.
   var donate = ns.donate || {};
-  var copyTimers = {};
 
-  function copyLabel(btn, text) {
-    btn.textContent = text;
-    clearTimeout(copyTimers[btn.id]);
-    copyTimers[btn.id] = setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
-  }
-
-  /** Selects the address text so it can be copied by hand when the clipboard is unavailable. */
-  function selectText(el) {
-    try {
-      var range = document.createRange();
-      range.selectNodeContents(el);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch (e) {}
-  }
-
-  function showAddress(id, address, note) {
-    if (!address) return false;
-    var el = $(id + '-address');
-    var btn = $(id + '-copy');
-    el.textContent = address;
-    if (note) $('support-' + id).title = note;
-    $('support-' + id).hidden = false;
-    btn.addEventListener('click', function () {
-      function fallback() { selectText(el); copyLabel(btn, 'Selected'); }
-      try {
-        navigator.clipboard.writeText(address).then(function () { copyLabel(btn, 'Copied'); }, fallback);
-      } catch (e) { fallback(); }
-    });
-    return true;
+  function closeQr() {
+    $('qr-sheet').hidden = true;
+    try { $('qr-open').focus(); } catch (e) {}
   }
 
   if (donate.url) {
@@ -214,10 +216,19 @@
       e.preventDefault();
       chrome.tabs.create({ url: donate.url }).then(function () { window.close(); }, function () {});
     });
+    $('qr-open').hidden = false;
+    $('qr-open').addEventListener('click', function () {
+      $('qr-sheet').hidden = false;
+      try { $('qr-close').focus(); } catch (e) {}
+    });
+    $('qr-close').addEventListener('click', closeQr);
+    $('qr-sheet').addEventListener('click', function (e) { if (e.target === $('qr-sheet')) closeQr(); });
+    $('qr-sheet').addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeQr(); }
+      if (e.key === 'Tab') { e.preventDefault(); $('qr-close').focus(); } // the sheet has one control
+    });
   }
-  var btcShown = showAddress('btc', donate.btc, donate.btcNote);
-  var usdcShown = showAddress('usdc', donate.usdcErc20, donate.usdcNote);
-  $('support').hidden = !(donate.url || btcShown || usdcShown);
+  $('support').hidden = !donate.url;
 
   $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
