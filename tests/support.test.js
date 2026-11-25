@@ -289,6 +289,30 @@ test('support: on a Twitch tab the Twitch row shows and Phone, USDC and BTC stay
   });
 });
 
+// The stat numbers pop when a count arrives or changes (popup.css .bump); the class is restarted
+// on each change (setCount skips an unchanged value).
+test('popup: a stat number gets the .bump class when its count arrives', function () {
+  var env = installPage('src/popup/popup.html');
+  var classes = function () {
+    var set = [];
+    return { list: set, add: function (c) { if (set.indexOf(c) < 0) set.push(c); },
+      remove: function (c) { var i = set.indexOf(c); if (i >= 0) set.splice(i, 1); } };
+  };
+  ['g-ads', 'g-trackers', 'g-cookies', 'g-banners'].forEach(function (id) { env.els[id].classList = classes(); env.els[id].textContent = '\u2013'; });
+  chrome.tabs.query = function () { return Promise.resolve([{ id: 4, url: 'https://news.example.com/' }]); };
+  chrome.declarativeNetRequest.getMatchedRules = function () {
+    return Promise.resolve({ rulesMatchedInfo: [{ rule: { ruleId: 1, rulesetId: 'ads_1' } }, { rule: { ruleId: 2, rulesetId: 'ads_1' } }] });
+  };
+  load('src/popup/popup.js');
+  return settle().then(settle).then(function () {
+    var e = env.els;
+    assert.equal(e['g-ads'].textContent, '2');
+    assert.deepEqual(e['g-ads'].classList.list, ['bump'], 'ads count arrived: pops');
+    assert.equal(e['g-trackers'].textContent, '0');
+    assert.deepEqual(e['g-trackers'].classList.list, ['bump'], '0 replaces the dash: pops');
+  });
+});
+
 test('support: popup Copy copies the full donate.js address and says "Copied ✓" for 1.5 s', function () {
   var env = runPopup(REAL_DONATE);
   var e = env.els;

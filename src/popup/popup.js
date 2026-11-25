@@ -62,7 +62,13 @@
     $('actions').hidden = $('pick').hidden && $('allow-toggle').hidden;
   }
 
-  function setCount(id, n) { $(id).textContent = typeof n === 'number' ? String(n) : '–'; }
+  function setCount(id, n) {
+    var el = $(id), v = typeof n === 'number' ? String(n) : '–';
+    if (el.textContent === v) return;
+    el.textContent = v;
+    // a short pop when the number changes (popup.css .bump); restarted on every change
+    if (typeof n === 'number' && el.classList) { el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
+  }
 
   function refreshCounts() {
     if (!activeTab || typeof activeTab.id !== 'number') return Promise.resolve();

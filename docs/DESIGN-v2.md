@@ -84,7 +84,8 @@ over CDP, so nothing is exposed on `window`.
 
 ## Not changed
 
-EasyList DNR, cosmetic CSS, cookie banners, element picker, popup, options, list updates.
+EasyList DNR, cosmetic CSS, cookie banners, element picker, list updates. (Popup and options were
+restyled on 2026-11-25, look only: see "UI" below.)
 
 ## Risks
 
@@ -135,3 +136,29 @@ Rejected:
 - uBO's SSAP seekTo and its fake-buffering detector (Map.has / Array.push / Promise.then proxies,
   tag rotation, loadVideoById reload): global hooks, the class removed for the FPS dips.
 - YouTube embed (`serializedThirdPartyEmbedConfig`) edits and uBO's snackbar CSS (uBO itself disabled it).
+
+## UI (popup and settings, 2026-11-25)
+
+White "clear glass" in both colour schemes; the layout, controls and ids are unchanged. Tokens live
+in `src/ui/common.css` (`:root`); before/after screenshots and a per-area summary in
+`docs/ui-redesign/`.
+
+| Token | Value | Use |
+|---|---|---|
+| `--font` / `--font-display` | -apple-system, BlinkMacSystemFont, "SF Pro Text" / "SF Pro Display", "Segoe UI Variable", system-ui | body / titles and numbers (tracking -0.022 to -0.035em) |
+| `--fg` | `#1d1d1f` | text, both schemes |
+| `--muted` | `#56575f` | secondary text: 7:1 on white, 5:1 or more on glass over the dark backdrop |
+| `--accent` / `--accent-text` | `#e5222e` / `#c01a24` | fills (white text 4.6:1) / red text (6.1:1 on white) |
+| `--accent-fill` | `#ea3440` to `#c81a25`, vertical | primary buttons, pay button |
+| `--focus` | `#d91f2b`, 2 px ring, 2 px offset | every focusable control |
+| `--panel` | white 70 % to 46 % (dark scheme: 94 % to 86 %) | popup panels, settings cards |
+| `--glass-blur` / `--blur` | blur(30px) saturate(190%) / blur(22px) saturate(180%) | panels / small cards |
+| `--rim` | white 100 % at the top edge fading to 22 % | 1 px specular ring (`.panel::after`, `.card::after`) |
+| `--panel-shadow`, `--card-shadow` | 0.5 px hairline + two soft drop shadows | depth |
+| backdrop | light: warm white + coral, red, peach, lilac blobs; dark: plum dusk + stronger blobs | the only part that changes with the scheme (plus `--on-backdrop*` for header text) |
+| radii | panels 24, settings cards 24, inner cards 16-20, controls capsule (999px) | |
+| `--spring` / `--spring-bouncy` | `linear()` damped springs, ~4 % / ~12 % overshoot (cubic-bezier fallback) | entrances, knobs, segmented pill, hovers |
+
+Motion is transform / opacity only and is switched off under `prefers-reduced-motion`. `popup.js`
+adds `.bump` to a stat number when its count changes (the pop animation); nothing else in the
+scripts changed.

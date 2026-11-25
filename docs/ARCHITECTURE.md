@@ -320,7 +320,7 @@ almost untouched.
 | `src/content/bridge.js` | ISOLATED | Settings to the page, events to the background, toast, popup status answers. |
 | `src/content/cosmetic.js` | ISOLATED | Hides/mutes/pauses standalone ad `<video>` elements; hides display-ad containers beside the player and mutes/pauses videos in them. |
 | `src/background/service-worker.js` | service worker | Settings defaults, script registration, DNR rulesets, stats, badge. |
-| `src/popup/*`, `src/options/*`, `src/ui/common.css` | extension pages | UI. Light/dark via `prefers-color-scheme`, no external resources. |
+| `src/popup/*`, `src/options/*`, `src/ui/common.css` | extension pages | UI. White clear glass in both schemes (only the backdrop follows `prefers-color-scheme`; docs/DESIGN-v2.md "UI"), no external resources. |
 | `rules/client_ads.json`, `rules/trackers.json` | DNR | Static rules, toggled with `updateEnabledRulesets`. `client_ads` (on with the master switch): allow rules, priority 5, so Twitch's client-side ad requests (`edge.ads.twitch.tv`, Amazon `vaes` ad path) from twitch.tv pages never fail on live streams although EasyList blocks them; VOD ad requests are answered in the page / worker (`settings.blockClientAds`). `trackers`: block rules, off by default. |
 
 ### Inlining into the worker
