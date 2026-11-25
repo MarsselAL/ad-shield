@@ -55,6 +55,12 @@ class Package(unittest.TestCase):
             self.assertFalse(n.endswith(".pyc"), n)
         self.assertEqual([n for n in self.names if n.endswith(".txt") and n.count("/") == 1], ["adbrake/INSTALL.txt"])
 
+    def test_icon_master_is_not_shipped(self):
+        # icons/source/ holds the full-size artwork make_icons.py reads; the browser never needs it
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "icons", "source", "adbrake-icon-master.png")))
+        for names in (self.names, self.store_names):
+            self.assertFalse([n for n in names if "icons/source/" in n])
+
     def test_every_manifest_file_is_inside(self):
         import json
         with open(os.path.join(ROOT, "manifest.json"), encoding="utf-8") as fh:

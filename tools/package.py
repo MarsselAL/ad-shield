@@ -15,7 +15,7 @@ adbrake-<version>-store.zip (for store upload): the same run-time files with man
 zip root (no top folder) and no INSTALL.txt.
 
 Never included in either: tests/, tools/, results/, dist/, the rest of docs/, _metadata/,
-dotfiles, Python caches.
+icons/source/ (the icon artwork), dotfiles, Python caches.
 """
 import json
 import os
@@ -29,6 +29,8 @@ INCLUDE = ["manifest.json", "LICENSE", "NOTICE.md", "build", "src", "rules", "ve
 # (source in the repo, name in the zip root)
 EXTRA = [("docs/INSTALL.txt", "INSTALL.txt")]
 SKIP_DIRS = {"tests", "tools", "results", "dist", "docs", "__pycache__", "_metadata", ".git", ".claude"}
+# Paths under INCLUDE that the browser never needs: the full-size artwork tools/make_icons.py reads.
+SKIP_PATHS = {"icons/source"}
 
 
 def files_to_zip(root=ROOT):
@@ -40,7 +42,9 @@ def files_to_zip(root=ROOT):
             out.append((path, TOP + "/" + item))
             continue
         for d, dirs, files in os.walk(path):
-            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+            rel = os.path.relpath(d, root).replace(os.sep, "/")
+            dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith(".")
+                             and rel + "/" + x not in SKIP_PATHS)
             for f in sorted(files):
                 if f.startswith(".") or f.endswith(".pyc"):
                     continue
