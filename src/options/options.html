@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
+  <div class="backdrop" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span></div>
   <svg class="sprite" aria-hidden="true" focusable="false">
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M6.6 6.9a7.6 7.6 0 1 0 10.8 0"/></symbol>
     <symbol id="i-bug" viewBox="0 0 24 24"><rect x="7" y="7.5" width="10" height="13" rx="5"/><path d="M12 11v9.5M3.5 13H7M17 13h3.5M4.5 7.5L7.5 9.5M19.5 7.5L16.5 9.5M4.5 19l3-2M19.5 19l-3-2M9.5 4.5l1 2.5M14.5 4.5l-1 2.5"/></symbol>
@@ -34,7 +35,7 @@
   </svg>
   <main>
     <header class="row">
-      <div class="brand"><img src="../../icons/icon128.png" alt="" width="48" height="48"><h1>AdBrake settings</h1></div>
+      <div class="brand"><img src="../../icons/icon128.png" alt="" width="48" height="48"><div><h1>Settings</h1><p class="muted subtitle">AdBrake</p></div></div>
       <span class="muted" id="version"></span>
     </header>
 
@@ -61,7 +62,7 @@
       </div>
       <div class="opt row reminder-row">
         <span class="opt-ico" aria-hidden="true"><svg class="ico"><use href="#i-bell"/></svg></span>
-        <div><strong>Occasional support reminders</strong><p class="muted">After a milestone (from 1,000 ads blocked, and at least 7 days after install) the popup may show a short note asking for support. At most once every 60 days; never in web pages.</p></div>
+        <div><strong>Occasional support reminders</strong><p class="muted">After a milestone (from 1,000 ads blocked, and at least 7 days after install) the support panel in the popup may glow once with a short thank-you. At most once every 60 days; never in web pages.</p></div>
         <label class="switch"><input type="checkbox" id="support-reminders" aria-label="Occasional support reminders" checked><span class="track"></span></label>
       </div>
       <details class="crypto" id="support-crypto">
