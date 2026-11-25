@@ -18,14 +18,16 @@ ALLOW_ID_BASE = 500000  # tools/filterlist.py: block rule ids are below it, allo
 CURATED_RULESETS = ("ads_curated", "privacy_curated")
 # Every general (non-Twitch) ruleset id the build may produce.
 GENERATED_RULESET_RE = re.compile(
-    r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_(curated|surrogates)$|^cookie_strip$|^youtube$|^removeparam$|^gpc$")
+    r"^(ads|privacy|cookies)_\d+$|^(ads|privacy)_(curated|surrogates)$|^cookie_strip$|^youtube$|^removeparam$|^gpc$|^unwrap$")
 _ORDER_GROUPS = {"ads": 0, "privacy": 1, "cookies": 2, "cookie_strip": 3, "youtube": 4, "removeparam": 5, "gpc": 6,
-                 "ads_surrogates": 7, "privacy_surrogates": 8}
+                 "ads_surrogates": 7, "privacy_surrogates": 8, "unwrap": 9}
 # Hand-written surrogate redirect rulesets (rules/ads_surrogates.json, rules/privacy_surrogates.json).
 SURROGATE_RULESETS = ("ads_surrogates", "privacy_surrogates")
 SURROGATE_DIR = "/src/surrogates/"
 # Hand-written Global Privacy Control ruleset (rules/gpc.json).
 GPC_RULESET = "gpc"
+# Link-unwrapping redirects (rules/unwrap.json from rules/unwrap.txt, tools/unwrap.py).
+UNWRAP_RULESET = "unwrap"
 # The only ruleset allowed to contain redirect rules (tools/removeparam.py).
 REMOVEPARAM_RULESET = "removeparam"
 ALLOWLIST_PRIORITY = 100  # src/shared/blocking.js: the per-site allowlist rule must outrank everything
@@ -315,6 +317,52 @@ def gpc_ruleset_errors(rules, name="gpc ruleset"):
         e.append("%s: action must only set the request header Sec-GPC: 1" % name)
     if r.get("condition") != {"resourceTypes": ["main_frame"]}:
         e.append("%s: condition must be exactly resourceTypes [main_frame]" % name)
+    return e
+
+
+UNWRAP_HOST_GROUP = "([a-z0-9-]+(?:\\.[a-z0-9-]+)+"
+
+
+def unwrap_ruleset_errors(rules, name="unwrap ruleset"):
+    """Problems with rules/unwrap.json (tools/unwrap.py): every rule is a redirect.regexSubstitution
+    to an https:// URL, on main_frame only, with a regexFilter anchored at ^https?:// and $.
+    A substitution that starts with a group (https://\\1) must take group 1 from the host-name
+    pattern, so the page always lands on https://<host name>. Priority above every list rule (1..4)
+    and below the per-site allowlist (100), which therefore turns unwrapping off there."""
+    if not isinstance(rules, list) or not rules:
+        return ["%s must be a non-empty list" % name]
+    e = ruleset_errors(rules, name)
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        where = "%s rule %s" % (name, r.get("id"))
+        if set(r) != {"id", "priority", "action", "condition"}:
+            e.append("%s: rule keys must be id, priority, action, condition" % where)
+        if not isinstance(r.get("id"), int) or not 1 <= r["id"] < ALLOW_ID_BASE:
+            e.append("%s: id must be in the block range" % where)
+        if not isinstance(r.get("priority"), int) or not 4 < r["priority"] < ALLOWLIST_PRIORITY:
+            e.append("%s: priority must be above 4 and below %d" % (where, ALLOWLIST_PRIORITY))
+        a = r.get("action") or {}
+        sub = (a.get("redirect") or {}).get("regexSubstitution")
+        if a.get("type") != "redirect" or set(a.get("redirect") or {}) != {"regexSubstitution"} or not isinstance(sub, str) \
+                or not sub.startswith("https://"):
+            e.append("%s: action must be redirect.regexSubstitution to https://..." % where)
+            continue
+        c = r.get("condition") or {}
+        if set(c) - {"regexFilter", "resourceTypes", "excludedInitiatorDomains"} or "regexFilter" not in c:
+            e.append("%s: condition must be regexFilter + resourceTypes (+ excludedInitiatorDomains)" % where)
+        if c.get("resourceTypes") != ["main_frame"]:
+            e.append("%s: resourceTypes must be [main_frame]" % where)
+        rx = c.get("regexFilter")
+        if not isinstance(rx, str) or not rx.startswith("^https?://") or not rx.endswith("$"):
+            e.append("%s: regexFilter must start with ^https?:// and end with $" % where)
+            continue
+        if sub.startswith("https://\\"):
+            first = re.search(r"(?<!\\)\((?!\?)", rx)
+            if not sub.startswith("https://\\1") or not first or not rx.startswith(UNWRAP_HOST_GROUP, first.start()):
+                e.append("%s: https://\\1 needs group 1 to start with the host pattern %s" % (where, UNWRAP_HOST_GROUP))
+        elif not re.match(r"^https://[a-z0-9-]+(\.[a-z0-9-]+)+/", sub):
+            e.append("%s: regexSubstitution must be https://<host>/... or https://\\1..." % where)
     return e
 
 

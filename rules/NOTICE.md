@@ -43,3 +43,15 @@ published lists, checked on 2026-11-25; the sections that use them are marked `[
 Attribution: **Brave Software, Inc.** and **DuckDuckGo, Inc.** Only the parameter names were
 used (no file copied); names Brave limits to one site, and a few short or page-state names, were
 left out (listed at the end of `removeparams.txt`).
+
+`unwrap.txt` (and `unwrap.json`, generated from it by `tools/unwrap.py`) is this project's own list
+under the MIT licence. Its URL patterns follow two published lists, checked on 2026-11-25 (each
+entry's `source` line says which):
+
+| Source | Licence |
+|---|---|
+| DuckDuckGo `features/amp-links.json` (https://github.com/duckduckgo/privacy-configuration), `linkFormats` and exception sites | Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0) |
+| Brave `brave-lists/debounce.json` (https://github.com/brave/adblock-lists), `regex-path` entries for AMP caches, Yandex Turbo and y2u.be | Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/) |
+
+Attribution: **DuckDuckGo, Inc.** and **Brave Software, Inc.** No file was copied; the patterns
+were rewritten as anchored DNR regular expressions with https-only targets.

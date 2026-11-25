@@ -74,7 +74,8 @@ Also: never ask for ratings in exchange for anything; no nag screens.
 
 ### 7. Removal of tracking parameters (`removeparam`) — low
 Chrome's 2025 affiliate policy targets extensions that *inject or replace* affiliate links; ours
-only removes known tracking params (utm_*, fbclid, ...). Opera's criteria are stricter, see
+only removes known tracking params (utm_*, fbclid, ...) and unwraps AMP links (`unwrap`, never an
+affiliate redirector). Opera's criteria are stricter, see
 `edge-opera.md`. Mention "tracking parameters, never affiliate or referral injection" if asked.
 
 ## Manifest V3 gotchas for us

@@ -79,11 +79,16 @@ configuration.
   youtube.com, youtube-nocookie.com and youtubekids.com only.
 - **Per-site switch**: the popup turns everything off for the current site (allowlist).
 - **Tracking parameters** (option "Remove tracking parameters from links (utm_*, fbclid,
-  gclid…)", on by default): when a page or frame opens with one of 46 known tracking parameters
+  gclid…)", on by default): when a page or frame opens with one of 102 known tracking parameters
   in its address (UTM tags, ad click ids such as `fbclid`, `gclid`, `msclkid`, e-mail tracking
   such as `mc_eid`, `_hsenc`), Chrome loads it without them; other parameters are kept. Our own
   list (`rules/removeparams.txt`, MIT), one static redirect ruleset (`removeparam`). Generic
   names (`ref`, `si`, `source`, ...) and Marketo's `mkt_tok` (unsubscribe links) are left alone.
+  The same option unwraps links: a page opened through Google AMP (`google.<tld>/amp/s/<page>`),
+  an AMP cache (`<name>.cdn.ampproject.org/c/s/<page>`), Yandex Turbo pages or the `y2u.be`
+  shortener goes straight to the real `https://` address (ruleset `unwrap`, our own
+  `rules/unwrap.txt`; patterns from DuckDuckGo's AMP list and Brave's debounce list). Redirectors
+  that hide the address percent-encoded or base64-encoded are not handled (DNR cannot decode).
 - **Global Privacy Control** (on by default): sends `Sec-GPC: 1` when a page loads and sets
   `navigator.globalPrivacyControl` to `true` in every frame where the browser has no such
   property (Chrome has none). Off on allowlisted sites.
@@ -199,7 +204,8 @@ Twitch:
 | `cookies_1` | 1,794 | 427 | EasyList Cookie List |
 | `cookie_strip` | 4 (3,791 domains) | 0 | EasyPrivacy `\|\|domain^$third-party` |
 | `youtube` | 4 | 0 | `rules/youtube.json` (ours, hand-written) |
-| `removeparam` | 92 (46 names) | 0 | `rules/removeparams.txt` (ours) |
+| `removeparam` | 204 (102 names) | 0 | `rules/removeparams.txt` (ours) |
+| `unwrap` | 4 | 4 | `rules/unwrap.txt` (ours): AMP / redirect-hop unwrapping (regex redirects on page loads) |
 | `gpc` | 1 | 0 | `rules/gpc.json` (ours, hand-written): `Sec-GPC: 1` header on page loads |
 | `ads_surrogates`, `privacy_surrogates` | 6 + 5 | 0 | hand-written: redirects of blocked Google scripts to `src/surrogates/` (Ads / Trackers) |
 | `client_ads`, `trackers` | 2 + 2 | 0 | Twitch rules (ours; `client_ads` = 2 allow rules) |
@@ -274,7 +280,7 @@ Twitch tabs, the Twitch status and counts. The options page has these settings:
 | Fix YouTube ads and anti-adblock walls (page scripts) | on | MAIN-world scriptlets on YouTube hosts (`build/scriptlets-main.js`); only while Ads is on. |
 | Trackers | on | Rulesets `privacy_*`. |
 | Strip tracking cookies | on | Ruleset `cookie_strip`. Requests that another rule blocks are blocked anyway; an exception (allow) rule also stops the stripping. |
-| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 46 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Not counted in the popup. |
+| Remove tracking parameters from links | on | Ruleset `removeparam`: pages and frames whose address has one of the 102 names in `rules/removeparams.txt` are loaded without them (one redirect). Priority 50: above the list rules, below the per-site allowlist. Also ruleset `unwrap` (built from `rules/unwrap.txt` by `tools/unwrap.py`): 4 `regexSubstitution` redirects on page loads (`main_frame`) from Google AMP, AMP-cache, Yandex Turbo and `y2u.be` links to the real `https://` page, priority 55. Not counted in the popup. |
 | Global Privacy Control | on | Ruleset `gpc` (one `modifyHeaders` rule, priority 60: sets `Sec-GPC: 1` on `main_frame` requests; the allowlist's `allowAllRequests` rule, priority 100, outranks it) + `src/content/gpc.js` (MAIN world, all frames, document_start), which defines `navigator.globalPrivacyControl = true` on `Navigator.prototype` only if `'globalPrivacyControl' in navigator` is false. Page loads only, not sub-resources: Chrome adds every `modifyHeaders` match to the toolbar badge count. Not counted in the popup. |
 | Cookie banners: hide | on | Rulesets `cookies_*` + cookie-list element hiding. |
 | Cookie banners: auto-reject | off | Registers autoconsent (a ~160 KB script in every page and frame). |

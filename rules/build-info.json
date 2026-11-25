@@ -144,7 +144,16 @@
       "params": 102,
       "regex": 0,
       "rules": 204
+    },
+    "unwrap": {
+      "allow": 0,
+      "block": 0,
+      "regex": 4,
+      "rules": 4
     }
   },
-  "totalStaticRules": 15024
+  "totalStaticRules": 15028,
+  "unwrap": {
+    "rules": 4
+  }
 }

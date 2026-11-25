@@ -150,6 +150,11 @@
         "id": "privacy_surrogates",
         "enabled": true,
         "path": "rules/privacy_surrogates.json"
+      },
+      {
+        "id": "unwrap",
+        "enabled": true,
+        "path": "rules/unwrap.json"
       }
     ]
   }

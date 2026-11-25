@@ -512,7 +512,7 @@ SW_STATE_JS = """
 GENERAL_SCRIPTS = ["as-css-ads", "as-css-ads-exc", "as-css-ads-top", "as-css-cookies", "as-css-cookies-exc", "as-css-youtube", "as-gpc",
                    "as-scriptlets", "as-site"]
 DEFAULT_RULESETS = ["ads_1", "ads_curated", "ads_surrogates", "client_ads", "cookie_strip", "cookies_1", "gpc", "privacy_1", "privacy_curated",
-                    "privacy_surrogates", "removeparam", "youtube"]
+                    "privacy_surrogates", "removeparam", "unwrap", "youtube"]
 
 # chrome.declarativeNetRequest.testMatchOutcome (unpacked + declarativeNetRequestFeedback only):
 # which static rulesets a request would match. No request is sent.

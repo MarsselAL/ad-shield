@@ -25,6 +25,10 @@ AdBrake's own code is MIT licensed (see `LICENSE`). The package also contains:
    with one changed line (noted in its header). The licence file is
    `src/surrogates/LICENSE-duckduckgo.md`. The other surrogates (`analytics.js`, `gtm.js`,
    `adsbygoogle.js`, `ima3.js`, `noop.js`) are our own code (MIT), written from the public APIs.
+6. **Link-unwrapping patterns** in `rules/unwrap.txt` (built into `rules/unwrap.json`): follow
+   DuckDuckGo's `amp-links.json` (duckduckgo/privacy-configuration, Apache-2.0) and Brave's
+   `debounce.json` (brave/adblock-lists, MPL-2.0). Patterns only, rewritten as our own DNR rules;
+   the list itself is our own (MIT). Details: `rules/NOTICE.md`.
 
 The converter (`tools/filterlist.py`) and the autoconsent integration
 (`src/background/general.js`) are this project's own code; no code from uBlock Origin (Lite) or

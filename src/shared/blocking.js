@@ -141,13 +141,17 @@
    * pp=oAEBogYBLg redirect and its loop-guard allow rule), part of Ads.
    * removeparam (rules/removeparam.json, from our rules/removeparams.txt) redirects pages and
    * frames to the same URL without tracking parameters; never counted in the popup.
+   * unwrap (rules/unwrap.json, from our rules/unwrap.txt) sends a page opened through an AMP cache
+   * (google.<tld>/amp/s/, <name>.cdn.ampproject.org) or a redirect hop that carries the plain address
+   * straight to that address; same switch as removeparam (both clean the links you open, both by
+   * main-frame redirect), never counted.
    * gpc (rules/gpc.json) sets the Global Privacy Control request header; never counted.
    * ads_surrogates / privacy_surrogates (hand-written) redirect a few blocked Google scripts (GPT,
    * AdSense, IMA / Analytics, Tag Manager) to no-op stand-ins in src/surrogates/; they follow Ads /
    * Trackers and count there, since each redirect replaces a block.
    */
   function rulesetFeature(id) {
-    if (id === 'removeparam') return 'stripTrackingParams';
+    if (id === 'removeparam' || id === 'unwrap') return 'stripTrackingParams';
     if (id === 'gpc') return 'gpc';
     if (/^ads_(\d+|curated|surrogates)$/.test(id) || id === 'youtube') return 'ads';
     if (/^privacy_(\d+|curated|surrogates)$/.test(id)) return 'trackers';
@@ -216,8 +220,8 @@
   var YOUTUBE_UNCOUNTED_RULE_IDS = [3];
 
   /** Popup counts from chrome.declarativeNetRequest.getMatchedRules().rulesMatchedInfo.
-   * Tracking-parameter redirects (removeparam), the GPC header (gpc) and the YouTube pp rules are
-   * not counted. */
+   * Tracking-parameter redirects (removeparam), link unwrapping (unwrap), the GPC header (gpc) and
+   * the YouTube pp rules are not counted. */
   function countMatches(infos) {
     var c = { ads: 0, trackers: 0, cookies: 0, banners: 0 };
     (infos || []).forEach(function (m) {

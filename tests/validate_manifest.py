@@ -18,7 +18,8 @@ Checks:
   - the hand-written gpc ruleset only sets Sec-GPC: 1 on page loads (dnr_schema.gpc_ruleset_errors);
   - the surrogate rulesets only redirect script URLs to existing src/surrogates/*.js files, which are
     exactly the web_accessible_resources and make no requests;
-  - the hand-written youtube ruleset blocks only its two paths; redirect rules exist only in
+  - the unwrap ruleset only redirects page loads to https://<host> (dnr_schema.unwrap_ruleset_errors);
+  - the hand-written youtube ruleset blocks only its two paths; other redirect rules exist only in
     removeparam.json and have its exact shape (tests/dnr_schema.removeparam_ruleset_errors); the scriptlet bundle exists and the
     scriptlet sources contain no URLs
 """
@@ -267,7 +268,7 @@ def main():
     general = [i for i in ids if i not in TWITCH_RULESETS]
     check(all(GENERATED_RULESET_RE.match(i) for i in general), "unexpected ruleset ids %s" % general)
     for want in ("ads_1", "privacy_1", "cookies_1", "cookie_strip", dnr_schema.REMOVEPARAM_RULESET,
-                 dnr_schema.GPC_RULESET) + dnr_schema.CURATED_RULESETS:
+                 dnr_schema.GPC_RULESET, dnr_schema.UNWRAP_RULESET) + dnr_schema.CURATED_RULESETS:
         check(want in general, "ruleset %s missing" % want)
     if all(GENERATED_RULESET_RE.match(i) for i in general):
         check(general == sorted(general, key=dnr_schema.general_order_key),
@@ -307,6 +308,10 @@ def main():
             check(r.get("enabled") is True, "removeparam ruleset must be enabled by default")
             for msg in dnr_schema.removeparam_ruleset_errors(rules, r.get("path")):
                 errors.append(msg)
+        elif r.get("id") == dnr_schema.UNWRAP_RULESET:
+            check(r.get("enabled") is True, "unwrap ruleset must be enabled by default")
+            for msg in dnr_schema.unwrap_ruleset_errors(rules, r.get("path")):
+                errors.append(msg)
         elif r.get("id") in dnr_schema.SURROGATE_RULESETS:
             check(r.get("enabled") is True, "%s must be enabled by default" % r.get("id"))
             for msg in dnr_schema.surrogate_ruleset_errors(rules, r.get("path"), lambda p: os.path.isfile(os.path.join(ROOT, p.lstrip("/")))):
@@ -315,7 +320,7 @@ def main():
                                    if isinstance(x, dict) and "extensionPath" in x.get("action", {}).get("redirect", {}))
         else:
             check(r.get("id") == "youtube" or not any(isinstance(x, dict) and x.get("action", {}).get("type") == "redirect" for x in rules),
-                  "%s: redirect rules are only allowed in rules/removeparam.json, the surrogate rulesets (and the youtube pp rule)" % r.get("path"))
+                  "%s: redirect rules are only allowed in rules/removeparam.json, rules/unwrap.json, the surrogate rulesets (and the youtube pp rule)" % r.get("path"))
         if r.get("id") == dnr_schema.GPC_RULESET:
             check(r.get("enabled") is True, "gpc ruleset must be enabled by default")
             for msg in dnr_schema.gpc_ruleset_errors(rules, r.get("path")):

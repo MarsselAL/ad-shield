@@ -105,6 +105,19 @@ test('removeparam ruleset: own switch, never counted', function () {
   assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'removeparam', ruleId: 3 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
 });
 
+test('unwrap ruleset: follows the tracking-parameter switch, never counted', function () {
+  assert.equal(B.rulesetFeature('unwrap'), 'stripTrackingParams');
+  assert.notOk(B.isListRuleset('unwrap'), 'the weekly update never replaces it');
+  var ids = ['ads_1', 'removeparam', 'unwrap'];
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults()).enableRulesetIds, ['ads_1', 'removeparam', 'unwrap'], 'on by default');
+  assert.deepEqual(B.rulesetPlan(ids, true, B.defaults(), { ads: true }).enableRulesetIds, ['removeparam', 'unwrap'], 'dynamic lists do not disable it');
+  var off = B.rulesetPlan(ids, true, Object.assign(B.defaults(), { stripTrackingParams: false }));
+  assert.deepEqual(off.disableRulesetIds, ['removeparam', 'unwrap']);
+  assert.deepEqual(B.rulesetPlan(ids, true, Object.assign(B.defaults(), { ads: false, trackers: false })).enableRulesetIds, ['removeparam', 'unwrap']);
+  assert.deepEqual(B.rulesetPlan(ids, false, B.defaults()).enableRulesetIds, [], 'master switch off');
+  assert.deepEqual(B.countMatches([{ rule: { rulesetId: 'unwrap', ruleId: 1 } }]), { ads: 0, trackers: 0, cookies: 0, banners: 0 });
+});
+
 test('gpc: own switch (default on, old settings migrate to on), static ruleset never counted', function () {
   assert.equal(B.defaults().gpc, true);
   assert.equal(B.normalize({ ads: true, allowlist: [] }).gpc, true, 'settings stored before GPC existed: on');

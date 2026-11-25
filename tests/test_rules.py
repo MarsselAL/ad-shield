@@ -22,6 +22,7 @@ import cosmetic as CO  # noqa: E402
 import curated as C  # noqa: E402
 import make_golden  # noqa: E402
 import removeparam as R  # noqa: E402
+import unwrap as U  # noqa: E402
 import build  # noqa: E402
 
 
@@ -329,13 +330,15 @@ class CuratedBuild(unittest.TestCase):
             fh.write(CuratedHosts.BASIC)
         with open(os.path.join(root, "rules", "removeparams.txt"), "w", encoding="utf-8") as fh:
             fh.write("utm_source\nfbclid  # comment\n")
+        with open(os.path.join(root, "rules", "unwrap.txt"), "w", encoding="utf-8") as fh:
+            fh.write(Unwrap.ONE)
         build_rules.curated_only(root)
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as fh:
             m = json.load(fh)
         self.assertEqual([r["id"] for r in m["declarative_net_request"]["rule_resources"]],
                          ["client_ads", "trackers", "ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip",
-                          "youtube", "removeparam", "gpc", "ads_surrogates", "privacy_surrogates"],
-                         "hand-written rulesets (youtube, gpc, surrogates) are always kept; removeparam rebuilt")
+                          "youtube", "removeparam", "gpc", "ads_surrogates", "privacy_surrogates", "unwrap"],
+                         "hand-written rulesets (youtube, gpc, surrogates) are always kept; removeparam and unwrap rebuilt")
         for r in m["declarative_net_request"]["rule_resources"][2:]:
             self.assertIs(r["enabled"], True)
             self.assertEqual(r["path"], "rules/%s.json" % r["id"])
@@ -346,8 +349,12 @@ class CuratedBuild(unittest.TestCase):
         self.assertEqual(info["lists"], old_info["lists"])
         self.assertEqual(info["curated"]["trackers"], {"hosts": 2, "exclusions": 1})
         self.assertEqual(info["rulesets"]["ads_curated"]["rules"], 1)
-        self.assertEqual(info["totalStaticRules"], 14)
+        self.assertEqual(info["totalStaticRules"], 15)
         self.assertEqual(info["removeparam"], {"params": 2})
+        self.assertEqual(info["unwrap"], {"rules": 1})
+        self.assertEqual(info["rulesets"]["unwrap"]["regex"], 1)
+        with open(os.path.join(root, "rules", "unwrap.json"), encoding="utf-8") as fh:
+            self.assertEqual(dnr_schema.unwrap_ruleset_errors(json.load(fh)), [])
         with open(os.path.join(root, "rules", "removeparam.json"), encoding="utf-8") as fh:
             self.assertEqual(len(json.load(fh)), 4)
         for rid in ("ads_curated", "privacy_curated"):
@@ -437,6 +444,99 @@ class Removeparam(unittest.TestCase):
             self.assertNotIn(n, built)
 
 
+class Unwrap(unittest.TestCase):
+    ONE = ("# c\nrule amp\nsource test\n"
+           "regex ^https?://cdn\\.ampproject\\.org/c/s/([a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:[/?#].*)?)$\n"
+           "target https://\\1\nexclude a.example\n"
+           "test https://cdn.ampproject.org/c/s/x.example/a?b => https://x.example/a?b\n"
+           "miss https://cdn.ampproject.org/c/s/x.example:81/\n")
+
+    def test_parse_and_rule_shape(self):
+        entries = U.parse(self.ONE)
+        rules = U.build_rules(entries)
+        self.assertEqual(dnr_schema.unwrap_ruleset_errors(rules), [])
+        self.assertEqual(rules, [{"id": 1, "priority": U.PRIORITY, "action": {"type": "redirect", "redirect": {"regexSubstitution": "https://\\1"}},
+                                  "condition": {"regexFilter": entries[0]["regex"], "resourceTypes": ["main_frame"],
+                                                "excludedInitiatorDomains": ["a.example"]}}])
+        self.assertTrue(R.PRIORITY < U.PRIORITY < 100, "after removeparam's redirect would be pointless; below the allowlist")
+
+    def test_refuses_unsafe_or_wrong_entries(self):
+        one = self.ONE
+        cases = [
+            (one.replace("target https://\\1", "target http://\\1"), "https://"),
+            (one.replace("target https://\\1", "target \\1"), "https://"),
+            (one.replace("target https://\\1", "target https://\\2"), "group"),
+            (one.replace("target https://\\1", "target https://\\0"), "group"),
+            (one.replace("target https://\\1", "target https://$1"), "only use"),
+            (one.replace("([a-z0-9-]+(?:\\.[a-z0-9-]+)+(?:[/?#].*)?)", "(.+)"), "host pattern"),
+            (one.replace("(?:[/?#].*)?)$", ".*)$"), "host pattern"),
+            (one.replace("regex ^https?://", "regex https?://"), "^https?://"),
+            (one.replace("(?:[/?#].*)?)$\n", "(?:[/?#].*)?)\n"), "end with $"),
+            (one.replace("=> https://x.example/a?b", "=> https://x.example/a"), "expected"),
+            (one.replace("miss https://cdn.ampproject.org/c/s/x.example:81/", "miss https://cdn.ampproject.org/c/s/x.example/"), "miss"),
+            (one.replace("exclude a.example", "exclude a_b"), "not a domain"),
+            (one + "rule amp\nsource x\nregex ^https?://x$\ntarget https://y.example/\ntest https://x => https://y.example/\n", "duplicate"),
+            ("source x\n", "before the first rule"),
+            ("# only comments\n", "empty"),
+            ("rule x\nsource s\nregex ^https?://a\\.example/(.*)$\ntarget https://b.example/\\1\n", "test line"),
+        ]
+        for text, why in cases:
+            with self.assertRaises(U.UnwrapError, msg=why) as cm:
+                U.parse(text)
+            self.assertIn(why, str(cm.exception), text)
+
+    def test_loops_are_refused(self):
+        loop = ("rule a\nsource s\nregex ^https?://a\\.example/(.*)$\ntarget https://b.example/\\1\n"
+                "test https://a.example/x => https://b.example/x\n"
+                "rule b\nsource s\nregex ^https?://b\\.example/(.*)$\ntarget https://a.example/\\1\n"
+                "test https://b.example/x => https://a.example/x\n")
+        with self.assertRaises(U.UnwrapError) as cm:
+            U.parse(loop)
+        self.assertIn("loop", str(cm.exception))
+
+    def test_committed_ruleset_matches_the_list(self):
+        entries = U.read(ROOT)
+        with open(os.path.join(ROOT, U.OUTPUT), encoding="utf-8") as fh:
+            committed = json.load(fh)
+        self.assertEqual(committed, U.build_rules(entries), "run python3 -I tools/build_rules.py --curated-only")
+        self.assertEqual(dnr_schema.unwrap_ruleset_errors(committed), [])
+        self.assertEqual([e["name"] for e in entries], ["google-amp", "ampproject-cache", "yandex-turbo", "y2u-shortener"])
+        self.assertTrue(all(len(e["tests"]) >= 2 and e["misses"] for e in entries))
+
+    def test_matcher_agrees_with_the_tool(self):
+        """dnr_schema.rule_matches (the DNR stand-in) fires on every test URL, never on a miss URL,
+        only for page loads, and not when the page that opened the link is an excluded site."""
+        entries = U.read(ROOT)
+        rules = U.build_rules(entries)
+        for e, r in zip(entries, rules):
+            for src, _ in e["tests"]:
+                self.assertTrue(dnr_schema.rule_matches(r, src, "main_frame"), src)
+                self.assertFalse(dnr_schema.rule_matches(r, src, "sub_frame"), src)
+                for d in e["exclude"]:
+                    self.assertFalse(dnr_schema.rule_matches(r, src, "main_frame", "www." + d), src)
+            for src in e["misses"]:
+                self.assertFalse(any(dnr_schema.rule_matches(x, src, "main_frame") for x in rules), src)
+
+    def test_shape_check_rejects_deviations(self):
+        good = U.build_rules(U.parse(self.ONE))[0]
+        changes = [
+            lambda r: r.update(priority=100),
+            lambda r: r.update(priority=3),
+            lambda r: r["action"]["redirect"].update(regexSubstitution="http://\\1"),
+            lambda r: r["action"].update(redirect={"url": "https://x.example/"}),
+            lambda r: r["condition"].update(resourceTypes=["main_frame", "sub_frame"]),
+            lambda r: r["condition"].update(regexFilter="^https?://cdn\\.ampproject\\.org/c/s/(.*)$"),
+            lambda r: r["condition"].update(regexFilter="cdn\\.ampproject\\.org/c/s/(.*)"),
+            lambda r: r["condition"].update(requestDomains=["a.example"]),
+            lambda r: r.update(id=500001),
+        ]
+        for i, change in enumerate(changes):
+            r = json.loads(json.dumps(good))
+            change(r)
+            self.assertTrue(dnr_schema.unwrap_ruleset_errors([r]), i)
+        self.assertTrue(dnr_schema.unwrap_ruleset_errors([]))
+
+
 class Schema(unittest.TestCase):
     def test_schema_rejects_bad_rules(self):
         bad = [
@@ -486,12 +586,12 @@ class Schema(unittest.TestCase):
 
     def test_general_ruleset_ids_and_order(self):
         for rid in ("ads_1", "privacy_12", "cookies_3", "cookie_strip", "ads_curated", "privacy_curated", "removeparam", "gpc",
-                    "ads_surrogates", "privacy_surrogates"):
+                    "ads_surrogates", "privacy_surrogates", "unwrap"):
             self.assertTrue(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         for rid in ("cookies_curated", "ads_", "ads_x", "trackers"):
             self.assertFalse(dnr_schema.GENERATED_RULESET_RE.match(rid), rid)
         ids = ["ads_1", "ads_curated", "privacy_1", "privacy_curated", "cookies_1", "cookie_strip", "youtube", "removeparam", "gpc",
-               "ads_surrogates", "privacy_surrogates"]
+               "ads_surrogates", "privacy_surrogates", "unwrap"]
         self.assertEqual(sorted(reversed(ids), key=dnr_schema.general_order_key), ids)
         self.assertEqual(sorted(reversed(ids), key=build_rules.ruleset_order_key), ids)
 

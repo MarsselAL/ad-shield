@@ -136,7 +136,7 @@ Image slots: `assets-checklist.md`. All images are in `docs/store/images/`.
 3. Notes for the moderator (paste):
    ```
    Ad blocker built on declarativeNetRequest. No account needed: install, open any news site, click the icon to see counts. Settings: right-click the icon > Options.
-   The "Remove tracking parameters" option removes known tracking parameters only (utm_*, fbclid, gclid...). It adds, replaces or redirects no referral or affiliate parameters.
+   The "Remove tracking parameters" option removes known tracking parameters only (utm_*, fbclid, gclid...), and opens Google AMP / AMP-cache links at the publisher's own address. It adds, replaces or redirects no referral or affiliate parameters.
    Turn off Opera's built-in ad blocker when comparing.
    ```
 4. **Submit for moderation**. Opera reviews by hand; it can take weeks.
